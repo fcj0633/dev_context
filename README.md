@@ -37,6 +37,7 @@ uv run devcontext search --strategy hybrid --query "为什么缩短事务边界�
 uv run pytest
 mvn -q -f java-parser\pom.xml test
 uv run devcontext evaluate
+uv run devcontext evaluate --benchmark benchmark\cases.jsonl --baseline benchmark\baselines\retrieval-v1.json
 ```
 
 ## 命令
@@ -47,7 +48,9 @@ uv run devcontext evaluate
 | `devcontext smoke-api` | 验证百炼连接及 1024 维输出 |
 | `devcontext ingest` | 全量重建 `my12306` 索引 |
 | `devcontext search` | 运行关键词、向量或混合检索 |
-| `devcontext evaluate` | 运行 12 条基准问题并输出报告 |
+| `devcontext evaluate` | 运行 36 条分层基准问题，输出分类指标、分段耗时、失败诊断和基线差异 |
+
+评测集由 CODE、DOC、MIXED 各 12 条组成。详细报告写入 `artifacts/`，可提交的精简基线位于 `benchmark/baselines/retrieval-v1.json`；只有 benchmark 哈希一致时才进行前后对比。
 
 默认配置见 `.env.example`。API Key 始终从系统环境变量读取，不应写入 `.env` 或提交到 Git。
 

@@ -71,6 +71,8 @@ class SearchResult:
     signature: str | None
     title: str | None
     score: float
+    annotations: list[str] = field(default_factory=list)
+    heading_path: list[str] = field(default_factory=list)
 
     @classmethod
     def from_row(cls, row: dict[str, Any]) -> "SearchResult":
@@ -81,3 +83,21 @@ class SearchResult:
         data["content_preview"] = " ".join(self.content.split())[:300]
         del data["content"]
         return data
+
+
+@dataclass(slots=True)
+class SearchTimings:
+    query_embedding_ms: float = 0.0
+    keyword_sql_ms: float = 0.0
+    vector_sql_ms: float = 0.0
+    fusion_ms: float = 0.0
+    total_ms: float = 0.0
+
+    def to_dict(self) -> dict[str, float]:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class SearchExecution:
+    results: list[SearchResult]
+    timings: SearchTimings

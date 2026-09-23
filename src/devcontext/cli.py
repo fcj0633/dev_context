@@ -4,6 +4,7 @@ import argparse
 import json
 import sys
 from dataclasses import asdict
+from pathlib import Path
 
 from devcontext.config import Settings
 from devcontext.embedding.client import BailianEmbeddingClient
@@ -29,7 +30,9 @@ def _parser() -> argparse.ArgumentParser:
     search.add_argument("--top-k", type=int, default=10)
     search.add_argument("--format", choices=("table", "json"), default="table")
 
-    subparsers.add_parser("evaluate", help="Run the retrieval benchmark")
+    evaluation = subparsers.add_parser("evaluate", help="Run the retrieval benchmark")
+    evaluation.add_argument("--benchmark", type=Path)
+    evaluation.add_argument("--baseline", type=Path)
     return parser
 
 
@@ -76,12 +79,25 @@ def main(argv: list[str] | None = None) -> int:
             results = RetrievalService(settings).search(args.strategy, args.query, args.top_k)
             _print_results(results, args.format)
         elif args.command == "evaluate":
-            report = evaluate(settings)
+            report = evaluate(settings, benchmark=args.benchmark, baseline=args.baseline)
             summary = [
                 {key: value for key, value in strategy.items() if key != "cases"}
                 for strategy in report["strategies"]
             ]
-            print(json.dumps({"output": report["output"], "strategies": summary}, ensure_ascii=False, indent=2))
+            print(
+                json.dumps(
+                    {
+                        "output": report["output"],
+                        "benchmark_sha256": report["benchmark_sha256"],
+                        "baseline_comparison": report["baseline_comparison"],
+                        "acceptance": report["acceptance"],
+                        "quality_passed": report["quality_passed"],
+                        "strategies": summary,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
         return 0
     except Exception as exception:
         print(f"ERROR: {exception}", file=sys.stderr)

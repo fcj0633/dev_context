@@ -15,7 +15,7 @@ from devcontext.models import Chunk, SearchResult
 
 RESULT_COLUMNS = """
     id, source_type, chunk_type, file_path, content, start_line, end_line,
-    class_name, symbol_name, signature, title
+    class_name, symbol_name, signature, title, annotations, heading_path
 """
 
 
