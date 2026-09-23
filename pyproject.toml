@@ -1,0 +1,30 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "devcontext"
+version = "0.1.0"
+description = "Structure-aware hybrid retrieval for Java source and Markdown documentation"
+readme = "README.md"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+  "openai==3.17.0",
+  "pgvector==0.5.0",
+  "psycopg[binary]==3.3.6",
+  "pydantic-settings==2.15.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest==9.1.1"]
+
+[project.scripts]
+devcontext = "devcontext.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/devcontext"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+markers = ["integration: requires the local PostgreSQL/pgvector service"]
