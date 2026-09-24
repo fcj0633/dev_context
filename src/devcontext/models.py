@@ -144,3 +144,12 @@ class ContextBundle:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+@dataclass(slots=True)
+class AnswerResult:
+    answer: str
+    used_citations: list[str]
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)

@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     embedding_model: str = "text-embedding-v4"
     embedding_dimensions: int = 1024
     embedding_transport: str = "curl"
+    deepseek_api_key: SecretStr | None = Field(default=None, alias="DEEPSEEK_API_KEY")
+    deepseek_base_url: str = "https://api.deepseek.com"
+    deepseek_model: str = "deepseek-flash"
     repository_name: str = "my12306"
 
     def validate_sources(self) -> None:
@@ -39,6 +42,11 @@ class Settings(BaseSettings):
         if self.dashscope_api_key is None:
             raise ValueError("DASHSCOPE_API_KEY is not configured")
         return self.dashscope_api_key.get_secret_value()
+
+    def deepseek_key(self) -> str:
+        if self.deepseek_api_key is None:
+            raise ValueError("DEEPSEEK_API_KEY is not configured")
+        return self.deepseek_api_key.get_secret_value()
 
 
 def project_root() -> Path:

@@ -6,11 +6,14 @@ import sys
 from dataclasses import asdict
 from pathlib import Path
 
+from devcontext.answer import AnswerGenerator, EMPTY_CONTEXT_ANSWER, format_source
 from devcontext.config import Settings
 from devcontext.context import ContextBuilder
 from devcontext.embedding.client import BailianEmbeddingClient
 from devcontext.evaluation.runner import evaluate
 from devcontext.ingestion.pipeline import ingest
+from devcontext.llm import DeepSeekLLMClient
+from devcontext.models import AnswerResult, ContextBundle
 from devcontext.retrieval.service import RetrievalService
 from devcontext.storage import ChunkStore
 
@@ -36,6 +39,11 @@ def _parser() -> argparse.ArgumentParser:
     context.add_argument("--top-k", type=int, default=5)
     context.add_argument("--max-chars", type=int, default=6000)
 
+    ask = subparsers.add_parser("ask", help="Answer a question from grounded project context")
+    ask.add_argument("query")
+    ask.add_argument("--top-k", type=int, default=5)
+    ask.add_argument("--max-chars", type=int, default=6000)
+
     evaluation = subparsers.add_parser("evaluate", help="Run the retrieval benchmark")
     evaluation.add_argument("--benchmark", type=Path)
     evaluation.add_argument("--baseline", type=Path)
@@ -56,6 +64,24 @@ def _print_results(results: list, output_format: str) -> None:
         print(f"    {identity}")
         print(f"    {location}")
         print(f"    {preview}")
+
+
+def _print_answer(
+    query: str, answer_result: AnswerResult, context_bundle: ContextBundle
+) -> None:
+    print("Question:")
+    print(query)
+    print("\nAnswer:")
+    print(answer_result.answer)
+    print("\nSources:")
+    citations = {
+        item.citation.label: item.citation for item in context_bundle.items
+    }
+    if not answer_result.used_citations:
+        print("(none)")
+        return
+    for label in answer_result.used_citations:
+        print(format_source(citations[label]))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -94,6 +120,22 @@ def main(argv: list[str] | None = None) -> int:
                 print(bundle.rendered_text)
             else:
                 print("No context found.")
+        elif args.command == "ask":
+            builder = ContextBuilder(max_chars=args.max_chars)
+            results = RetrievalService(settings).search("hybrid", args.query, args.top_k)
+            bundle = builder.build(args.query, results)
+            if bundle.items:
+                client = DeepSeekLLMClient(
+                    api_key=settings.deepseek_key(),
+                    base_url=settings.deepseek_base_url,
+                    model=settings.deepseek_model,
+                )
+                answer_result = AnswerGenerator(client).generate(args.query, bundle)
+            else:
+                answer_result = AnswerResult(
+                    answer=EMPTY_CONTEXT_ANSWER, used_citations=[]
+                )
+            _print_answer(args.query, answer_result, bundle)
         elif args.command == "evaluate":
             report = evaluate(settings, benchmark=args.benchmark, baseline=args.baseline)
             summary = [
