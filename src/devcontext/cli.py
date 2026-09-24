@@ -7,6 +7,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from devcontext.config import Settings
+from devcontext.context import ContextBuilder
 from devcontext.embedding.client import BailianEmbeddingClient
 from devcontext.evaluation.runner import evaluate
 from devcontext.ingestion.pipeline import ingest
@@ -29,6 +30,11 @@ def _parser() -> argparse.ArgumentParser:
     search.add_argument("--query", required=True)
     search.add_argument("--top-k", type=int, default=10)
     search.add_argument("--format", choices=("table", "json"), default="table")
+
+    context = subparsers.add_parser("context", help="Build LLM-ready context from hybrid search")
+    context.add_argument("query")
+    context.add_argument("--top-k", type=int, default=5)
+    context.add_argument("--max-chars", type=int, default=6000)
 
     evaluation = subparsers.add_parser("evaluate", help="Run the retrieval benchmark")
     evaluation.add_argument("--benchmark", type=Path)
@@ -78,6 +84,16 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "search":
             results = RetrievalService(settings).search(args.strategy, args.query, args.top_k)
             _print_results(results, args.format)
+        elif args.command == "context":
+            builder = ContextBuilder(max_chars=args.max_chars)
+            results = RetrievalService(settings).search("hybrid", args.query, args.top_k)
+            bundle = builder.build(args.query, results)
+            print(f"Query: {bundle.query}")
+            if bundle.rendered_text:
+                print()
+                print(bundle.rendered_text)
+            else:
+                print("No context found.")
         elif args.command == "evaluate":
             report = evaluate(settings, benchmark=args.benchmark, baseline=args.baseline)
             summary = [

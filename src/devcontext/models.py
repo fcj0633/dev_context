@@ -101,3 +101,46 @@ class SearchTimings:
 class SearchExecution:
     results: list[SearchResult]
     timings: SearchTimings
+
+
+@dataclass(slots=True)
+class Citation:
+    label: str
+    source_type: str
+    file_path: str
+    class_name: str | None = None
+    symbol_name: str | None = None
+    signature: str | None = None
+    start_line: int | None = None
+    end_line: int | None = None
+    heading_path: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class ContextItem:
+    citation: Citation
+    content: str
+    chunk_id: int
+    chunk_type: str
+    score: float
+    retrieval_rank: int
+    truncated: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class ContextBundle:
+    query: str
+    items: list[ContextItem]
+    rendered_text: str
+    total_chars: int
+    max_chars: int
+    truncated: bool
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
