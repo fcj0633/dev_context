@@ -7,6 +7,9 @@ import pytest
 
 from devcontext.evaluation.runner import (
     _case_detail,
+    _policy_acceptance,
+    _policy_comparison,
+    _routing_metrics,
     _strategy_metrics,
     compare_baseline,
     duplicate_result_rate,
@@ -16,6 +19,7 @@ from devcontext.evaluation.runner import (
     validate_cases,
 )
 from devcontext.models import SearchExecution, SearchResult, SearchTimings
+from devcontext.routing import DecisionSource, QueryType, RouteDecision
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -284,3 +288,48 @@ def test_baseline_comparison_requires_matching_dataset_hash() -> None:
     assert comparable["status"] == "comparable"
     assert comparable["deltas"]["hybrid.recall_at_5"]["delta"] == pytest.approx(0.05)
     assert incompatible["status"] == "incompatible"
+
+
+def test_routing_metrics_report_accuracy_sources_and_confusion() -> None:
+    cases = [benchmark_case("CODE"), benchmark_case("DOC"), benchmark_case("MIXED")]
+    decisions = [
+        RouteDecision(QueryType.CODE, DecisionSource.RULES, "code"),
+        RouteDecision(QueryType.MIXED, DecisionSource.LLM, "mixed"),
+        RouteDecision(QueryType.MIXED, DecisionSource.FALLBACK, "fallback"),
+    ]
+
+    metrics = _routing_metrics(cases, decisions)
+
+    assert metrics["accuracy"] == pytest.approx(2 / 3)
+    assert metrics["by_type"] == {"CODE": 1.0, "DOC": 0.0, "MIXED": 1.0}
+    assert metrics["decision_sources"] == {"rules": 1, "llm": 1, "fallback": 1}
+    assert metrics["confusion_matrix"]["DOC"]["MIXED"] == 1
+    assert metrics["cases"][1]["decision_source"] == "llm"
+
+
+def test_policy_comparison_and_acceptance_use_same_run_hybrid_metrics() -> None:
+    def strategy(
+        name: str, code: float, doc: float, mixed: float, both: float, latency: float
+    ) -> dict[str, object]:
+        return {
+            "strategy": name,
+            "by_type": {
+                "CODE": {"recall_at_5": code},
+                "DOC": {"recall_at_5": doc},
+                "MIXED": {"recall_at_5": mixed},
+            },
+            "both_sources_hit_at_5": both,
+            "average_latency_ms": latency,
+        }
+
+    comparison = _policy_comparison(
+        [
+            strategy("hybrid", 0.5, 0.4, 0.3, 0.0, 100.0),
+            strategy("routed", 0.6, 0.5, 0.5, 0.2, 150.0),
+        ]  # type: ignore[arg-type]
+    )
+    acceptance = _policy_acceptance({"accuracy": 1.0}, comparison)
+
+    assert comparison["metrics"]["MIXED.recall_at_5"]["delta"] == pytest.approx(0.2)
+    assert comparison["metrics"]["average_latency_ms"]["delta"] == 50.0
+    assert all(gate["passed"] for gate in acceptance)

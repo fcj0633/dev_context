@@ -14,11 +14,25 @@ class RetrievalService:
         self.settings = settings
         self.store = ChunkStore(settings.database_url)
 
-    def search(self, strategy: str, query: str, top_k: int = 10) -> list[SearchResult]:
-        return self.search_with_trace(strategy, query, top_k).results
+    def search(
+        self,
+        strategy: str,
+        query: str,
+        top_k: int = 10,
+        *,
+        source_type: str | None = None,
+    ) -> list[SearchResult]:
+        return self.search_with_trace(
+            strategy, query, top_k, source_type=source_type
+        ).results
 
     def search_with_trace(
-        self, strategy: str, query: str, top_k: int = 10
+        self,
+        strategy: str,
+        query: str,
+        top_k: int = 10,
+        *,
+        source_type: str | None = None,
     ) -> SearchExecution:
         total_started = time.perf_counter()
         if not query.strip():
@@ -27,11 +41,13 @@ class RetrievalService:
             raise ValueError("top_k must be between 1 and 100")
         if strategy not in {"keyword", "vector", "hybrid"}:
             raise ValueError(f"Unknown strategy: {strategy}")
+        if source_type not in {None, "CODE", "DOCUMENT"}:
+            raise ValueError("source_type must be CODE, DOCUMENT, or None")
 
         timings = SearchTimings()
         if strategy == "keyword":
             started = time.perf_counter()
-            results = self.store.keyword_search(self.settings.repository_name, query, top_k)
+            results = self._keyword_search(query, top_k, source_type)
             timings.keyword_sql_ms = _elapsed_ms(started)
             timings.total_ms = _elapsed_ms(total_started)
             return SearchExecution(results, timings)
@@ -48,29 +64,49 @@ class RetrievalService:
         timings.query_embedding_ms = _elapsed_ms(started)
         if strategy == "vector":
             started = time.perf_counter()
-            results = self.store.vector_search(
-                self.settings.repository_name, query_vector, top_k
-            )
+            results = self._vector_search(query_vector, top_k, source_type)
             timings.vector_sql_ms = _elapsed_ms(started)
             timings.total_ms = _elapsed_ms(total_started)
             return SearchExecution(results, timings)
 
         pool_size = max(20, top_k)
         started = time.perf_counter()
-        keyword = self.store.keyword_search(
-            self.settings.repository_name, query, pool_size
-        )
+        keyword = self._keyword_search(query, pool_size, source_type)
         timings.keyword_sql_ms = _elapsed_ms(started)
         started = time.perf_counter()
-        vector = self.store.vector_search(
-            self.settings.repository_name, query_vector, pool_size
-        )
+        vector = self._vector_search(query_vector, pool_size, source_type)
         timings.vector_sql_ms = _elapsed_ms(started)
         started = time.perf_counter()
         results = reciprocal_rank_fusion([keyword, vector], k=60, top_k=top_k)
         timings.fusion_ms = _elapsed_ms(started)
         timings.total_ms = _elapsed_ms(total_started)
         return SearchExecution(results, timings)
+
+    def _keyword_search(
+        self, query: str, top_k: int, source_type: str | None
+    ) -> list[SearchResult]:
+        if source_type is None:
+            return self.store.keyword_search(self.settings.repository_name, query, top_k)
+        return self.store.keyword_search(
+            self.settings.repository_name,
+            query,
+            top_k,
+            source_type=source_type,
+        )
+
+    def _vector_search(
+        self, query_vector: list[float], top_k: int, source_type: str | None
+    ) -> list[SearchResult]:
+        if source_type is None:
+            return self.store.vector_search(
+                self.settings.repository_name, query_vector, top_k
+            )
+        return self.store.vector_search(
+            self.settings.repository_name,
+            query_vector,
+            top_k,
+            source_type=source_type,
+        )
 
 
 def _elapsed_ms(started: float) -> float:

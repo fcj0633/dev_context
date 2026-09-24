@@ -93,9 +93,16 @@ class ChunkStore:
         return len(rows)
 
     def keyword_search(
-        self, repository: str, query: str, top_k: int = 10
+        self,
+        repository: str,
+        query: str,
+        top_k: int = 10,
+        *,
+        source_type: str | None = None,
     ) -> list[SearchResult]:
+        _validate_source_type(source_type)
         identifiers = list(dict.fromkeys(re.findall(r"[A-Za-z_$][A-Za-z0-9_$]{2,}", query)))
+        source_filter = "" if source_type is None else "AND source_type = %s"
         sql = f"""
             SELECT {RESULT_COLUMNS},
                 (
@@ -116,6 +123,7 @@ class ChunkStore:
                 )::double precision AS score
             FROM knowledge_chunk
             WHERE repository = %s
+              {source_filter}
               AND (
                     strpos(lower(keyword_text), lower(%s)) > 0
                     OR similarity(keyword_text, %s) > 0.03
@@ -127,10 +135,12 @@ class ChunkStore:
             ORDER BY score DESC, id ASC
             LIMIT %s
         """
-        parameters = (
-            identifiers, identifiers, identifiers, query, query,
-            repository, query, query, identifiers, top_k,
-        )
+        parameters: list[Any] = [
+            identifiers, identifiers, identifiers, query, query, repository,
+        ]
+        if source_type is not None:
+            parameters.append(source_type)
+        parameters.extend([query, query, identifiers, top_k])
         with self._connect() as connection:
             rows = connection.execute(sql, parameters).fetchall()
         return [SearchResult.from_row(row) for row in rows]
@@ -140,19 +150,26 @@ class ChunkStore:
         repository: str,
         query_embedding: list[float],
         top_k: int = 10,
+        *,
+        source_type: str | None = None,
     ) -> list[SearchResult]:
+        _validate_source_type(source_type)
+        source_filter = "" if source_type is None else "AND source_type = %s"
         sql = f"""
             SELECT {RESULT_COLUMNS},
                 (1 - (embedding <=> %s::vector))::double precision AS score
             FROM knowledge_chunk
             WHERE repository = %s
+              {source_filter}
             ORDER BY embedding <=> %s::vector, id ASC
             LIMIT %s
         """
+        parameters: list[Any] = [query_embedding, repository]
+        if source_type is not None:
+            parameters.append(source_type)
+        parameters.extend([query_embedding, top_k])
         with self._connect() as connection:
-            rows = connection.execute(
-                sql, (query_embedding, repository, query_embedding, top_k)
-            ).fetchall()
+            rows = connection.execute(sql, parameters).fetchall()
         return [SearchResult.from_row(row) for row in rows]
 
     def count_by_type(self, repository: str) -> dict[str, int]:
@@ -168,3 +185,8 @@ class ChunkStore:
                 (repository,),
             ).fetchall()
         return {row["source_type"]: row["count"] for row in rows}
+
+
+def _validate_source_type(source_type: str | None) -> None:
+    if source_type not in {None, "CODE", "DOCUMENT"}:
+        raise ValueError("source_type must be CODE, DOCUMENT, or None")

@@ -43,3 +43,21 @@ def test_extensions_data_and_identifier_search_are_ready() -> None:
         5,
     )
     assert any(result.symbol_name == "doPurchaseInTransaction" for result in results)
+
+    store = ChunkStore(settings.database_url)
+    code_results = store.keyword_search(
+        settings.repository_name,
+        "PurchaseTicketTxService",
+        5,
+        source_type="CODE",
+    )
+    document_results = store.vector_search(
+        settings.repository_name,
+        [0.0] * settings.embedding_dimensions,
+        5,
+        source_type="DOCUMENT",
+    )
+    assert code_results and all(result.source_type == "CODE" for result in code_results)
+    assert document_results and all(
+        result.source_type == "DOCUMENT" for result in document_results
+    )

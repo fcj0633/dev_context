@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 import subprocess
+from collections import Counter
 from collections.abc import Iterable, Sequence
 from datetime import datetime, timezone
 from hashlib import sha256
@@ -12,7 +13,9 @@ from typing import Any
 
 from devcontext.config import Settings, project_root
 from devcontext.models import SearchExecution, SearchResult
+from devcontext.retrieval.policy import RetrievalPolicy
 from devcontext.retrieval.service import RetrievalService
+from devcontext.routing import DecisionSource, QueryRouter, RouteDecision
 
 
 SCHEMA_VERSION = 2
@@ -423,6 +426,121 @@ def build_baseline(report: dict[str, Any], name: str = "retrieval-v1") -> dict[s
     }
 
 
+def _routing_metrics(
+    cases: list[dict[str, Any]], decisions: list[RouteDecision]
+) -> dict[str, Any]:
+    labels = ("CODE", "DOC", "MIXED")
+    details = []
+    confusion = {
+        expected: {predicted: 0 for predicted in labels} for expected in labels
+    }
+    decision_sources: Counter[str] = Counter()
+    for case, decision in zip(cases, decisions, strict=True):
+        expected = case["type"]
+        predicted = decision.query_type.value
+        correct = expected == predicted
+        confusion[expected][predicted] += 1
+        decision_sources[decision.decision_source.value] += 1
+        details.append(
+            {
+                "id": case["id"],
+                "expected": expected,
+                "predicted": predicted,
+                "correct": correct,
+                "reason": decision.reason,
+                "code_signals": list(decision.code_signals),
+                "doc_signals": list(decision.doc_signals),
+                "decision_source": decision.decision_source.value,
+            }
+        )
+    total = len(details)
+    return {
+        "accuracy": _mean(float(item["correct"]) for item in details),
+        "by_type": {
+            label: _mean(
+                float(item["correct"])
+                for item in details
+                if item["expected"] == label
+            )
+            for label in labels
+        },
+        "decision_sources": {
+            source.value: decision_sources[source.value] for source in DecisionSource
+        },
+        "confusion_matrix": confusion,
+        "case_count": total,
+        "cases": details,
+    }
+
+
+def _policy_comparison(strategies: list[dict[str, Any]]) -> dict[str, Any]:
+    by_name = {item["strategy"]: item for item in strategies}
+    hybrid = by_name["hybrid"]
+    routed = by_name["routed"]
+    values = {
+        "CODE.recall_at_5": (
+            hybrid["by_type"]["CODE"]["recall_at_5"],
+            routed["by_type"]["CODE"]["recall_at_5"],
+        ),
+        "DOC.recall_at_5": (
+            hybrid["by_type"]["DOC"]["recall_at_5"],
+            routed["by_type"]["DOC"]["recall_at_5"],
+        ),
+        "MIXED.recall_at_5": (
+            hybrid["by_type"]["MIXED"]["recall_at_5"],
+            routed["by_type"]["MIXED"]["recall_at_5"],
+        ),
+        "both_sources_hit_at_5": (
+            hybrid["both_sources_hit_at_5"], routed["both_sources_hit_at_5"]
+        ),
+        "average_latency_ms": (
+            hybrid["average_latency_ms"], routed["average_latency_ms"]
+        ),
+    }
+    return {
+        "baseline_strategy": "hybrid",
+        "candidate_strategy": "routed",
+        "metrics": {
+            name: {"before": before, "after": after, "delta": after - before}
+            for name, (before, after) in values.items()
+        },
+    }
+
+
+def _policy_acceptance(
+    routing: dict[str, Any], comparison: dict[str, Any]
+) -> list[dict[str, Any]]:
+    metrics = comparison["metrics"]
+    gates = [
+        {
+            "name": "router_accuracy",
+            "passed": routing["accuracy"] >= 0.9,
+            "current": routing["accuracy"],
+            "target": 0.9,
+        }
+    ]
+    for case_type in ("CODE", "DOC", "MIXED"):
+        metric = metrics[f"{case_type}.recall_at_5"]
+        gates.append(
+            {
+                "name": f"routed_{case_type.lower()}_recall_at_5_not_below_hybrid",
+                "passed": metric["after"] >= metric["before"],
+                "current": metric["after"],
+                "target": metric["before"],
+            }
+        )
+    both = metrics["both_sources_hit_at_5"]
+    gates.append(
+        {
+            "name": "routed_both_sources_hit_at_5_improves_hybrid",
+            "passed": both["after"] > both["before"],
+            "current": both["after"],
+            "target": f"> {both['before']}",
+        }
+    )
+    return gates
+
+
 def _git_commit() -> str | None:
     completed = subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=project_root(), text=True,
@@ -493,6 +611,24 @@ def evaluate(
         ]
         strategies.append(_strategy_metrics(strategy, details))
 
+    router = QueryRouter()
+    policy = RetrievalPolicy(service)
+    decisions: list[RouteDecision] = []
+    routed_details: list[dict[str, Any]] = []
+    for case in cases:
+        decision = router.route(case["question"])
+        decisions.append(decision)
+        routed_details.append(
+            _case_detail(
+                case,
+                policy.search_with_trace(case["question"], decision, top_k=10),
+            )
+        )
+    strategies.append(_strategy_metrics("routed", routed_details))
+    routing = _routing_metrics(cases, decisions)
+    policy_comparison = _policy_comparison(strategies)
+    policy_acceptance = _policy_acceptance(routing, policy_comparison)
+
     baseline_data: dict[str, Any] | None = None
     comparison: dict[str, Any] = {"status": "missing", "deltas": {}}
     if baseline.is_file():
@@ -510,10 +646,15 @@ def evaluate(
         "benchmark_sha256": benchmark_hash, "baseline": str(baseline),
         "case_count": len(cases), "case_distribution": distribution,
         "strategies": strategies, "baseline_comparison": comparison,
+        "routing": routing, "policy_comparison": policy_comparison,
+        "policy_acceptance": policy_acceptance,
     }
     report["acceptance"] = _acceptance(cases, strategies, comparison, baseline_data)
     report["quality_passed"] = all(
         gate["passed"] is True for gate in report["acceptance"] if gate["passed"] is not None
+    )
+    report["policy_improvement_passed"] = all(
+        gate["passed"] is True for gate in policy_acceptance
     )
     artifacts = project_root() / "artifacts"
     artifacts.mkdir(exist_ok=True)

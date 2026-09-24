@@ -13,8 +13,9 @@ from devcontext.embedding.client import BailianEmbeddingClient
 from devcontext.evaluation.runner import evaluate
 from devcontext.ingestion.pipeline import ingest
 from devcontext.llm import DeepSeekLLMClient
-from devcontext.models import AnswerResult, ContextBundle
-from devcontext.retrieval.service import RetrievalService
+from devcontext.models import AnswerResult, ContextBundle, SearchResult
+from devcontext.retrieval import RetrievalPolicy, RetrievalService
+from devcontext.routing import QueryRouter, RouteDecision
 from devcontext.storage import ChunkStore
 
 
@@ -67,10 +68,14 @@ def _print_results(results: list, output_format: str) -> None:
 
 
 def _print_answer(
-    query: str, answer_result: AnswerResult, context_bundle: ContextBundle
+    query: str,
+    decision: RouteDecision,
+    answer_result: AnswerResult,
+    context_bundle: ContextBundle,
 ) -> None:
     print("Question:")
     print(query)
+    print(f"\nRoute: {decision.query_type.value} ({decision.decision_source.value})")
     print("\nAnswer:")
     print(answer_result.answer)
     print("\nSources:")
@@ -82,6 +87,25 @@ def _print_answer(
         return
     for label in answer_result.used_citations:
         print(format_source(citations[label]))
+
+
+def _query_router(settings: Settings) -> QueryRouter:
+    return QueryRouter(
+        lambda: DeepSeekLLMClient(
+            api_key=settings.deepseek_key(),
+            base_url=settings.deepseek_base_url,
+            model=settings.deepseek_model,
+            max_tokens=1024,
+        )
+    )
+
+
+def _routed_search(
+    settings: Settings, query: str, top_k: int
+) -> tuple[RouteDecision, list[SearchResult]]:
+    decision = _query_router(settings).route(query)
+    policy = RetrievalPolicy(RetrievalService(settings))
+    return decision, policy.search(query, decision, top_k)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -112,9 +136,10 @@ def main(argv: list[str] | None = None) -> int:
             _print_results(results, args.format)
         elif args.command == "context":
             builder = ContextBuilder(max_chars=args.max_chars)
-            results = RetrievalService(settings).search("hybrid", args.query, args.top_k)
+            decision, results = _routed_search(settings, args.query, args.top_k)
             bundle = builder.build(args.query, results)
             print(f"Query: {bundle.query}")
+            print(f"Route: {decision.query_type.value} ({decision.decision_source.value})")
             if bundle.rendered_text:
                 print()
                 print(bundle.rendered_text)
@@ -122,7 +147,7 @@ def main(argv: list[str] | None = None) -> int:
                 print("No context found.")
         elif args.command == "ask":
             builder = ContextBuilder(max_chars=args.max_chars)
-            results = RetrievalService(settings).search("hybrid", args.query, args.top_k)
+            decision, results = _routed_search(settings, args.query, args.top_k)
             bundle = builder.build(args.query, results)
             if bundle.items:
                 client = DeepSeekLLMClient(
@@ -135,13 +160,16 @@ def main(argv: list[str] | None = None) -> int:
                 answer_result = AnswerResult(
                     answer=EMPTY_CONTEXT_ANSWER, used_citations=[]
                 )
-            _print_answer(args.query, answer_result, bundle)
+            _print_answer(args.query, decision, answer_result, bundle)
         elif args.command == "evaluate":
             report = evaluate(settings, benchmark=args.benchmark, baseline=args.baseline)
             summary = [
                 {key: value for key, value in strategy.items() if key != "cases"}
                 for strategy in report["strategies"]
             ]
+            routing_summary = {
+                key: value for key, value in report["routing"].items() if key != "cases"
+            }
             print(
                 json.dumps(
                     {
@@ -150,6 +178,12 @@ def main(argv: list[str] | None = None) -> int:
                         "baseline_comparison": report["baseline_comparison"],
                         "acceptance": report["acceptance"],
                         "quality_passed": report["quality_passed"],
+                        "routing": routing_summary,
+                        "policy_comparison": report["policy_comparison"],
+                        "policy_acceptance": report["policy_acceptance"],
+                        "policy_improvement_passed": report[
+                            "policy_improvement_passed"
+                        ],
                         "strategies": summary,
                     },
                     ensure_ascii=False,

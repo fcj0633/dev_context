@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import devcontext.cli as cli_module
-from devcontext.models import SearchResult
+from devcontext.models import SearchExecution, SearchResult, SearchTimings
 
 
 def code_result() -> SearchResult:
@@ -24,16 +24,23 @@ def code_result() -> SearchResult:
 def test_ask_cli_runs_grounded_pipeline_and_prints_real_sources(
     monkeypatch, capsys
 ) -> None:
-    retrieval_calls: list[tuple[str, str, int]] = []
+    retrieval_calls: list[tuple[str, str, int, str | None]] = []
     client_settings: list[dict[str, object]] = []
 
     class FakeRetrievalService:
         def __init__(self, settings: object) -> None:
             pass
 
-        def search(self, strategy: str, query: str, top_k: int) -> list[SearchResult]:
-            retrieval_calls.append((strategy, query, top_k))
-            return [code_result()]
+        def search_with_trace(
+            self,
+            strategy: str,
+            query: str,
+            top_k: int,
+            *,
+            source_type: str | None = None,
+        ) -> SearchExecution:
+            retrieval_calls.append((strategy, query, top_k, source_type))
+            return SearchExecution([code_result()], SearchTimings())
 
     class FakeDeepSeekClient:
         def __init__(self, **kwargs: object) -> None:
@@ -47,14 +54,15 @@ def test_ask_cli_runs_grounded_pipeline_and_prints_real_sources(
     monkeypatch.setattr(cli_module, "DeepSeekLLMClient", FakeDeepSeekClient)
 
     exit_code = cli_module.main(
-        ["ask", "如何创建订单？", "--top-k", "3", "--max-chars", "1000"]
+        ["ask", "创建订单的代码在哪里？", "--top-k", "3", "--max-chars", "1000"]
     )
     captured = capsys.readouterr()
 
     assert exit_code == 0
-    assert retrieval_calls == [("hybrid", "如何创建订单？", 3)]
+    assert retrieval_calls == [("hybrid", "创建订单的代码在哪里？", 3, "CODE")]
     assert client_settings[0]["model"] == "deepseek-flash"
-    assert "Question:\n如何创建订单？" in captured.out
+    assert "Question:\n创建订单的代码在哪里？" in captured.out
+    assert "Route: CODE (rules)" in captured.out
     assert "订单由检索到的方法创建 [C1]" in captured.out
     sources = captured.out.split("Sources:\n", maxsplit=1)[1]
     assert sources == (
@@ -71,8 +79,15 @@ def test_ask_cli_empty_context_does_not_construct_llm_client(
         def __init__(self, settings: object) -> None:
             pass
 
-        def search(self, strategy: str, query: str, top_k: int) -> list[SearchResult]:
-            return []
+        def search_with_trace(
+            self,
+            strategy: str,
+            query: str,
+            top_k: int,
+            *,
+            source_type: str | None = None,
+        ) -> SearchExecution:
+            return SearchExecution([], SearchTimings())
 
     class ForbiddenLLMClient:
         def __init__(self, **kwargs: object) -> None:
@@ -82,7 +97,7 @@ def test_ask_cli_empty_context_does_not_construct_llm_client(
     monkeypatch.setattr(cli_module, "RetrievalService", FakeRetrievalService)
     monkeypatch.setattr(cli_module, "DeepSeekLLMClient", ForbiddenLLMClient)
 
-    exit_code = cli_module.main(["ask", "没有结果的问题"])
+    exit_code = cli_module.main(["ask", "没有结果的代码在哪里"])
     captured = capsys.readouterr()
 
     assert exit_code == 0
@@ -98,8 +113,15 @@ def test_ask_cli_invalid_citation_fails_without_printing_answer(
         def __init__(self, settings: object) -> None:
             pass
 
-        def search(self, strategy: str, query: str, top_k: int) -> list[SearchResult]:
-            return [code_result()]
+        def search_with_trace(
+            self,
+            strategy: str,
+            query: str,
+            top_k: int,
+            *,
+            source_type: str | None = None,
+        ) -> SearchExecution:
+            return SearchExecution([code_result()], SearchTimings())
 
     class FakeDeepSeekClient:
         def __init__(self, **kwargs: object) -> None:
@@ -112,10 +134,51 @@ def test_ask_cli_invalid_citation_fails_without_printing_answer(
     monkeypatch.setattr(cli_module, "RetrievalService", FakeRetrievalService)
     monkeypatch.setattr(cli_module, "DeepSeekLLMClient", FakeDeepSeekClient)
 
-    exit_code = cli_module.main(["ask", "问题"])
+    exit_code = cli_module.main(["ask", "代码在哪里"])
     captured = capsys.readouterr()
 
     assert exit_code == 1
     assert captured.out == ""
     assert "[C9]" in captured.err
     assert "不可信答案" not in captured.out
+
+
+def test_ask_cli_uses_llm_fallback_for_ambiguous_query(monkeypatch, capsys) -> None:
+    retrieval_calls: list[tuple[str, str | None]] = []
+    client_max_tokens: list[int | None] = []
+
+    class FakeRetrievalService:
+        def __init__(self, settings: object) -> None:
+            pass
+
+        def search_with_trace(
+            self,
+            strategy: str,
+            query: str,
+            top_k: int,
+            *,
+            source_type: str | None = None,
+        ) -> SearchExecution:
+            retrieval_calls.append((strategy, source_type))
+            return SearchExecution([code_result()], SearchTimings())
+
+    class FakeDeepSeekClient:
+        def __init__(self, **kwargs: object) -> None:
+            self.router = kwargs.get("max_tokens") == 1024
+            client_max_tokens.append(kwargs.get("max_tokens"))  # type: ignore[arg-type]
+
+        def generate(self, messages: object) -> str:
+            return "MIXED" if self.router else "证据回答 [C1]。"
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-secret")
+    monkeypatch.setattr(cli_module, "RetrievalService", FakeRetrievalService)
+    monkeypatch.setattr(cli_module, "DeepSeekLLMClient", FakeDeepSeekClient)
+
+    exit_code = cli_module.main(["ask", "帮我看看这个功能目前怎么样"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert client_max_tokens == [1024, None]
+    assert retrieval_calls == [("vector", "CODE"), ("vector", "DOCUMENT")]
+    assert "Route: MIXED (llm)" in captured.out
+    assert "证据回答 [C1]" in captured.out

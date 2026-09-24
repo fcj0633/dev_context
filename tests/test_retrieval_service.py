@@ -93,3 +93,54 @@ def test_unknown_strategy_fails_before_api_key_is_required() -> None:
         assert "Unknown strategy" in str(exception)
     else:
         raise AssertionError("unknown strategy should fail")
+
+
+def test_source_filter_is_forwarded_without_changing_unfiltered_calls(
+    monkeypatch,
+) -> None:
+    calls: list[tuple[str, str | None]] = []
+
+    class FilterAwareStore(FakeStore):
+        def keyword_search(
+            self,
+            repository: str,
+            query: str,
+            top_k: int,
+            *,
+            source_type: str | None = None,
+        ) -> list[SearchResult]:
+            calls.append(("keyword", source_type))
+            return [result(1)]
+
+        def vector_search(
+            self,
+            repository: str,
+            query_embedding: list[float],
+            top_k: int,
+            *,
+            source_type: str | None = None,
+        ) -> list[SearchResult]:
+            calls.append(("vector", source_type))
+            return [result(2)]
+
+    monkeypatch.setattr(service_module, "BailianEmbeddingClient", FakeEmbeddingClient)
+    service = RetrievalService(settings())
+    service.store = FilterAwareStore()
+
+    filtered = service.search("hybrid", "query", 5, source_type="CODE")
+    service.search("keyword", "query", 5)
+
+    assert filtered
+    assert calls == [("keyword", "CODE"), ("vector", "CODE"), ("keyword", None)]
+
+
+def test_invalid_source_filter_fails_before_api_key_is_required() -> None:
+    service = RetrievalService(settings())
+    service.store = FakeStore()
+
+    try:
+        service.search("vector", "query", 5, source_type="OTHER")
+    except ValueError as exception:
+        assert "source_type" in str(exception)
+    else:
+        raise AssertionError("invalid source type should fail")

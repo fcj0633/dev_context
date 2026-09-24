@@ -1,6 +1,6 @@
 # DevContext-Java
 
-DevContext-Java 从 `my12306` 的 Java 源码和 Markdown 项目文档中提取结构化片段，使用 PostgreSQL/pgvector 建立关键词、向量和混合检索。首个版本专注于可验证的检索闭环，不生成答案，也不修改源项目。
+DevContext-Java 从 `my12306` 的 Java 源码和 Markdown 项目文档中提取结构化片段，使用 PostgreSQL/pgvector 建立关键词、向量和混合检索，并基于带引用的 Context 生成可追溯答案。系统不会修改源项目。
 
 ## 数据源
 
@@ -52,23 +52,33 @@ uv run devcontext evaluate --benchmark benchmark\cases.jsonl --baseline benchmar
 | `devcontext smoke-api` | 验证百炼连接及 1024 维输出 |
 | `devcontext ingest` | 全量重建 `my12306` 索引 |
 | `devcontext search` | 运行关键词、向量或混合检索 |
-| `devcontext context` | 将 Hybrid 检索结果构建为带 `[C1]` 引用和字符预算的 LLM-ready Context |
-| `devcontext ask` | 使用 DeepSeek-V4.1-Flash 基于当前 Context 生成带 Citation 的回答 |
-| `devcontext evaluate` | 运行 36 条分层基准问题，输出分类指标、分段耗时、失败诊断和基线差异 |
+| `devcontext context` | 按问题类型检索证据，并构建带 `[C1]` 引用和字符预算的 LLM-ready Context |
+| `devcontext ask` | 按问题类型检索后，使用 DeepSeek-V4.1-Flash 生成带 Citation 的回答 |
+| `devcontext evaluate` | 运行 36 条分层基准问题，输出 Router Accuracy、分类指标、分段耗时、失败诊断和策略差异 |
 
 评测集由 CODE、DOC、MIXED 各 12 条组成。详细报告写入 `artifacts/`，可提交的精简基线位于 `benchmark/baselines/retrieval-v1.json`；只有 benchmark 哈希一致时才进行前后对比。
 
 ## Context Builder V1
 
-`devcontext context` 固定复用现有 Hybrid Retrieval，将 Top-K 结果转换为结构化 Context。默认字符预算为 6000，预算包含 Citation 元数据、正文和条目分隔符；输出会展示 Java 文件与行号，或 Markdown 文件与完整标题层级。相同 Chunk 按数据库 ID 去重，输入同时包含 CODE 和 DOCUMENT 且预算允许时会优先保留两类证据。本阶段只构建 Context，不调用 LLM。
+`devcontext context` 将 Router + Retrieval Policy 返回的 Top-K 结果转换为结构化 Context。默认字符预算为 6000，预算包含 Citation 元数据、正文和条目分隔符；输出会展示 Java 文件与行号，或 Markdown 文件与完整标题层级。相同 Chunk 按数据库 ID 去重，输入同时包含 CODE 和 DOCUMENT 且预算允许时会优先保留两类证据。该命令只构建 Context，不调用答案生成模型；但规则无法判断问题类型时可能调用一次短 LLM Router。
 
 Context Builder 的后续方向包括 tokenizer 预算、语义去重、相邻 Chunk 合并、Parent Context、动态来源配额、意图识别、二次检索、Query Rewrite 和 Reranker；这些能力不属于 Context Builder V1。
 
 ## LLM Answer + Citation V1
 
-`devcontext ask` 固定执行 Hybrid Retrieval → Context Builder → DeepSeek-V4.1-Flash。模型只能根据当前 Context 回答，并使用 `[C1]` 等引用；程序会提取引用、拒绝不存在的 Citation，并根据 `ContextBundle` 中的真实元数据打印 Sources。空 Context 不调用模型。默认使用 `deepseek-flash`、低强度思考、4096 token 单次生成上限、Top 5 和 6000 字符 Context 预算；任何非正常结束的生成结果都会被拒绝。API Key 只从 `DEEPSEEK_API_KEY` 用户环境变量读取。
+`devcontext ask` 执行 Query Router → Retrieval Policy → Context Builder → DeepSeek-V4.1-Flash。模型只能根据当前 Context 回答，并使用 `[C1]` 等引用；程序会提取引用、拒绝不存在的 Citation，并根据 `ContextBundle` 中的真实元数据打印 Sources。空 Context 不调用答案模型。默认使用 `deepseek-flash`、低强度思考、4096 token 单次生成上限、Top 5 和 6000 字符 Context 预算；任何非正常结束的生成结果都会被拒绝。API Key 只从 `DEEPSEEK_API_KEY` 用户环境变量读取。
 
-V1 不判断 Citation 是否在语义上真正支持对应结论，也不实现 Router、自动类型分类、Query Rewrite、Retry、Context Sufficiency Judge、LangGraph、Reranker、检索调参或 Context Builder V2。
+## Query Router 与 Retrieval Policy V1
+
+Router 优先使用确定性规则，将问题分为 `CODE`、`DOC` 或 `MIXED`。没有明确规则信号时才使用 DeepSeek 输出一个严格标签；模型不可用或输出非法时安全回退到 `MIXED`，不重试。Router 请求最多允许 1024 个生成 token，以容纳模型内部推理，但只接受最终完整输出 `CODE`、`DOC` 或 `MIXED`。CLI 会显示 `Route: CODE/DOC/MIXED (rules/llm/fallback)`。
+
+- CODE：仅从代码来源执行现有 Hybrid Retrieval。
+- DOC：仅从文档来源执行现有 Vector Retrieval。
+- MIXED：分别执行 CODE 和 DOCUMENT Vector Retrieval，再从 CODE 开始稳定交错。
+
+该层不改变基础 Retriever 的关键词评分、向量距离或 RRF。评测报告在原有 Keyword、Vector、Hybrid 之外增加 Routed 指标，并将同一次运行中的 Hybrid 与 Routed 分类 Recall 和双源命中率直接对比。
+
+V1 不判断 Citation 是否在语义上真正支持对应结论，也不实现 Query Rewrite、Retry、Context Sufficiency Judge、LangGraph、Reranker、复杂检索调参或 Context Builder V2。
 
 默认配置见 `.env.example`。API Key 始终从系统环境变量读取，不应写入 `.env` 或提交到 Git。
 

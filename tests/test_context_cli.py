@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import devcontext.cli as cli_module
-from devcontext.models import SearchResult
+from devcontext.models import SearchExecution, SearchResult, SearchTimings
 
 
 def code_result() -> SearchResult:
@@ -24,15 +24,22 @@ def code_result() -> SearchResult:
 def test_context_cli_uses_hybrid_retrieval_and_prints_context(
     monkeypatch, capsys
 ) -> None:
-    calls: list[tuple[str, str, int]] = []
+    calls: list[tuple[str, str, int, str | None]] = []
 
     class FakeRetrievalService:
         def __init__(self, settings: object) -> None:
             pass
 
-        def search(self, strategy: str, query: str, top_k: int) -> list[SearchResult]:
-            calls.append((strategy, query, top_k))
-            return [code_result()]
+        def search_with_trace(
+            self,
+            strategy: str,
+            query: str,
+            top_k: int,
+            *,
+            source_type: str | None = None,
+        ) -> SearchExecution:
+            calls.append((strategy, query, top_k, source_type))
+            return SearchExecution([code_result()], SearchTimings())
 
     monkeypatch.setattr(cli_module, "RetrievalService", FakeRetrievalService)
 
@@ -42,8 +49,9 @@ def test_context_cli_uses_hybrid_retrieval_and_prints_context(
     captured = capsys.readouterr()
 
     assert exit_code == 0
-    assert calls == [("hybrid", "购票事务是如何实现的？", 3)]
+    assert calls == [("hybrid", "购票事务是如何实现的？", 3, "CODE")]
     assert "Query: 购票事务是如何实现的？" in captured.out
+    assert "Route: CODE (rules)" in captured.out
     assert "[C1] CODE" in captured.out
     assert "File: services/order/OrderService.java" in captured.out
     assert "Lines: 81-90" in captured.out
@@ -57,14 +65,25 @@ def test_context_cli_prints_clear_message_for_empty_results(
         def __init__(self, settings: object) -> None:
             pass
 
-        def search(self, strategy: str, query: str, top_k: int) -> list[SearchResult]:
-            return []
+        def search_with_trace(
+            self,
+            strategy: str,
+            query: str,
+            top_k: int,
+            *,
+            source_type: str | None = None,
+        ) -> SearchExecution:
+            return SearchExecution([], SearchTimings())
 
     monkeypatch.setattr(cli_module, "RetrievalService", FakeRetrievalService)
 
-    exit_code = cli_module.main(["context", "no matches"])
+    exit_code = cli_module.main(["context", "没有结果的代码在哪里"])
     captured = capsys.readouterr()
 
     assert exit_code == 0
-    assert captured.out == "Query: no matches\nNo context found.\n"
+    assert captured.out == (
+        "Query: 没有结果的代码在哪里\n"
+        "Route: CODE (rules)\n"
+        "No context found.\n"
+    )
     assert captured.err == ""
