@@ -117,6 +117,30 @@ def test_empty_llm_answer_is_rejected() -> None:
         AnswerGenerator(FakeLLMClient("   ")).generate("问题", bundle("C1"))
 
 
+def test_partial_answer_prompt_treats_missing_aspects_as_evidence_gaps() -> None:
+    client = FakeLLMClient("现有证据只支持入口位置 [C1]，事务原因无法确认。")
+
+    result = AnswerGenerator(client).generate_partial(
+        "入口和事务原因是什么？",
+        bundle("C1"),
+        ["[DOCUMENT] 缺少事务设计依据"],
+    )
+
+    assert result.used_citations == ["C1"]
+    prompt = client.calls[0][1].content
+    assert "Known Evidence Gaps" in prompt
+    assert "[DOCUMENT] 缺少事务设计依据" in prompt
+    assert "不是项目事实" in prompt
+    assert "不得猜测" in prompt
+
+
+def test_partial_answer_requires_a_missing_aspect() -> None:
+    with pytest.raises(ValueError, match="requires at least one"):
+        AnswerGenerator(FakeLLMClient("unused")).generate_partial(
+            "问题", bundle("C1"), []
+        )
+
+
 def test_source_formatting_uses_real_citation_metadata() -> None:
     context_bundle = bundle("C1", "C2")
 

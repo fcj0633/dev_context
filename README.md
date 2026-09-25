@@ -33,6 +33,7 @@ uv run devcontext context "购票事务是如何实现的？" --top-k 5
 uv run devcontext context "订单关闭的代码和设计依据" --top-k 10 --max-chars 8000
 uv run devcontext ask "OrderServiceImpl.createTicketOrder 如何保证事务和幂等？" --top-k 5
 uv run devcontext ask "订单超时关闭的设计依据是什么？" --top-k 10 --max-chars 8000
+uv run devcontext ask "购票库存参数由哪个责任链 handler 校验，为什么要先挡掉非法请求？" --debug
 ```
 
 运行测试与评测：
@@ -53,7 +54,7 @@ uv run devcontext evaluate --benchmark benchmark\cases.jsonl --baseline benchmar
 | `devcontext ingest` | 全量重建 `my12306` 索引 |
 | `devcontext search` | 运行关键词、向量或混合检索 |
 | `devcontext context` | 按问题类型检索证据，并构建带 `[C1]` 引用和字符预算的 LLM-ready Context |
-| `devcontext ask` | 按问题类型检索后，使用 DeepSeek-V4.1-Flash 生成带 Citation 的回答 |
+| `devcontext ask` | 按问题类型检索，检查证据充分性，必要时定向改写并有限重试，最后生成带 Citation 的回答 |
 | `devcontext evaluate` | 运行 36 条分层基准问题，输出 Router Accuracy、分类指标、分段耗时、失败诊断和策略差异 |
 
 评测集由 CODE、DOC、MIXED 各 12 条组成。报告同时统计 Recall@3/@5/@10/@20、CODE/DOC hit@10、MIXED both-sources hit@10，并在 routed Recall@5 失败时区分 `RETRIEVAL_MISS`、`RANKING_MISS` 和 `COMPOSITION_MISS`。详细的 Top20 排名与失败案例表写入 `artifacts/`，可提交的精简基线位于 `benchmark/baselines/retrieval-v1.json`；只有 benchmark 哈希一致时才进行前后对比。
@@ -66,7 +67,7 @@ Context Builder 的后续方向包括 tokenizer 预算、语义去重、相邻 C
 
 ## LLM Answer + Citation V1
 
-`devcontext ask` 执行 Query Router → Retrieval Policy → Context Builder → DeepSeek-V4.1-Flash。模型只能根据当前 Context 回答，并使用 `[C1]` 等引用；程序会提取引用、拒绝不存在的 Citation，并根据 `ContextBundle` 中的真实元数据打印 Sources。空 Context 不调用答案模型。默认使用 `deepseek-flash`、低强度思考、4096 token 单次生成上限、Top 5 和 6000 字符 Context 预算；任何非正常结束的生成结果都会被拒绝。API Key 只从 `DEEPSEEK_API_KEY` 用户环境变量读取。
+`devcontext ask` 执行 Query Router → Retrieval Policy → Context Builder → Context Sufficiency → DeepSeek-V4.1-Flash。模型只能根据当前 Context 回答，并使用 `[C1]` 等引用；程序会提取引用、拒绝不存在的 Citation，并根据 `ContextBundle` 中的真实元数据打印 Sources。最终 Context 为空时不调用答案模型。默认使用 `deepseek-flash`、低强度思考、4096 token 单次答案生成上限、Top 5 和 6000 字符 Context 预算；任何非正常结束的生成结果都会被拒绝。API Key 只从 `DEEPSEEK_API_KEY` 用户环境变量读取。
 
 ## Query Router 与 Retrieval Policy V1
 
@@ -78,7 +79,15 @@ Router 优先使用确定性规则，将问题分为 `CODE`、`DOC` 或 `MIXED`�
 
 该层不改变基础 Retriever 的关键词评分、向量距离或 RRF。文档锚点提升只用于 MIXED 证据组合，不影响 CODE 或 DOC 单源路由。评测报告在原有 Keyword、Vector、Hybrid 之外增加 Routed 指标，并将同一次运行中的 Hybrid 与 Routed 分类 Recall 和双源命中率直接对比。
 
-V1 不判断 Citation 是否在语义上真正支持对应结论，也不实现 Query Rewrite、Retry、Context Sufficiency Judge、LangGraph、Reranker、复杂检索调参或 Context Builder V2。
+V1 不判断 Citation 是否在语义上真正支持对应结论，也不实现 LangGraph、Reranker、复杂检索调参或 Context Builder V2。
+
+## Agentic Retrieval V1
+
+`ask` 在检索后先做证据充分性检查。CODE 问题至少需要代码证据，DOC 至少需要文档证据，MIXED 必须同时具备两类来源；缺来源时由规则直接判定不足。来源齐全后，短 DeepSeek 调用会继续判断证据是否真正覆盖目标类、方法、设计或流程。检查输出采用严格 JSON，网络错误、空回答或非法结构都会失败关闭为“不充分”，不会把不确定证据交给普通答案生成。
+
+证据不足时，系统只针对 `missing_aspects` 指出的 CODE、DOCUMENT 或双侧缺口生成一个新检索 Query。原始 Router 决策不会重跑，Retrieval Policy 和 Context Builder 行为也不会改变。每轮新增结果放在旧结果前，按 Chunk ID 稳定去重，再使用原始问题重建 Context。最多重试 2 次，即总计最多 3 轮检索；证据足够便立即停止。达到上限或改写失败后，只允许基于已有证据生成部分回答，并明确说明尚不能确认的方面。最终 Citation 仍必须存在于最终 ContextBundle。
+
+普通输出显示 Route、Sufficiency 和 Retries。加入 `--debug` 后会额外打印 JSON Trace，包括每轮检索 Query、目标类型、选中 Chunk、缺失方面、改写结果、重试次数和停止原因；Trace 不包含 Chunk 全文、API Key 或模型凭据。最坏路径可能发生 3 次充分性判断、2 次 Query Rewrite 和 1 次答案生成；若 Router 规则无法分类，还会多一次 Router 模型调用。这是 V1 已知的延迟与成本边界。
 
 默认配置见 `.env.example`。API Key 始终从系统环境变量读取，不应写入 `.env` 或提交到 Git。
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 
 from devcontext.llm.client import LLMClient, LLMMessage
 from devcontext.models import AnswerResult, Citation, ContextBundle
@@ -32,12 +33,33 @@ class AnswerGenerator:
         self.client = client
 
     def generate(self, query: str, context_bundle: ContextBundle) -> AnswerResult:
+        return self._generate(query, context_bundle, missing_aspects=())
+
+    def generate_partial(
+        self,
+        query: str,
+        context_bundle: ContextBundle,
+        missing_aspects: Sequence[str],
+    ) -> AnswerResult:
+        if not missing_aspects:
+            raise ValueError("partial answer requires at least one missing aspect")
+        return self._generate(query, context_bundle, missing_aspects=missing_aspects)
+
+    def _generate(
+        self,
+        query: str,
+        context_bundle: ContextBundle,
+        *,
+        missing_aspects: Sequence[str],
+    ) -> AnswerResult:
         if not query.strip():
             raise ValueError("query must not be empty")
         if not context_bundle.items:
             return AnswerResult(answer=EMPTY_CONTEXT_ANSWER, used_citations=[])
 
-        messages = self._build_messages(query, context_bundle)
+        messages = self._build_messages(
+            query, context_bundle, missing_aspects=missing_aspects
+        )
         answer = self.client.generate(messages).strip()
         if not answer:
             raise RuntimeError("LLM returned an empty answer")
@@ -51,11 +73,24 @@ class AnswerGenerator:
 
     @staticmethod
     def _build_messages(
-        query: str, context_bundle: ContextBundle
+        query: str,
+        context_bundle: ContextBundle,
+        *,
+        missing_aspects: Sequence[str] = (),
     ) -> list[LLMMessage]:
         allowed = ", ".join(
             f"[{item.citation.label}]" for item in context_bundle.items
         )
+        evidence_gap_prompt = ""
+        if missing_aspects:
+            formatted_gaps = "\n".join(f"- {aspect}" for aspect in missing_aspects)
+            evidence_gap_prompt = f"""
+
+Known Evidence Gaps:
+{formatted_gaps}
+
+这些缺口是检索系统对证据不足的描述，不是项目事实。你只能回答现有 Context 能支持的部分，并必须明确列出当前无法确认的方面；不得猜测或补全缺失实现。"""
+
         user_prompt = f"""Question:
 {query}
 
@@ -63,7 +98,7 @@ Available Citations:
 {allowed}
 
 Context:
-{context_bundle.rendered_text}
+{context_bundle.rendered_text}{evidence_gap_prompt}
 
 请只依据以上 Context 回答 Question。关键项目事实使用 Available Citations 中的标签；如果证据不足，请明确说明能够确认和不能确认的部分。"""
         return [

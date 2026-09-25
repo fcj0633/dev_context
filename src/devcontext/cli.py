@@ -3,17 +3,24 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Callable
 from dataclasses import asdict
 from pathlib import Path
 
-from devcontext.answer import AnswerGenerator, EMPTY_CONTEXT_ANSWER, format_source
+from devcontext.agentic import (
+    AgenticAnswerResult,
+    AgenticRetrievalWorkflow,
+    ContextSufficiencyChecker,
+    TargetedQueryRewriter,
+)
+from devcontext.answer import AnswerGenerator, format_source
 from devcontext.config import Settings
 from devcontext.context import ContextBuilder
 from devcontext.embedding.client import BailianEmbeddingClient
 from devcontext.evaluation.runner import evaluate
 from devcontext.ingestion.pipeline import ingest
-from devcontext.llm import DeepSeekLLMClient
-from devcontext.models import AnswerResult, ContextBundle, SearchResult
+from devcontext.llm import DeepSeekLLMClient, LLMClient
+from devcontext.models import SearchResult
 from devcontext.retrieval import RetrievalPolicy, RetrievalService
 from devcontext.routing import QueryRouter, RouteDecision
 from devcontext.storage import ChunkStore
@@ -44,6 +51,7 @@ def _parser() -> argparse.ArgumentParser:
     ask.add_argument("query")
     ask.add_argument("--top-k", type=int, default=5)
     ask.add_argument("--max-chars", type=int, default=6000)
+    ask.add_argument("--debug", action="store_true")
 
     evaluation = subparsers.add_parser("evaluate", help="Run the retrieval benchmark")
     evaluation.add_argument("--benchmark", type=Path)
@@ -67,26 +75,36 @@ def _print_results(results: list, output_format: str) -> None:
         print(f"    {preview}")
 
 
-def _print_answer(
+def _print_agentic_answer(
     query: str,
-    decision: RouteDecision,
-    answer_result: AnswerResult,
-    context_bundle: ContextBundle,
+    result: AgenticAnswerResult,
+    *,
+    debug: bool,
 ) -> None:
+    trace = result.trace
     print("Question:")
     print(query)
-    print(f"\nRoute: {decision.query_type.value} ({decision.decision_source.value})")
+    print(
+        f"\nRoute: {trace.route.query_type.value} "
+        f"({trace.route.decision_source.value})"
+    )
+    status = "enough" if trace.final_sufficiency.enough else "insufficient"
+    print(f"Sufficiency: {status}")
+    print(f"Retries: {trace.retry_count}")
     print("\nAnswer:")
-    print(answer_result.answer)
+    print(result.answer_result.answer)
     print("\nSources:")
     citations = {
-        item.citation.label: item.citation for item in context_bundle.items
+        item.citation.label: item.citation for item in result.context_bundle.items
     }
-    if not answer_result.used_citations:
+    if not result.answer_result.used_citations:
         print("(none)")
-        return
-    for label in answer_result.used_citations:
-        print(format_source(citations[label]))
+    else:
+        for label in result.answer_result.used_citations:
+            print(format_source(citations[label]))
+    if debug:
+        print("\nTrace:")
+        print(json.dumps(trace.to_dict(), ensure_ascii=False, indent=2))
 
 
 def _query_router(settings: Settings) -> QueryRouter:
@@ -97,6 +115,36 @@ def _query_router(settings: Settings) -> QueryRouter:
             model=settings.deepseek_model,
             max_tokens=1024,
         )
+    )
+
+
+def _short_llm_factory(settings: Settings) -> Callable[[], LLMClient]:
+    return lambda: DeepSeekLLMClient(
+        api_key=settings.deepseek_key(),
+        base_url=settings.deepseek_base_url,
+        model=settings.deepseek_model,
+        max_tokens=1024,
+    )
+
+
+def _agentic_workflow(
+    settings: Settings,
+    builder: ContextBuilder,
+) -> AgenticRetrievalWorkflow:
+    short_llm_factory = _short_llm_factory(settings)
+    return AgenticRetrievalWorkflow(
+        router=_query_router(settings),
+        retrieval_policy=RetrievalPolicy(RetrievalService(settings)),
+        context_builder=builder,
+        sufficiency_checker=ContextSufficiencyChecker(short_llm_factory),
+        query_rewriter=TargetedQueryRewriter(short_llm_factory),
+        answer_generator_factory=lambda: AnswerGenerator(
+            DeepSeekLLMClient(
+                api_key=settings.deepseek_key(),
+                base_url=settings.deepseek_base_url,
+                model=settings.deepseek_model,
+            )
+        ),
     )
 
 
@@ -147,20 +195,10 @@ def main(argv: list[str] | None = None) -> int:
                 print("No context found.")
         elif args.command == "ask":
             builder = ContextBuilder(max_chars=args.max_chars)
-            decision, results = _routed_search(settings, args.query, args.top_k)
-            bundle = builder.build(args.query, results)
-            if bundle.items:
-                client = DeepSeekLLMClient(
-                    api_key=settings.deepseek_key(),
-                    base_url=settings.deepseek_base_url,
-                    model=settings.deepseek_model,
-                )
-                answer_result = AnswerGenerator(client).generate(args.query, bundle)
-            else:
-                answer_result = AnswerResult(
-                    answer=EMPTY_CONTEXT_ANSWER, used_citations=[]
-                )
-            _print_answer(args.query, decision, answer_result, bundle)
+            result = _agentic_workflow(settings, builder).run(
+                args.query, args.top_k
+            )
+            _print_agentic_answer(args.query, result, debug=args.debug)
         elif args.command == "evaluate":
             report = evaluate(settings, benchmark=args.benchmark, baseline=args.baseline)
             summary = [
