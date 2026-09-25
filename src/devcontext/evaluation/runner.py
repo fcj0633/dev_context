@@ -19,6 +19,7 @@ from devcontext.routing import DecisionSource, QueryRouter, RouteDecision
 
 
 SCHEMA_VERSION = 2
+DIAGNOSTIC_K = 20
 SOURCE_TYPES = {"CODE", "DOCUMENT"}
 CASE_TYPES = {"CODE", "DOC", "MIXED"}
 TIMING_FIELDS = (
@@ -107,6 +108,15 @@ def _source_hit(
     return bool(groups) and any(
         _matches_group(result, group) for group in groups for result in results[:k]
     )
+
+
+def _group_rank(
+    results: Sequence[SearchResult], group: dict[str, Any], k: int
+) -> int | None:
+    for rank, result in enumerate(results[:k], start=1):
+        if _matches_group(result, group):
+            return rank
+    return None
 
 
 def _logical_result_key(result: SearchResult) -> tuple[Any, ...]:
@@ -241,7 +251,7 @@ def load_cases(path: Path) -> list[dict[str, Any]]:
 
 
 def _case_detail(
-    case: dict[str, Any], execution: SearchExecution, *, diagnostic_k: int = 10
+    case: dict[str, Any], execution: SearchExecution, *, diagnostic_k: int = DIAGNOSTIC_K
 ) -> dict[str, Any]:
     results = execution.results[:diagnostic_k]
     relevant = case["relevant"]
@@ -264,29 +274,100 @@ def _case_detail(
     ):
         failures.append("relevant_after_k")
     if unmatched_at_5 and any(
-        not any(_matches_group(result, group) for result in results) for group in unmatched_at_5
+        not any(_matches_group(result, group) for result in results[:10])
+        for group in unmatched_at_5
     ):
         failures.append("target_not_in_top_10")
+    if unmatched_at_5 and any(
+        not any(_matches_group(result, group) for result in results)
+        for group in unmatched_at_5
+    ):
+        failures.append("target_not_in_top_20")
     duplicate_rate = duplicate_result_rate(results, 5)
     if unmatched_at_5 and duplicate_rate > 0:
         failures.append("duplicate_crowding")
+
+    target_ranks = []
+    for group in relevant:
+        source_type = _group_source_type(group)
+        source_results = execution.source_candidates.get(source_type)
+        if source_results is None:
+            source_results = [
+                result for result in results if result.source_type == source_type
+            ]
+        target_ranks.append(
+            {
+                "source_type": source_type,
+                "ground_truth": group,
+                "final_rank": _group_rank(results, group, diagnostic_k),
+                "source_candidate_rank": _group_rank(
+                    source_results, group, diagnostic_k
+                ),
+            }
+        )
+
+    code_hit_at_5 = _source_hit(results, relevant, "CODE", 5)
+    doc_hit_at_5 = _source_hit(results, relevant, "DOCUMENT", 5)
+    recall_at_5 = recall_at(results, relevant, 5)
+    failure_type: str | None = None
+    preliminary_reason: str | None = None
+    if recall_at_5 < 1.0:
+        all_source_targets_found = all(
+            target["source_candidate_rank"] is not None for target in target_ranks
+        )
+        all_final_targets_found = all(
+            target["final_rank"] is not None for target in target_ranks
+        )
+        if (
+            case["type"] == "MIXED"
+            and all_source_targets_found
+            and not (code_hit_at_5 and doc_hit_at_5)
+        ):
+            failure_type = "COMPOSITION_MISS"
+            preliminary_reason = (
+                "required CODE and DOCUMENT targets exist in their source-specific "
+                "Top20 candidates, but routed Top5 does not contain both"
+            )
+        elif all_final_targets_found:
+            failure_type = "RANKING_MISS"
+            preliminary_reason = (
+                "all required targets occur in routed Top20, but at least one ranks after Top5"
+            )
+        else:
+            failure_type = "RETRIEVAL_MISS"
+            preliminary_reason = (
+                "at least one required target is absent from its source-specific Top20 candidates"
+            )
+
+    missing_sources_at_5 = []
+    if needs_code and not code_hit_at_5:
+        missing_sources_at_5.append("CODE")
+    if needs_document and not doc_hit_at_5:
+        missing_sources_at_5.append("DOCUMENT")
     return {
         "id": case["id"], "type": case["type"], "tags": case["tags"],
         "legacy": case["legacy"], "question": case["question"],
         "recall_at_3": recall_at(results, relevant, 3),
-        "recall_at_5": recall_at(results, relevant, 5),
+        "recall_at_5": recall_at_5,
+        "recall_at_10": recall_at(results, relevant, 10),
+        "recall_at_20": recall_at(results, relevant, 20),
         "reciprocal_rank": reciprocal_rank(results, relevant),
         "code_hit_at_3": _source_hit(results, relevant, "CODE", 3),
-        "code_hit_at_5": _source_hit(results, relevant, "CODE", 5),
+        "code_hit_at_5": code_hit_at_5,
+        "code_hit_at_10": _source_hit(results, relevant, "CODE", 10),
         "doc_hit_at_3": _source_hit(results, relevant, "DOCUMENT", 3),
-        "doc_hit_at_5": _source_hit(results, relevant, "DOCUMENT", 5),
+        "doc_hit_at_5": doc_hit_at_5,
+        "doc_hit_at_10": _source_hit(results, relevant, "DOCUMENT", 10),
         "both_sources_hit_at_3": (
             case["type"] == "MIXED" and _source_hit(results, relevant, "CODE", 3)
             and _source_hit(results, relevant, "DOCUMENT", 3)
         ),
         "both_sources_hit_at_5": (
-            case["type"] == "MIXED" and _source_hit(results, relevant, "CODE", 5)
-            and _source_hit(results, relevant, "DOCUMENT", 5)
+            case["type"] == "MIXED" and code_hit_at_5 and doc_hit_at_5
+        ),
+        "both_sources_hit_at_10": (
+            case["type"] == "MIXED" and _source_hit(results, relevant, "CODE", 10)
+            and _source_hit(results, relevant, "DOCUMENT", 10)
         ),
         "first_relevant_code_rank": _first_relevant_rank(results, relevant, "CODE", diagnostic_k),
         "first_relevant_doc_rank": _first_relevant_rank(results, relevant, "DOCUMENT", diagnostic_k),
@@ -294,6 +375,10 @@ def _case_detail(
         "duplicate_result_rate_at_5": duplicate_rate,
         "timings": execution.timings.to_dict(),
         "unmatched_targets_at_5": unmatched_at_5,
+        "target_ranks": target_ranks,
+        "missing_sources_at_5": missing_sources_at_5,
+        "failure_type": failure_type,
+        "preliminary_reason": preliminary_reason,
         "failure_reasons": failures,
         "top_results": [result.to_dict() for result in results],
     }
@@ -311,11 +396,20 @@ def _p95(values: Iterable[float]) -> float:
 
 def _summary(details: list[dict[str, Any]]) -> dict[str, Any]:
     if not details:
-        return {"case_count": 0, "recall_at_3": 0.0, "recall_at_5": 0.0, "mrr": 0.0}
+        return {
+            "case_count": 0,
+            "recall_at_3": 0.0,
+            "recall_at_5": 0.0,
+            "recall_at_10": 0.0,
+            "recall_at_20": 0.0,
+            "mrr": 0.0,
+        }
     return {
         "case_count": len(details),
         "recall_at_3": _mean(item["recall_at_3"] for item in details),
         "recall_at_5": _mean(item["recall_at_5"] for item in details),
+        "recall_at_10": _mean(item["recall_at_10"] for item in details),
+        "recall_at_20": _mean(item["recall_at_20"] for item in details),
         "mrr": _mean(item["reciprocal_rank"] for item in details),
     }
 
@@ -351,10 +445,15 @@ def _strategy_metrics(strategy: str, details: list[dict[str, Any]]) -> dict[str,
         "by_type": by_type, "legacy": _summary(legacy),
         "code_hit_at_3": _mean(float(item["code_hit_at_3"]) for item in code_cases),
         "code_hit_at_5": _mean(float(item["code_hit_at_5"]) for item in code_cases),
+        "code_hit_at_10": _mean(float(item["code_hit_at_10"]) for item in code_cases),
         "doc_hit_at_3": _mean(float(item["doc_hit_at_3"]) for item in doc_cases),
         "doc_hit_at_5": _mean(float(item["doc_hit_at_5"]) for item in doc_cases),
+        "doc_hit_at_10": _mean(float(item["doc_hit_at_10"]) for item in doc_cases),
         "both_sources_hit_at_3": _mean(float(item["both_sources_hit_at_3"]) for item in mixed_cases),
         "both_sources_hit_at_5": _mean(float(item["both_sources_hit_at_5"]) for item in mixed_cases),
+        "both_sources_hit_at_10": _mean(
+            float(item["both_sources_hit_at_10"]) for item in mixed_cases
+        ),
         "no_results_rate": _mean(float(item["no_results"]) for item in details),
         "duplicate_result_rate_at_5": _mean(item["duplicate_result_rate_at_5"] for item in details),
         "mean_first_relevant_code_rank_at_5": _mean(code_ranks),
@@ -470,6 +569,40 @@ def _routing_metrics(
         "confusion_matrix": confusion,
         "case_count": total,
         "cases": details,
+    }
+
+
+def _bottleneck_analysis(details: list[dict[str, Any]]) -> dict[str, Any]:
+    failures = [detail for detail in details if detail["failure_type"] is not None]
+    labels = ("RETRIEVAL_MISS", "RANKING_MISS", "COMPOSITION_MISS")
+    counts = Counter(detail["failure_type"] for detail in failures)
+    bottleneck_names = {
+        "RETRIEVAL_MISS": "CANDIDATE_RECALL",
+        "RANKING_MISS": "RANKING",
+        "COMPOSITION_MISS": "MIXED_EVIDENCE_COMPOSITION",
+    }
+    dominant = max(labels, key=lambda label: (counts[label], -labels.index(label)))
+    return {
+        "strategy": "routed",
+        "diagnostic_k": DIAGNOSTIC_K,
+        "failure_count": len(failures),
+        "failure_counts": {label: counts[label] for label in labels},
+        "primary_bottleneck": bottleneck_names[dominant] if failures else None,
+        "cases": [
+            {
+                "id": detail["id"],
+                "query_type": detail["type"],
+                "question": detail["question"],
+                "ground_truth": [
+                    target["ground_truth"] for target in detail["target_ranks"]
+                ],
+                "target_ranks": detail["target_ranks"],
+                "failure_type": detail["failure_type"],
+                "missing_sources_at_5": detail["missing_sources_at_5"],
+                "preliminary_reason": detail["preliminary_reason"],
+            }
+            for detail in failures
+        ],
     }
 
 
@@ -606,7 +739,12 @@ def evaluate(
     strategies: list[dict[str, Any]] = []
     for strategy in ("keyword", "vector", "hybrid"):
         details = [
-            _case_detail(case, service.search_with_trace(strategy, case["question"], top_k=10))
+            _case_detail(
+                case,
+                service.search_with_trace(
+                    strategy, case["question"], top_k=DIAGNOSTIC_K
+                ),
+            )
             for case in cases
         ]
         strategies.append(_strategy_metrics(strategy, details))
@@ -621,11 +759,14 @@ def evaluate(
         routed_details.append(
             _case_detail(
                 case,
-                policy.search_with_trace(case["question"], decision, top_k=10),
+                policy.search_with_trace(
+                    case["question"], decision, top_k=DIAGNOSTIC_K
+                ),
             )
         )
     strategies.append(_strategy_metrics("routed", routed_details))
     routing = _routing_metrics(cases, decisions)
+    bottleneck_analysis = _bottleneck_analysis(routed_details)
     policy_comparison = _policy_comparison(strategies)
     policy_acceptance = _policy_acceptance(routing, policy_comparison)
 
@@ -648,6 +789,7 @@ def evaluate(
         "strategies": strategies, "baseline_comparison": comparison,
         "routing": routing, "policy_comparison": policy_comparison,
         "policy_acceptance": policy_acceptance,
+        "bottleneck_analysis": bottleneck_analysis,
     }
     report["acceptance"] = _acceptance(cases, strategies, comparison, baseline_data)
     report["quality_passed"] = all(

@@ -56,7 +56,7 @@ uv run devcontext evaluate --benchmark benchmark\cases.jsonl --baseline benchmar
 | `devcontext ask` | 按问题类型检索后，使用 DeepSeek-V4.1-Flash 生成带 Citation 的回答 |
 | `devcontext evaluate` | 运行 36 条分层基准问题，输出 Router Accuracy、分类指标、分段耗时、失败诊断和策略差异 |
 
-评测集由 CODE、DOC、MIXED 各 12 条组成。详细报告写入 `artifacts/`，可提交的精简基线位于 `benchmark/baselines/retrieval-v1.json`；只有 benchmark 哈希一致时才进行前后对比。
+评测集由 CODE、DOC、MIXED 各 12 条组成。报告同时统计 Recall@3/@5/@10/@20、CODE/DOC hit@10、MIXED both-sources hit@10，并在 routed Recall@5 失败时区分 `RETRIEVAL_MISS`、`RANKING_MISS` 和 `COMPOSITION_MISS`。详细的 Top20 排名与失败案例表写入 `artifacts/`，可提交的精简基线位于 `benchmark/baselines/retrieval-v1.json`；只有 benchmark 哈希一致时才进行前后对比。
 
 ## Context Builder V1
 
@@ -74,9 +74,9 @@ Router 优先使用确定性规则，将问题分为 `CODE`、`DOC` 或 `MIXED`�
 
 - CODE：仅从代码来源执行现有 Hybrid Retrieval。
 - DOC：仅从文档来源执行现有 Vector Retrieval。
-- MIXED：分别执行 CODE 和 DOCUMENT Vector Retrieval，再从 CODE 开始稳定交错。
+- MIXED：分别执行 CODE 和 DOCUMENT Vector Retrieval。DOCUMENT 使用固定的 Top20 候选池，并根据文件、标题和完整标题层级与 query 的词项重合度，最多把一个最明确的文档证据提升为锚点；随后仍从 CODE 开始稳定交错。该操作不修改原始检索分数。
 
-该层不改变基础 Retriever 的关键词评分、向量距离或 RRF。评测报告在原有 Keyword、Vector、Hybrid 之外增加 Routed 指标，并将同一次运行中的 Hybrid 与 Routed 分类 Recall 和双源命中率直接对比。
+该层不改变基础 Retriever 的关键词评分、向量距离或 RRF。文档锚点提升只用于 MIXED 证据组合，不影响 CODE 或 DOC 单源路由。评测报告在原有 Keyword、Vector、Hybrid 之外增加 Routed 指标，并将同一次运行中的 Hybrid 与 Routed 分类 Recall 和双源命中率直接对比。
 
 V1 不判断 Citation 是否在语义上真正支持对应结论，也不实现 Query Rewrite、Retry、Context Sufficiency Judge、LangGraph、Reranker、复杂检索调参或 Context Builder V2。
 
@@ -84,4 +84,4 @@ V1 不判断 Citation 是否在语义上真正支持对应结论，也不实现 
 
 ## 设计边界
 
-当前版本不包含 LangChain、LangGraph、FastAPI、Web UI、SymbolSolver、调用图、增量索引或近似向量索引。本地 `docs/` 目录保存详细设计与历史资料，但按项目约定不纳入 Git。
+当前版本不包含 LangChain、LangGraph、FastAPI、Web UI、SymbolSolver、调用图、增量索引或近似向量索引。`docs/` 中的自有项目文档可以提交；`docs/参考项目/` 及外部 `my12306` 数据源继续排除在 Git 之外。

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import re
 import time
+import unicodedata
 
 from devcontext.models import SearchExecution, SearchResult, SearchTimings
 from devcontext.retrieval.service import RetrievalService
@@ -25,23 +27,31 @@ class RetrievalPolicy:
             raise ValueError("top_k must be between 1 and 100")
 
         if decision.query_type is QueryType.CODE:
-            return self.service.search_with_trace(
+            execution = self.service.search_with_trace(
                 "hybrid", query, top_k, source_type="CODE"
             )
+            execution.source_candidates = {"CODE": execution.results}
+            return execution
         if decision.query_type is QueryType.DOC:
-            return self.service.search_with_trace(
+            execution = self.service.search_with_trace(
                 "vector", query, top_k, source_type="DOCUMENT"
             )
+            execution.source_candidates = {"DOCUMENT": execution.results}
+            return execution
 
         total_started = time.perf_counter()
         code = self.service.search_with_trace(
             "vector", query, top_k, source_type="CODE"
         )
+        document_pool_size = max(20, top_k)
         document = self.service.search_with_trace(
-            "vector", query, top_k, source_type="DOCUMENT"
+            "vector", query, document_pool_size, source_type="DOCUMENT"
         )
-        results = _interleave_results(code.results, document.results, top_k)
+        fusion_started = time.perf_counter()
+        document_candidates = _promote_document_anchor(query, document.results)
+        results = _interleave_results(code.results, document_candidates, top_k)
         timings = _combine_timings(code.timings, document.timings)
+        timings.fusion_ms += (time.perf_counter() - fusion_started) * 1000
         measured_total = (time.perf_counter() - total_started) * 1000
         stage_total = (
             timings.query_embedding_ms
@@ -50,7 +60,51 @@ class RetrievalPolicy:
             + timings.fusion_ms
         )
         timings.total_ms = max(measured_total, stage_total)
-        return SearchExecution(results, timings)
+        return SearchExecution(
+            results,
+            timings,
+            source_candidates={
+                "CODE": code.results,
+                "DOCUMENT": document_candidates,
+            },
+        )
+
+
+def _metadata_terms(value: str) -> set[str]:
+    normalized = unicodedata.normalize("NFKC", value).casefold()
+    terms = set(re.findall(r"[a-z_$][a-z0-9_$]{1,}", normalized))
+    for run in re.findall(r"[\u4e00-\u9fff]+", normalized):
+        terms.update(run[index : index + 2] for index in range(len(run) - 1))
+    return terms
+
+
+def _document_metadata_overlap(query_terms: set[str], result: SearchResult) -> float:
+    if not query_terms:
+        return 0.0
+    metadata = " ".join(
+        [result.file_path, result.title or "", *result.heading_path]
+    )
+    return len(query_terms & _metadata_terms(metadata)) / len(query_terms)
+
+
+def _promote_document_anchor(
+    query: str, results: list[SearchResult]
+) -> list[SearchResult]:
+    promoted = list(results)
+    if len(promoted) < 2:
+        return promoted
+    query_terms = _metadata_terms(query)
+    overlaps = [
+        _document_metadata_overlap(query_terms, result) for result in promoted
+    ]
+    best_index = max(
+        range(len(promoted)), key=lambda index: (overlaps[index], -index)
+    )
+    if best_index == 0 or overlaps[best_index] <= overlaps[0]:
+        return promoted
+    anchor = promoted.pop(best_index)
+    promoted.insert(0, anchor)
+    return promoted
 
 
 def _interleave_results(

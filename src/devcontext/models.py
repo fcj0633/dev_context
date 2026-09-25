@@ -101,6 +101,7 @@ class SearchTimings:
 class SearchExecution:
     results: list[SearchResult]
     timings: SearchTimings
+    source_candidates: dict[str, list[SearchResult]] = field(default_factory=dict)
 
 
 @dataclass(slots=True)

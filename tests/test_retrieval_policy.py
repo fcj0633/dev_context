@@ -3,7 +3,11 @@ from __future__ import annotations
 import pytest
 
 from devcontext.models import SearchExecution, SearchResult, SearchTimings
-from devcontext.retrieval.policy import RetrievalPolicy
+from devcontext.retrieval.policy import (
+    RetrievalPolicy,
+    _metadata_terms,
+    _promote_document_anchor,
+)
 from devcontext.routing import DecisionSource, QueryType, RouteDecision
 
 
@@ -85,13 +89,78 @@ def test_mixed_route_interleaves_sources_and_combines_timings() -> None:
     assert [item.id for item in execution.results] == [1, 11, 2, 12, 3]
     assert service.calls == [
         ("vector", "实现与设计", 5, "CODE"),
-        ("vector", "实现与设计", 5, "DOCUMENT"),
+        ("vector", "实现与设计", 20, "DOCUMENT"),
     ]
     assert execution.timings.query_embedding_ms == 4.0
     assert execution.timings.vector_sql_ms == 10.0
     assert execution.timings.keyword_sql_ms == 0.0
-    assert execution.timings.fusion_ms == 0.0
+    assert execution.timings.fusion_ms > 0.0
     assert execution.timings.total_ms >= 14.0
+    assert execution.source_candidates == {
+        "CODE": service.code,
+        "DOCUMENT": service.document,
+    }
+
+
+def test_document_anchor_promotes_only_best_metadata_match_stably() -> None:
+    first = result(11, "DOCUMENT")
+    first.file_path = "docs/general.md"
+    first.title = "系统说明"
+    second = result(12, "DOCUMENT")
+    second.file_path = "docs/payment.md"
+    second.title = "支付回调"
+    second.heading_path = ["支付模块", "通知推进流程"]
+    third = result(13, "DOCUMENT")
+    third.file_path = "docs/other.md"
+    third.title = "其他设计"
+    original_scores = [item.score for item in (first, second, third)]
+
+    promoted = _promote_document_anchor(
+        "payCallback 支付回调的通知推进流程", [first, second, third]
+    )
+
+    assert [item.id for item in promoted] == [12, 11, 13]
+    assert [item.score for item in (first, second, third)] == original_scores
+    assert _metadata_terms("PayCallback 支付回调") >= {
+        "paycallback",
+        "支付",
+        "付回",
+        "回调",
+    }
+
+
+def test_document_anchor_keeps_original_order_for_ties_or_no_terms() -> None:
+    first = result(11, "DOCUMENT")
+    second = result(12, "DOCUMENT")
+    first.title = second.title = "支付设计"
+
+    assert [item.id for item in _promote_document_anchor("支付", [first, second])] == [
+        11,
+        12,
+    ]
+    assert [item.id for item in _promote_document_anchor("!", [first, second])] == [
+        11,
+        12,
+    ]
+
+
+def test_mixed_document_anchor_uses_twenty_candidates_and_final_top_k() -> None:
+    documents = [result(identifier, "DOCUMENT") for identifier in range(11, 31)]
+    documents[11].title = "支付回调通知推进"
+    service = FakeRetrievalService([result(1, "CODE")], documents)
+
+    execution = RetrievalPolicy(service).search_with_trace(  # type: ignore[arg-type]
+        "支付回调通知推进的实现与设计", decision(QueryType.MIXED), 5
+    )
+
+    assert service.calls[-1] == (
+        "vector",
+        "支付回调通知推进的实现与设计",
+        20,
+        "DOCUMENT",
+    )
+    assert len(execution.results) <= 5
+    assert execution.source_candidates["DOCUMENT"][0].id == 22
 
 
 def test_mixed_route_does_not_invent_a_missing_source_or_duplicate_ids() -> None:

@@ -6,6 +6,7 @@ from collections import Counter
 import pytest
 
 from devcontext.evaluation.runner import (
+    _bottleneck_analysis,
     _case_detail,
     _policy_acceptance,
     _policy_comparison,
@@ -142,7 +143,8 @@ def test_any_of_counts_as_one_requirement() -> None:
         }
     ]
 
-    assert recall_at([document], relevant, 1) == 1.0
+    for k in (1, 5, 10, 20):
+        assert recall_at([document], relevant, k) == 1.0
 
 
 def test_validate_cases_rejects_invalid_mixed_and_same_name_target() -> None:
@@ -244,6 +246,7 @@ def test_case_diagnostics_report_empty_results() -> None:
         "missing_code_source",
         "missing_document_source",
         "target_not_in_top_10",
+        "target_not_in_top_20",
     ]
 
 
@@ -270,9 +273,88 @@ def test_strategy_metrics_split_categories_sources_and_timings() -> None:
 
     assert metrics["by_type"]["CODE"]["recall_at_5"] == 1.0
     assert metrics["by_type"]["DOC"]["recall_at_5"] == 1.0
+    assert metrics["recall_at_10"] == 1.0
+    assert metrics["recall_at_20"] == 1.0
+    assert metrics["code_hit_at_10"] == 1.0
+    assert metrics["doc_hit_at_10"] == 1.0
     assert metrics["both_sources_hit_at_5"] == 1.0
+    assert metrics["both_sources_hit_at_10"] == 1.0
     assert metrics["timings"]["total_ms"]["average_ms"] == 11.0
     assert metrics["timings"]["total_ms"]["p95_ms"] == 12.0
+
+
+def test_bottleneck_analysis_classifies_retrieval_ranking_and_composition() -> None:
+    ranking_case = benchmark_case("CODE")
+    ranking_results = [
+        result(index, path="other.java", class_name="Other", symbol="other")
+        for index in range(1, 6)
+    ] + [result(6)]
+    ranking = _case_detail(
+        ranking_case,
+        SearchExecution(
+            ranking_results,
+            SearchTimings(),
+            source_candidates={"CODE": ranking_results},
+        ),
+    )
+
+    retrieval_case = benchmark_case("DOC")
+    unrelated_doc = result(
+        20,
+        source_type="DOCUMENT",
+        path="other.md",
+        class_name=None,
+        symbol=None,
+        signature=None,
+        title="其他",
+        heading_path=["其他"],
+    )
+    retrieval = _case_detail(
+        retrieval_case,
+        SearchExecution(
+            [unrelated_doc],
+            SearchTimings(),
+            source_candidates={"DOCUMENT": [unrelated_doc]},
+        ),
+    )
+
+    mixed_case = benchmark_case("MIXED")
+    relevant_code = result(30)
+    relevant_doc = result(
+        31,
+        source_type="DOCUMENT",
+        path="design.md",
+        class_name=None,
+        symbol=None,
+        signature=None,
+        title="事务处理",
+        heading_path=["系统设计", "事务处理"],
+    )
+    composition = _case_detail(
+        mixed_case,
+        SearchExecution(
+            [relevant_code],
+            SearchTimings(),
+            source_candidates={
+                "CODE": [relevant_code],
+                "DOCUMENT": [unrelated_doc, relevant_doc],
+            },
+        ),
+    )
+
+    analysis = _bottleneck_analysis([ranking, retrieval, composition])
+
+    assert ranking["failure_type"] == "RANKING_MISS"
+    assert retrieval["failure_type"] == "RETRIEVAL_MISS"
+    assert composition["failure_type"] == "COMPOSITION_MISS"
+    assert composition["target_ranks"][1]["final_rank"] is None
+    assert composition["target_ranks"][1]["source_candidate_rank"] == 2
+    assert analysis["failure_counts"] == {
+        "RETRIEVAL_MISS": 1,
+        "RANKING_MISS": 1,
+        "COMPOSITION_MISS": 1,
+    }
+    assert len(analysis["cases"]) == 3
 
 
 def test_baseline_comparison_requires_matching_dataset_hash() -> None:

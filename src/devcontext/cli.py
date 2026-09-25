@@ -184,6 +184,11 @@ def main(argv: list[str] | None = None) -> int:
                         "policy_improvement_passed": report[
                             "policy_improvement_passed"
                         ],
+                        "bottleneck_analysis": {
+                            key: value
+                            for key, value in report["bottleneck_analysis"].items()
+                            if key != "cases"
+                        },
                         "strategies": summary,
                     },
                     ensure_ascii=False,
