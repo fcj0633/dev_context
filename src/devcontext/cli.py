@@ -23,12 +23,7 @@ from devcontext.evaluation.runner import evaluate
 from devcontext.ingestion.pipeline import ingest
 from devcontext.llm import DeepSeekLLMClient, LLMClient
 from devcontext.models import SearchResult
-from devcontext.planning import (
-    EvidencePlan,
-    EvidencePlanner,
-    QuestionPlan,
-    QuestionPlanner,
-)
+from devcontext.planning import QuestionPlan, QuestionPlanner
 from devcontext.retrieval import RetrievalPolicy, RetrievalService
 from devcontext.routing import QueryRouter, RouteDecision
 from devcontext.storage import ChunkStore
@@ -38,14 +33,14 @@ LEGACY_MAX_CHARS = 6000
 PLANNED_TOP_K = 12
 PLANNED_MAX_CHARS = 10000
 
-# Planning needs more headroom than the other short calls: "why not" questions make
-# the model reason long enough that reasoning tokens exhaust a 1024 budget before the
-# JSON is emitted, which surfaces as finish_reason=length and silently falls back.
-PLANNER_MAX_TOKENS = 1536
+# Planning emits one object per sub-question, each carrying four prose/source fields,
+# so it needs more room than the other short calls: reasoning tokens exhaust a smaller
+# budget before the JSON is emitted, which surfaces as finish_reason=length.
+PLANNER_MAX_TOKENS = 2048
 
-# Per-requirement sufficiency emits one status object per requirement, so it needs
+# Per-sub-question sufficiency emits one status object per sub-question, so it needs
 # more room than the single-object legacy check for the same reason.
-REQUIREMENT_SUFFICIENCY_MAX_TOKENS = 4096
+SUB_QUESTION_SUFFICIENCY_MAX_TOKENS = 4096
 
 # The rewriter's prompt carries every missing aspect, and per-requirement judging
 # produces a much longer gap list than the old source-type check did.
@@ -140,14 +135,14 @@ def _print_agentic_answer(
 
 
 def _print_requirement_statuses(sufficiency: SufficiencyResult) -> None:
-    """Only the per-requirement path fills statuses; the legacy path prints nothing."""
+    """Only the per-sub-question path fills statuses; the legacy path prints nothing."""
     if not sufficiency.statuses:
         return
     summary = ", ".join(
-        f"{status.requirement_id} {'ok' if status.satisfied else 'missing'}"
+        f"{status.sub_question_id} {'ok' if status.satisfied else 'missing'}"
         for status in sufficiency.statuses
     )
-    print(f"Requirements: {summary}")
+    print(f"Sub-questions: {summary}")
 
 
 def _print_sources(result: AgenticAnswerResult) -> None:
@@ -162,11 +157,8 @@ def _print_sources(result: AgenticAnswerResult) -> None:
             print(format_source(citations[label]))
 
 
-def _print_question_plan(plan: QuestionPlan, evidence_plan: EvidencePlan) -> None:
-    # Merged rather than nested so the existing question-plan keys stay at the top level.
-    payload = plan.to_dict()
-    payload["evidence_plan"] = evidence_plan.to_dict()
-    print(json.dumps(payload, ensure_ascii=False, indent=2))
+def _print_question_plan(plan: QuestionPlan) -> None:
+    print(json.dumps(plan.to_dict(), ensure_ascii=False, indent=2))
 
 
 def _query_router(settings: Settings) -> QueryRouter:
@@ -216,24 +208,19 @@ def _rewrite_llm_factory(settings: Settings) -> Callable[[], LLMClient]:
     )
 
 
-def _requirement_sufficiency_factory(
+def _sub_question_sufficiency_factory(
     settings: Settings,
 ) -> Callable[[], LLMClient]:
     return lambda: DeepSeekLLMClient(
         api_key=settings.deepseek_key(),
         base_url=settings.deepseek_base_url,
         model=settings.deepseek_model,
-        max_tokens=REQUIREMENT_SUFFICIENCY_MAX_TOKENS,
+        max_tokens=SUB_QUESTION_SUFFICIENCY_MAX_TOKENS,
     )
 
 
 def _question_planner(settings: Settings) -> QuestionPlanner:
     return QuestionPlanner(_planner_llm_factory(settings))
-
-
-def _evidence_planner(settings: Settings) -> EvidencePlanner:
-    # Same budget as the question planner: both emit short structured planning output.
-    return EvidencePlanner(_planner_llm_factory(settings))
 
 
 def _agentic_workflow(
@@ -259,12 +246,10 @@ def _planned_workflow(
     short_llm_factory = _short_llm_factory(settings)
     return PlannedRetrievalWorkflow(
         planner=_question_planner(settings),
-        evidence_planner=_evidence_planner(settings),
-        router=_query_router(settings),
         retrieval_policy=RetrievalPolicy(RetrievalService(settings)),
         context_builder=planned_builder,
         sufficiency_checker=ContextSufficiencyChecker(
-            short_llm_factory, _requirement_sufficiency_factory(settings)
+            short_llm_factory, _sub_question_sufficiency_factory(settings)
         ),
         query_rewriter=TargetedQueryRewriter(_rewrite_llm_factory(settings)),
         legacy_workflow=_agentic_workflow(settings, legacy_builder),
@@ -327,8 +312,7 @@ def main(argv: list[str] | None = None) -> int:
                 print("No context found.")
         elif args.command == "ask":
             if args.plan_only:
-                plan = _question_planner(settings).plan(args.query)
-                _print_question_plan(plan, _evidence_planner(settings).plan(plan))
+                _print_question_plan(_question_planner(settings).plan(args.query))
             elif args.no_plan:
                 top_k, max_chars = _budget(args, planned=False)
                 result = _agentic_workflow(

@@ -12,8 +12,8 @@ from devcontext.routing import QueryType, RouteDecision
 class MissingAspect:
     source_type: str
     description: str
-    # Empty on the legacy path, which has no evidence requirements to name.
-    requirement_id: str = ""
+    # Empty on the legacy path, which has no sub-questions to name.
+    sub_question_id: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -21,7 +21,7 @@ class MissingAspect:
 
 @dataclass(frozen=True, slots=True)
 class EvidenceStatus:
-    requirement_id: str
+    sub_question_id: str
     satisfied: bool
     reason: str
 
@@ -156,7 +156,6 @@ class AgenticTrace:
     sub_question_traces: list[SubQuestionTrace] = field(default_factory=list)
     citations: dict[str, Any] | None = None
     sections: dict[str, Any] | None = None
-    evidence_plan: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -171,7 +170,6 @@ class AgenticTrace:
             ],
             "citations": self.citations,
             "sections": self.sections,
-            "evidence_plan": self.evidence_plan,
         }
 
 

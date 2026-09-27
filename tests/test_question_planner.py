@@ -36,12 +36,29 @@ def planner(response: str | Exception) -> tuple[QuestionPlanner, FakeLLMClient]:
     return QuestionPlanner(lambda: client), client
 
 
-def valid_plan(**overrides: object) -> str:
-    payload = {
+def sub_question(**overrides: object) -> dict[str, object]:
+    """A sub-question that satisfies every rule, so each case isolates one violation."""
+    entry: dict[str, object] = {
+        "question": "注册入口在哪个类",
+        "purpose": "确定流程起点",
+        "evidence_description": "注册入口的实现代码",
+        "preferred_sources": ["CODE"],
+    }
+    entry.update(overrides)
+    return entry
+
+
+def plan_payload(**overrides: object) -> str:
+    payload: dict[str, object] = {
         "intent_summary": "用户想了解注册流程的整体实现",
         "sub_questions": [
-            {"question": "注册入口在哪个类", "purpose": "确定流程起点"},
-            {"question": "参数校验在哪一步完成", "purpose": "确认校验位置"},
+            sub_question(),
+            sub_question(
+                question="参数校验在哪一步完成",
+                purpose="确认校验位置",
+                evidence_description="参数校验环节的校验规则与实现",
+                preferred_sources=["DOCUMENT"],
+            ),
         ],
         "answer_depth": "detailed",
     }
@@ -50,7 +67,7 @@ def valid_plan(**overrides: object) -> str:
 
 
 def test_valid_plan_is_accepted() -> None:
-    subject, client = planner(valid_plan())
+    subject, client = planner(plan_payload())
 
     plan = subject.plan(QUERY)
 
@@ -60,8 +77,30 @@ def test_valid_plan_is_accepted() -> None:
     assert [item.id for item in plan.sub_questions] == ["SQ1", "SQ2"]
     assert plan.sub_questions[0].question == "注册入口在哪个类"
     assert plan.sub_questions[0].purpose == "确定流程起点"
+    assert plan.sub_questions[0].evidence_description == "注册入口的实现代码"
+    assert plan.sub_questions[0].preferred_sources == ("CODE",)
+    assert plan.sub_questions[1].preferred_sources == ("DOCUMENT",)
     assert client.calls[0][0].content == QUESTION_PLANNER_SYSTEM_PROMPT
     assert QUERY in client.calls[0][1].content
+
+
+def test_both_sources_are_allowed_and_order_is_kept() -> None:
+    subject, _ = planner(
+        plan_payload(
+            sub_questions=[
+                sub_question(preferred_sources=["CODE", "DOCUMENT"]),
+                sub_question(
+                    question="参数校验在哪一步完成",
+                    preferred_sources=["DOCUMENT", "CODE"],
+                ),
+            ]
+        )
+    )
+
+    plan = subject.plan(QUERY)
+
+    assert plan.sub_questions[0].preferred_sources == ("CODE", "DOCUMENT")
+    assert plan.sub_questions[1].preferred_sources == ("DOCUMENT", "CODE")
 
 
 @pytest.mark.parametrize(
@@ -70,35 +109,39 @@ def test_valid_plan_is_accepted() -> None:
         "",
         "not json",
         '{"intent_summary": "a", "sub_questions": [], "answer_depth": "standard"}',
-        '{"intent_summary": "a", "sub_questions": [{"question": "q", "purpose": "p"}], "answer_depth": "standard", "confidence": 1}',
-        '{"intent_summary": "a", "sub_questions": [{"question": "q", "purpose": "p"}], "answer_depth": "huge"}',
+        plan_payload(
+            sub_questions=[sub_question()], answer_depth="standard", confidence=1
+        ),
+        plan_payload(sub_questions=[sub_question()], answer_depth="huge"),
         '{"intent_summary": "a", "sub_questions": {}, "answer_depth": "standard"}',
-        '{"intent_summary": "a", "sub_questions": [], "answer_depth": "standard"}',
-        json.dumps(
-            {
-                "intent_summary": "a",
-                "sub_questions": [
-                    {"question": f"q{index}", "purpose": "p"}
-                    for index in range(MAX_SUB_QUESTIONS + 1)
-                ],
-                "answer_depth": "standard",
-            },
-            ensure_ascii=False,
+        plan_payload(sub_questions=[]),
+        plan_payload(
+            sub_questions=[
+                sub_question(question=f"问题{index}")
+                for index in range(MAX_SUB_QUESTIONS + 1)
+            ]
         ),
-        '{"intent_summary": "a", "sub_questions": [{"question": "q"}], "answer_depth": "standard"}',
-        '{"intent_summary": "a", "sub_questions": [{"question": "", "purpose": "p"}], "answer_depth": "standard"}',
-        '{"intent_summary": "a", "sub_questions": [{"question": "q", "purpose": ""}], "answer_depth": "standard"}',
-        '{"intent_summary": "a", "sub_questions": [{"question": "q", "purpose": "p"}, {"question": "Q", "purpose": "p2"}], "answer_depth": "standard"}',
-        '{"intent_summary": "a", "sub_questions": [{"question": "```q```", "purpose": "p"}], "answer_depth": "standard"}',
-        '{"intent_summary": "a", "sub_questions": [{"question": "q\\nq2", "purpose": "p"}], "answer_depth": "standard"}',
-        json.dumps(
-            {
-                "intent_summary": "a",
-                "sub_questions": [{"question": "x" * 301, "purpose": "p"}],
-                "answer_depth": "standard",
-            },
-            ensure_ascii=False,
+        plan_payload(sub_questions=[{"question": "q", "purpose": "p"}]),
+        plan_payload(
+            sub_questions=[
+                sub_question(),
+                sub_question(evidence_description=""),
+            ]
         ),
+        plan_payload(sub_questions=[sub_question(question="")]),
+        plan_payload(sub_questions=[sub_question(purpose="")]),
+        plan_payload(sub_questions=[sub_question(evidence_description="")]),
+        plan_payload(sub_questions=[sub_question(preferred_sources=[])]),
+        plan_payload(sub_questions=[sub_question(preferred_sources=["DOC"])]),
+        plan_payload(
+            sub_questions=[sub_question(preferred_sources=["CODE", "CODE"])]
+        ),
+        plan_payload(
+            sub_questions=[sub_question(), sub_question(question="注册入口在哪个类")]
+        ),
+        plan_payload(sub_questions=[sub_question(question="```q```")]),
+        plan_payload(sub_questions=[sub_question(question="q\nq2")]),
+        plan_payload(sub_questions=[sub_question(question="x" * 301)]),
     ],
 )
 def test_invalid_plan_falls_back_without_raising(response: str) -> None:
@@ -128,8 +171,15 @@ def test_missing_client_factory_falls_back() -> None:
     assert plan.sub_questions[0].question == QUERY
 
 
+def test_fallback_sub_question_keeps_both_sources() -> None:
+    """The fallback plan is never routed from, but it must still be well-formed."""
+    plan = QuestionPlanner().plan(QUERY)
+
+    assert plan.sub_questions[0].preferred_sources == ("CODE", "DOCUMENT")
+
+
 def test_empty_query_is_rejected() -> None:
-    subject, _ = planner(valid_plan())
+    subject, _ = planner(plan_payload())
 
     with pytest.raises(ValueError):
         subject.plan("   ")
@@ -137,16 +187,11 @@ def test_empty_query_is_rejected() -> None:
 
 def test_sub_questions_are_capped_at_the_limit() -> None:
     subject, _ = planner(
-        json.dumps(
-            {
-                "intent_summary": "a",
-                "sub_questions": [
-                    {"question": f"问题{index}", "purpose": "p"}
-                    for index in range(MAX_SUB_QUESTIONS)
-                ],
-                "answer_depth": "standard",
-            },
-            ensure_ascii=False,
+        plan_payload(
+            sub_questions=[
+                sub_question(question=f"问题{index}")
+                for index in range(MAX_SUB_QUESTIONS)
+            ]
         )
     )
 
@@ -154,6 +199,20 @@ def test_sub_questions_are_capped_at_the_limit() -> None:
 
     assert len(plan.sub_questions) == MAX_SUB_QUESTIONS
     assert plan.sub_questions[-1].id == f"SQ{MAX_SUB_QUESTIONS}"
+
+
+def test_plan_serializes_sources_as_a_list() -> None:
+    subject, _ = planner(plan_payload(sub_questions=[sub_question()]))
+
+    payload = subject.plan(QUERY).to_dict()
+
+    assert payload["sub_questions"][0] == {
+        "id": "SQ1",
+        "question": "注册入口在哪个类",
+        "purpose": "确定流程起点",
+        "evidence_description": "注册入口的实现代码",
+        "preferred_sources": ["CODE"],
+    }
 
 
 def test_planning_package_never_imports_routing() -> None:
@@ -170,9 +229,12 @@ def test_planning_package_never_imports_routing() -> None:
                 assert name != "QueryType", path.name
 
 
-def test_planner_prompt_forbids_source_labels() -> None:
-    assert "不要输出 CODE、DOC、MIXED" in QUESTION_PLANNER_SYSTEM_PROMPT
-    assert "不得出现用户问题中未提及的具体类名" in QUESTION_PLANNER_SYSTEM_PROMPT
+def test_planner_prompt_requires_the_evidence_source() -> None:
+    # The planner now owns the source decision, so the prompt must ask for it.
+    assert "必须为每条子问题说明它需要哪几类证据" in QUESTION_PLANNER_SYSTEM_PROMPT
+    assert "CODE" in QUESTION_PLANNER_SYSTEM_PROMPT
+    assert "DOCUMENT" in QUESTION_PLANNER_SYSTEM_PROMPT
+    assert "不要输出 CODE、DOC、MIXED" not in QUESTION_PLANNER_SYSTEM_PROMPT
 
 
 def test_planner_prompt_requires_project_directed_sub_questions() -> None:

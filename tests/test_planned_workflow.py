@@ -16,12 +16,7 @@ from devcontext.agentic.models import MissingAspect
 from devcontext.answer import SECTION_MAX_CHARS
 from devcontext.context import ContextBuilder
 from devcontext.models import AnswerResult, SearchExecution, SearchResult, SearchTimings
-from devcontext.planning import (
-    EvidencePlan,
-    EvidenceRequirement,
-    QuestionPlan,
-    SubQuestion,
-)
+from devcontext.planning import QuestionPlan, SubQuestion
 from devcontext.routing import DecisionSource, QueryType, RouteDecision
 
 QUERY = "订单关闭是怎么实现的，为什么这样设计？"
@@ -45,13 +40,24 @@ def result(identifier: int, source_type: str) -> SearchResult:
     )
 
 
-def plan(*questions: str, decision_source: str = "llm") -> QuestionPlan:
+def sq(question: str, *sources: str) -> tuple[str, tuple[str, ...]]:
+    return (question, tuple(sources) or ("CODE",))
+
+
+def plan(*entries: tuple[str, tuple[str, ...]], decision_source: str = "llm") -> QuestionPlan:
+    """Sub-questions carry their own evidence sources, so they also drive routing."""
     return QuestionPlan(
         original_query=QUERY,
         intent_summary="了解订单关闭",
         sub_questions=tuple(
-            SubQuestion(f"SQ{index}", question, "purpose")
-            for index, question in enumerate(questions, start=1)
+            SubQuestion(
+                f"SQ{index}",
+                question,
+                "purpose",
+                f"{question} 要找的证据",
+                sources,
+            )
+            for index, (question, sources) in enumerate(entries, start=1)
         ),
         answer_depth="detailed",
         decision_source=decision_source,
@@ -72,45 +78,6 @@ class FakePlanner:
         return self.planned
 
 
-class FakeRouter:
-    def __init__(self, routes: dict[str, QueryType]) -> None:
-        self.routes = routes
-        self.calls: list[str] = []
-
-    def route(self, query: str) -> RouteDecision:
-        self.calls.append(query)
-        return decision(self.routes[query])
-
-
-class FakeEvidencePlanner:
-    """Defaults to a fallback plan so the pre-Evidence-Planner path stays the baseline."""
-
-    def __init__(self, plan: EvidencePlan | None = None) -> None:
-        self.plan_result = plan or EvidencePlan(
-            requirements=(), decision_source="fallback"
-        )
-        self.calls: list[QuestionPlan] = []
-
-    def plan(self, question_plan: QuestionPlan) -> EvidencePlan:
-        self.calls.append(question_plan)
-        return self.plan_result
-
-
-def evidence_plan(*source_lists: list[str]) -> EvidencePlan:
-    return EvidencePlan(
-        requirements=tuple(
-            EvidenceRequirement(
-                id=f"ER{index}",
-                sub_question_id=f"SQ{index}",
-                description=f"requirement {index}",
-                preferred_sources=tuple(sources),
-            )
-            for index, sources in enumerate(source_lists, start=1)
-        ),
-        decision_source="llm",
-    )
-
-
 class FakePolicy:
     def __init__(self, responses: dict[str, list[SearchResult]]) -> None:
         self.responses = responses
@@ -124,45 +91,34 @@ class FakePolicy:
 
 
 class FakeSufficiency:
-    """Records which entry point ran, so tests can assert the branch taken.
+    """Records the sub-questions and the evidence index it was handed."""
 
-    Both entry points share one result queue unless `requirement_results` is given.
-    """
-
-    def __init__(
-        self,
-        results: list[SufficiencyResult],
-        requirement_results: list[SufficiencyResult] | None = None,
-    ) -> None:
+    def __init__(self, results: list[SufficiencyResult]) -> None:
         self.results = list(results)
-        self.requirement_results = (
-            None if requirement_results is None else list(requirement_results)
-        )
         self.legacy_calls = 0
-        self.requirement_calls: list[tuple[list[object], dict[str, list[int]]]] = []
+        self.sub_question_calls: list[tuple[list[object], dict[str, list[int]]]] = []
 
-    @staticmethod
-    def _next(queue: list[SufficiencyResult]) -> SufficiencyResult:
-        if len(queue) > 1:
-            return queue.pop(0)
-        return queue[0]
+    def _next(self) -> SufficiencyResult:
+        if len(self.results) > 1:
+            return self.results.pop(0)
+        return self.results[0]
 
     def check(
         self, query: str, route: RouteDecision, bundle: object
     ) -> SufficiencyResult:
         self.legacy_calls += 1
-        return self._next(self.results)
+        return self._next()
 
-    def check_requirements(
+    def check_sub_questions(
         self,
         query: str,
-        requirements: object,
+        sub_questions: object,
         evidence_index: object,
         bundle: object,
     ) -> SufficiencyResult:
-        self.requirement_calls.append(
+        self.sub_question_calls.append(
             (
-                list(requirements),  # type: ignore[arg-type]
+                list(sub_questions),  # type: ignore[arg-type]
                 # Snapshot the lists too: retry attribution mutates them in place.
                 {
                     key: list(value)
@@ -170,12 +126,7 @@ class FakeSufficiency:
                 },
             )
         )
-        queue = (
-            self.results
-            if self.requirement_results is None
-            else self.requirement_results
-        )
-        return self._next(queue)
+        return self._next()
 
 
 class FakeRewriter:
@@ -233,20 +184,21 @@ def enough() -> SufficiencyResult:
     return SufficiencyResult(True, (), "sufficient", "llm")
 
 
-def insufficient() -> SufficiencyResult:
+def insufficient(sub_question_id: str = "") -> SufficiencyResult:
     return SufficiencyResult(
-        False, (MissingAspect("CODE", "缺少代码"),), "missing code", "llm"
+        False,
+        (MissingAspect("CODE", "缺少代码", sub_question_id),),
+        "missing code",
+        "llm",
     )
 
 
 def workflow(
     planned: QuestionPlan,
-    routes: dict[str, QueryType],
     responses: dict[str, list[SearchResult]],
     sufficiency: list[SufficiencyResult],
     rewriter: FakeRewriter | None = None,
     generator: FakeGenerator | None = None,
-    evidence: FakeEvidencePlanner | None = None,
     max_sub_questions: int = 6,
     sub_question_top_k: int = 3,
     max_rewrites: int = 1,
@@ -267,8 +219,6 @@ def workflow(
     )
     subject = PlannedRetrievalWorkflow(
         planner=FakePlanner(planned),  # type: ignore[arg-type]
-        evidence_planner=evidence or FakeEvidencePlanner(),  # type: ignore[arg-type]
-        router=FakeRouter(routes),  # type: ignore[arg-type]
         retrieval_policy=policy,  # type: ignore[arg-type]
         context_builder=ContextBuilder(),
         sufficiency_checker=checker,  # type: ignore[arg-type]
@@ -284,8 +234,7 @@ def workflow(
 
 def test_each_sub_question_is_searched_independently() -> None:
     subject, policy, _, _, _, _ = workflow(
-        plan("入口在哪里", "设计依据是什么"),
-        {"入口在哪里": QueryType.CODE, "设计依据是什么": QueryType.DOC},
+        plan(sq("入口在哪里", "CODE"), sq("设计依据是什么", "DOCUMENT")),
         {
             "入口在哪里": [result(1, "CODE")],
             "设计依据是什么": [result(2, "DOCUMENT")],
@@ -307,12 +256,29 @@ def test_each_sub_question_is_searched_independently() -> None:
     assert output.trace.sub_question_traces[0].query_type == "CODE"
     assert output.trace.sub_question_traces[1].query_type == "DOC"
     assert len(output.context_bundle.items) == 2
+    # The plan now carries the evidence needs, so there is no separate plan block.
+    assert output.trace.plan is not None
+    assert (
+        output.trace.plan["sub_questions"][0]["preferred_sources"] == ["CODE"]
+    )
+    assert "evidence_plan" not in output.trace.to_dict()
+
+
+def test_two_sources_in_one_sub_question_route_as_mixed() -> None:
+    subject, policy, _, _, _, _ = workflow(
+        plan(sq("入口在哪里", "CODE", "DOCUMENT")),
+        {"入口在哪里": [result(1, "CODE")]},
+        [enough()],
+    )
+
+    subject.run(QUERY, 5)
+
+    assert [call[1] for call in policy.calls] == [QueryType.MIXED]
 
 
 def test_results_are_merged_with_earlier_sub_questions_first() -> None:
     subject, _, _, _, _, _ = workflow(
-        plan("入口在哪里", "设计依据是什么"),
-        {"入口在哪里": QueryType.CODE, "设计依据是什么": QueryType.CODE},
+        plan(sq("入口在哪里"), sq("设计依据是什么")),
         {
             "入口在哪里": [result(3, "CODE"), result(1, "CODE")],
             "设计依据是什么": [result(1, "CODE"), result(2, "CODE")],
@@ -327,24 +293,25 @@ def test_results_are_merged_with_earlier_sub_questions_first() -> None:
     assert [item.chunk_id for item in output.context_bundle.items] == [3, 1, 2]
 
 
-def test_sub_questions_are_capped() -> None:
-    subject, policy, _, _, _, _ = workflow(
-        plan(*[f"问题{index}" for index in range(8)]),
-        {f"问题{index}": QueryType.CODE for index in range(8)},
+def test_sub_questions_are_capped_before_retrieval() -> None:
+    subject, policy, _, _, _, checker = workflow(
+        plan(*[sq(f"问题{index}") for index in range(8)]),
         {f"问题{index}": [result(index + 1, "CODE")] for index in range(8)},
         [enough()],
-        max_sub_questions=3,
+        max_sub_questions=2,
     )
 
     subject.run(QUERY, 5)
 
-    assert len(policy.calls) == 3
+    assert len(policy.calls) == 2
+    sub_questions, evidence_index = checker.sub_question_calls[0]
+    assert [item.id for item in sub_questions] == ["SQ1", "SQ2"]
+    assert sorted(evidence_index) == ["SQ1", "SQ2"]
 
 
 def test_fallback_plan_delegates_to_the_legacy_workflow() -> None:
-    subject, policy, legacy, generator, _, _ = workflow(
-        plan(QUERY, decision_source="fallback"),
-        {QUERY: QueryType.CODE},
+    subject, policy, legacy, generator, _, checker = workflow(
+        plan(sq(QUERY), decision_source="fallback"),
         {QUERY: [result(1, "CODE")]},
         [enough()],
     )
@@ -353,6 +320,7 @@ def test_fallback_plan_delegates_to_the_legacy_workflow() -> None:
 
     assert legacy.calls == [(QUERY, 7)]
     assert policy.calls == []
+    assert checker.sub_question_calls == []
     assert generator.generate_calls == []
     assert output.answer_result.answer == "legacy"
     assert output.trace.plan["decision_source"] == "fallback"
@@ -360,8 +328,7 @@ def test_fallback_plan_delegates_to_the_legacy_workflow() -> None:
 
 def test_insufficient_evidence_triggers_one_targeted_rewrite() -> None:
     subject, policy, _, generator, rewriter, _ = workflow(
-        plan("入口在哪里"),
-        {"入口在哪里": QueryType.CODE},
+        plan(sq("入口在哪里")),
         {"入口在哪里": [result(1, "CODE")], "Service run 精确代码": [result(2, "CODE")]},
         [insufficient(), enough()],
         rewriter=FakeRewriter(
@@ -380,8 +347,7 @@ def test_insufficient_evidence_triggers_one_targeted_rewrite() -> None:
 
 def test_rewrite_failure_stops_with_a_partial_answer() -> None:
     subject, _, _, generator, _, _ = workflow(
-        plan("入口在哪里"),
-        {"入口在哪里": QueryType.CODE},
+        plan(sq("入口在哪里")),
         {"入口在哪里": [result(1, "CODE")]},
         [insufficient()],
         rewriter=FakeRewriter(QueryRewriteError("rewrite exploded")),
@@ -396,8 +362,7 @@ def test_rewrite_failure_stops_with_a_partial_answer() -> None:
 
 def test_empty_context_skips_the_answer_model() -> None:
     subject, _, _, generator, _, _ = workflow(
-        plan("入口在哪里"),
-        {"入口在哪里": QueryType.CODE},
+        plan(sq("入口在哪里")),
         {"入口在哪里": []},
         [insufficient()],
     )
@@ -412,8 +377,7 @@ def test_empty_context_skips_the_answer_model() -> None:
 
 def test_answer_receives_the_plan_outline() -> None:
     subject, _, _, generator, _, _ = workflow(
-        plan("入口在哪里", "设计依据是什么"),
-        {"入口在哪里": QueryType.CODE, "设计依据是什么": QueryType.DOC},
+        plan(sq("入口在哪里", "CODE"), sq("设计依据是什么", "DOCUMENT")),
         {
             "入口在哪里": [result(1, "CODE")],
             "设计依据是什么": [result(2, "DOCUMENT")],
@@ -431,78 +395,6 @@ def test_answer_receives_the_plan_outline() -> None:
     assert "2. 设计依据是什么" in outline
 
 
-def test_evidence_requirements_choose_the_retrieval_route() -> None:
-    evidence = FakeEvidencePlanner(evidence_plan(["CODE"], ["DOCUMENT"]))
-    subject, policy, _, _, _, _ = workflow(
-        plan("入口在哪里", "设计依据是什么"),
-        {"入口在哪里": QueryType.CODE, "设计依据是什么": QueryType.DOC},
-        {
-            "入口在哪里": [result(1, "CODE")],
-            "设计依据是什么": [result(2, "DOCUMENT")],
-        },
-        [enough()],
-        evidence=evidence,
-    )
-
-    output = subject.run(QUERY, 5)
-
-    assert [call[1] for call in policy.calls] == [QueryType.CODE, QueryType.DOC]
-    assert output.trace.route.query_type is QueryType.MIXED
-    assert output.trace.evidence_plan is not None
-    assert output.trace.evidence_plan["decision_source"] == "llm"
-    assert len(output.trace.evidence_plan["requirements"]) == 2
-    assert len(evidence.calls) == 1
-
-
-def test_two_sources_in_one_requirement_route_as_mixed() -> None:
-    subject, policy, _, _, _, _ = workflow(
-        plan("入口在哪里"),
-        {"入口在哪里": QueryType.CODE},
-        {"入口在哪里": [result(1, "CODE")]},
-        [enough()],
-        evidence=FakeEvidencePlanner(evidence_plan(["CODE", "DOCUMENT"])),
-    )
-
-    subject.run(QUERY, 5)
-
-    assert [call[1] for call in policy.calls] == [QueryType.MIXED]
-
-
-def test_evidence_plan_failure_falls_back_to_the_router() -> None:
-    subject, policy, _, _, _, _ = workflow(
-        plan("入口在哪里"),
-        {"入口在哪里": QueryType.DOC},
-        {"入口在哪里": [result(1, "DOCUMENT")]},
-        [enough()],
-        evidence=FakeEvidencePlanner(),
-    )
-
-    output = subject.run(QUERY, 5)
-
-    assert [call[1] for call in policy.calls] == [QueryType.DOC]
-    assert output.trace.evidence_plan == {
-        "decision_source": "fallback",
-        "requirements": [],
-    }
-
-
-def test_evidence_planner_is_not_called_when_the_question_plan_falls_back() -> None:
-    evidence = FakeEvidencePlanner(evidence_plan(["CODE"]))
-    subject, policy, legacy, _, _, _ = workflow(
-        plan(QUERY, decision_source="fallback"),
-        {QUERY: QueryType.CODE},
-        {QUERY: [result(1, "CODE")]},
-        [enough()],
-        evidence=evidence,
-    )
-
-    subject.run(QUERY, 5)
-
-    assert evidence.calls == []
-    assert policy.calls == []
-    assert legacy.calls == [(QUERY, 5)]
-
-
 @pytest.mark.parametrize(
     ("sources", "expected"),
     [
@@ -515,126 +407,72 @@ def test_evidence_planner_is_not_called_when_the_question_plan_falls_back() -> N
 def test_to_route_decision_maps_preferred_sources(
     sources: list[str], expected: QueryType
 ) -> None:
-    requirement = EvidenceRequirement(
-        id="ER1",
-        sub_question_id="SQ1",
-        description="d",
-        preferred_sources=tuple(sources),
+    sub_question = SubQuestion(
+        "SQ1", "q", "p", "evidence", tuple(sources)
     )
 
-    assert to_route_decision(requirement).query_type is expected
+    assert to_route_decision(sub_question).query_type is expected
 
 
-def test_evidence_plan_uses_the_per_requirement_checker() -> None:
+def test_sub_questions_go_to_the_per_sub_question_checker() -> None:
     subject, _, _, _, _, checker = workflow(
-        plan("入口在哪里"),
-        {"入口在哪里": QueryType.CODE},
+        plan(sq("入口在哪里")),
         {"入口在哪里": [result(1, "CODE")]},
         [enough()],
-        evidence=FakeEvidencePlanner(evidence_plan(["CODE"])),
     )
 
     subject.run(QUERY, 5)
 
     assert checker.legacy_calls == 0
-    assert len(checker.requirement_calls) == 1
-    requirements, evidence_index = checker.requirement_calls[0]
-    assert [item.id for item in requirements] == ["ER1"]
-    assert evidence_index == {"ER1": [1]}
+    assert len(checker.sub_question_calls) == 1
+    sub_questions, evidence_index = checker.sub_question_calls[0]
+    assert [item.id for item in sub_questions] == ["SQ1"]
+    assert evidence_index == {"SQ1": [1]}
 
 
-def test_fallback_evidence_plan_uses_the_legacy_checker() -> None:
+def test_retry_results_are_attributed_to_the_targeted_sub_questions() -> None:
+    missing = MissingAspect("CODE", "缺少入口证据", "SQ1")
     subject, _, _, _, _, checker = workflow(
-        plan("入口在哪里"),
-        {"入口在哪里": QueryType.CODE},
-        {"入口在哪里": [result(1, "CODE")]},
-        [enough()],
-        evidence=FakeEvidencePlanner(),  # fallback: no requirements
-    )
-
-    subject.run(QUERY, 5)
-
-    assert checker.requirement_calls == []
-    assert checker.legacy_calls == 1
-
-
-def test_requirements_follow_the_sub_question_slice() -> None:
-    """A truncated sub-question must not leave its requirement behind."""
-    subject, policy, _, _, _, checker = workflow(
-        plan("入口在哪里", "设计依据是什么", "还有别的吗"),
-        {
-            "入口在哪里": QueryType.CODE,
-            "设计依据是什么": QueryType.CODE,
-            "还有别的吗": QueryType.CODE,
-        },
-        {
-            "入口在哪里": [result(1, "CODE")],
-            "设计依据是什么": [result(2, "CODE")],
-            "还有别的吗": [result(3, "CODE")],
-        },
-        [enough()],
-        evidence=FakeEvidencePlanner(
-            evidence_plan(["CODE"], ["CODE"], ["CODE"])
-        ),
-        max_sub_questions=2,
-    )
-
-    subject.run(QUERY, 5)
-
-    assert len(policy.calls) == 2
-    requirements, evidence_index = checker.requirement_calls[0]
-    assert [item.id for item in requirements] == ["ER1", "ER2"]
-    assert "ER3" not in evidence_index
-
-
-def test_retry_results_are_attributed_to_the_targeted_requirements() -> None:
-    missing = MissingAspect("CODE", "缺少入口证据", "ER1")
-    subject, _, _, _, _, checker = workflow(
-        plan("入口在哪里"),
-        {"入口在哪里": QueryType.CODE},
+        plan(sq("入口在哪里")),
         {"入口在哪里": [result(1, "CODE")], "精确检索": [result(2, "CODE")]},
         [SufficiencyResult(False, (missing,), "不足", "llm"), enough()],
         rewriter=FakeRewriter(
             RewriteResult(QUERY, "精确检索", QueryType.CODE, (missing,))
         ),
-        evidence=FakeEvidencePlanner(evidence_plan(["CODE"])),
     )
 
     subject.run(QUERY, 5)
 
-    assert len(checker.requirement_calls) == 2
-    _, first_index = checker.requirement_calls[0]
-    _, second_index = checker.requirement_calls[1]
-    assert first_index == {"ER1": [1]}
-    assert second_index == {"ER1": [1, 2]}
+    assert len(checker.sub_question_calls) == 2
+    _, first_index = checker.sub_question_calls[0]
+    _, second_index = checker.sub_question_calls[1]
+    assert first_index == {"SQ1": [1]}
+    assert second_index == {"SQ1": [1, 2]}
 
 
 def test_unattributed_aspects_do_not_add_evidence() -> None:
-    """An aspect without a requirement id (legacy shape) must not invent an entry."""
+    """An aspect without a sub-question id (legacy shape) must not invent an entry."""
     missing = MissingAspect("CODE", "缺少证据")
     subject, _, _, _, _, checker = workflow(
-        plan("入口在哪里"),
-        {"入口在哪里": QueryType.CODE},
+        plan(sq("入口在哪里")),
         {"入口在哪里": [result(1, "CODE")], "精确检索": [result(2, "CODE")]},
         [SufficiencyResult(False, (missing,), "不足", "llm"), enough()],
         rewriter=FakeRewriter(
             RewriteResult(QUERY, "精确检索", QueryType.CODE, (missing,))
         ),
-        evidence=FakeEvidencePlanner(evidence_plan(["CODE"])),
     )
 
     subject.run(QUERY, 5)
 
-    _, first_index = checker.requirement_calls[0]
-    _, second_index = checker.requirement_calls[1]
-    assert second_index == first_index == {"ER1": [1]}
+    _, first_index = checker.sub_question_calls[0]
+    _, second_index = checker.sub_question_calls[1]
+    assert second_index == first_index == {"SQ1": [1]}
 
 
 def test_section_lengths_are_measured_into_the_trace() -> None:
     answer = "## 第一节\n\n" + "字" * 200 + "\n\n## 第二节\n\n" + "字" * 400
     subject, _, _, _, _, _ = workflow(
-        plan("入口在哪里"),
-        {"入口在哪里": QueryType.CODE},
+        plan(sq("入口在哪里")),
         {"入口在哪里": [result(1, "CODE")]},
         [enough()],
         generator=FakeGenerator(answer),
@@ -650,8 +488,7 @@ def test_section_lengths_are_measured_into_the_trace() -> None:
 
 def test_citations_are_recorded_in_the_trace() -> None:
     subject, _, _, _, _, _ = workflow(
-        plan("入口在哪里"),
-        {"入口在哪里": QueryType.CODE},
+        plan(sq("入口在哪里")),
         {"入口在哪里": [result(1, "CODE")]},
         [enough()],
     )
@@ -685,8 +522,7 @@ def test_union_route_collapses_sub_question_evidence_needs(
 
 def test_empty_query_is_rejected() -> None:
     subject, _, _, _, _, _ = workflow(
-        plan("入口在哪里"),
-        {"入口在哪里": QueryType.CODE},
+        plan(sq("入口在哪里")),
         {"入口在哪里": [result(1, "CODE")]},
         [enough()],
     )

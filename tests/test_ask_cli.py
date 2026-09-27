@@ -353,28 +353,20 @@ def _planner_payload() -> str:
         {
             "intent_summary": "用户想了解订单关闭的实现与设计",
             "sub_questions": [
-                {"question": "订单关闭的入口方法在哪里", "purpose": "定位实现"},
-                {"question": "订单关闭的设计依据是什么", "purpose": "确认设计原因"},
-            ],
-            "answer_depth": "detailed",
-        },
-        ensure_ascii=False,
-    )
-
-
-def _evidence_payload() -> str:
-    return json.dumps(
-        {
-            "requirements": [
                 {
-                    "description": "订单关闭的触发与入口实现",
+                    "question": "订单关闭的入口方法在哪里",
+                    "purpose": "定位实现",
+                    "evidence_description": "订单关闭的触发与入口实现",
                     "preferred_sources": ["CODE"],
                 },
                 {
-                    "description": "订单关闭时序与取舍的设计说明",
+                    "question": "订单关闭的设计依据是什么",
+                    "purpose": "确认设计原因",
+                    "evidence_description": "订单关闭时序与取舍的设计说明",
                     "preferred_sources": ["DOCUMENT"],
                 },
-            ]
+            ],
+            "answer_depth": "detailed",
         },
         ensure_ascii=False,
     )
@@ -421,8 +413,6 @@ def test_ask_cli_planned_path_fans_out_over_sub_questions(
             system_prompt = messages[0].content  # type: ignore[attr-defined]
             if "问题规划器" in system_prompt:
                 return _planner_payload()
-            if "证据规划器" in system_prompt:
-                return _evidence_payload()
             if "证据需求审查器" in system_prompt:
                 return _requirement_statuses_payload()
             if "证据充分性审查器" in system_prompt:
@@ -471,8 +461,6 @@ def test_ask_cli_debug_prints_per_requirement_status(monkeypatch, capsys) -> Non
             system_prompt = messages[0].content  # type: ignore[attr-defined]
             if "问题规划器" in system_prompt:
                 return _planner_payload()
-            if "证据规划器" in system_prompt:
-                return _evidence_payload()
             if "证据需求审查器" in system_prompt:
                 return _requirement_statuses_payload(True, False)
             return "订单关闭分为入口与设计两部分。\n[C1]"
@@ -485,13 +473,13 @@ def test_ask_cli_debug_prints_per_requirement_status(monkeypatch, capsys) -> Non
     captured = capsys.readouterr()
 
     assert exit_code == 0
-    assert "Requirements: ER1 ok, ER2 missing" in captured.out
+    assert "Sub-questions: SQ1 ok, SQ2 missing" in captured.out
     trace = json.loads(captured.out.split("Trace:\n", maxsplit=1)[1])
-    assert [status["requirement_id"] for status in trace["final_sufficiency"]["statuses"]] == [
-        "ER1",
-        "ER2",
+    assert [status["sub_question_id"] for status in trace["final_sufficiency"]["statuses"]] == [
+        "SQ1",
+        "SQ2",
     ]
-    assert trace["final_sufficiency"]["missing_aspects"][0]["requirement_id"] == "ER2"
+    assert trace["final_sufficiency"]["missing_aspects"][0]["sub_question_id"] == "SQ2"
 
 
 def test_ask_cli_planned_path_asks_for_a_sectioned_answer(
@@ -522,8 +510,6 @@ def test_ask_cli_planned_path_asks_for_a_sectioned_answer(
             system_prompt = messages[0].content  # type: ignore[attr-defined]
             if "问题规划器" in system_prompt:
                 return _planner_payload()
-            if "证据规划器" in system_prompt:
-                return _evidence_payload()
             if "证据需求审查器" in system_prompt:
                 return _requirement_statuses_payload()
             if "证据充分性审查器" in system_prompt:
@@ -549,6 +535,7 @@ def test_ask_cli_plan_only_prints_json_without_retrieving(
     monkeypatch, capsys
 ) -> None:
     retrieval_attempts: list[str] = []
+    model_calls: list[str] = []
 
     class ForbiddenRetrievalService:
         def __init__(self, settings: object) -> None:
@@ -559,9 +546,8 @@ def test_ask_cli_plan_only_prints_json_without_retrieving(
             pass
 
         def generate(self, messages: list[object]) -> str:
-            if "问题规划器" in messages[0].content:  # type: ignore[attr-defined]
-                return _planner_payload()
-            return _evidence_payload()
+            model_calls.append(messages[0].content)  # type: ignore[attr-defined]
+            return _planner_payload()
 
     monkeypatch.setenv("DEEPSEEK_API_KEY", "test-secret")
     monkeypatch.setattr(cli_module, "RetrievalService", ForbiddenRetrievalService)
@@ -572,19 +558,18 @@ def test_ask_cli_plan_only_prints_json_without_retrieving(
 
     assert exit_code == 0
     assert retrieval_attempts == []
+    # Splitting and evidence planning are now one call, not two.
+    assert len(model_calls) == 1
+    assert "问题规划器" in model_calls[0]
     plan = json.loads(captured.out)
     assert plan["decision_source"] == "llm"
-    assert plan["sub_questions"][0]["id"] == "SQ1"
+    assert [item["id"] for item in plan["sub_questions"]] == ["SQ1", "SQ2"]
     assert plan["sub_questions"][0]["purpose"] == "定位实现"
-    evidence = plan["evidence_plan"]
-    assert evidence["decision_source"] == "llm"
-    assert [item["id"] for item in evidence["requirements"]] == ["ER1", "ER2"]
-    assert [item["sub_question_id"] for item in evidence["requirements"]] == [
-        "SQ1",
-        "SQ2",
-    ]
-    assert evidence["requirements"][0]["preferred_sources"] == ["CODE"]
-    assert evidence["requirements"][1]["preferred_sources"] == ["DOCUMENT"]
+    # One call now yields both the split and each sub-question's evidence needs.
+    assert plan["sub_questions"][0]["evidence_description"] == "订单关闭的触发与入口实现"
+    assert plan["sub_questions"][0]["preferred_sources"] == ["CODE"]
+    assert plan["sub_questions"][1]["preferred_sources"] == ["DOCUMENT"]
+    assert "evidence_plan" not in plan
 
 
 def test_ask_cli_planning_failure_falls_back_to_legacy_single_query(

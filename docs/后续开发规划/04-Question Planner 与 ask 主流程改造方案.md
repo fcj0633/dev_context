@@ -3,7 +3,9 @@
 > 阶段：Phase 0 + Phase 1
 > 前置文档：`01-项目开发方向转型.md`、`03-后续开发规划.md`（仅作参考输入，不作为逐条执行依据）
 > 本文只描述**下一个要实现的功能**：Question Planner V1，以及为承载它而对 `ask` 主流程所做的改造
-> 状态：设计稿
+> 状态：Phase 0 + Phase 1 的实现记录
+>
+> **后续变更**：本文 §3.4.1 与附录 B 内嵌的问题规划器提示词，已被 `07-规划合并为一次调用设计与实现方案.md` 中合并后的提示词取代。其中最明显的一处是**原规则 2「不要输出 CODE、DOC、MIXED 之类的来源分类」已经反转**——来源判定现在由这次调用负责。下文的提示词原文保留为该阶段的记录。
 
 ---
 
@@ -135,7 +137,7 @@ def _required_sources(query_type: QueryType) -> set[str]:
 
 - 不做 Evidence Planner、Tool 层、Semantic-to-Symbol、Search Replanner、Answer Planner 模块（后续阶段）。
 
-> **后续进展**：Evidence Planner 已在下一阶段实现，见 `05-Evidence Planner 设计与实现方案.md`。本轮把它列为非目标，是因为 Phase 1 的目标是"先让 ask 用上子问题"，而子问题到证据类型的映射当时由 `QueryRouter` 临时承担。
+> **后续进展**：Evidence Planner 已在下一阶段实现（`05-Evidence Planner 设计与实现方案.md`），随后又在 `07-规划合并为一次调用设计与实现方案.md` 中被并入问题规划、不再是一次独立调用。本轮把它列为非目标，是因为 Phase 1 的目标是"先让 ask 用上子问题"，而子问题到证据类型的映射当时由 `QueryRouter` 临时承担。
 - **不做逐节多次生成**。本轮回答只调用模型一次，通过提示词约束节数与节长（见 3.3 决策二）。
 - **不做用户画像**。不引入"读者是新手/专家"之类的字段，对每个用户都按同一标准解释清楚。
 - 不建 L2 Project Understanding Benchmark（理由见第 9 章）。
@@ -895,7 +897,7 @@ uv run devcontext ask "详细解释用户注册的整个业务流程" --debug   
 
 1. **不做 Evidence Planner**（`EvidenceType` / `EvidenceRequirement`）。子问题到证据类型的映射**暂时**由 `QueryRouter` 承担。
 
-   > 这个"暂时"已在下一阶段兑现：`05-Evidence Planner 设计与实现方案.md` 把这份职责移交给显式的证据需求，`QueryRouter` 退到失败回退的位置。
+   > 这个"暂时"已在下一阶段兑现：`05-Evidence Planner 设计与实现方案.md` 把这份职责移交给显式的证据需求，`QueryRouter` 退到失败回退的位置。再下一步（`07-…md`）两份规划合并为一次调用后，来源直接由子问题自带，`QueryRouter` 已从规划路径完全移除。
 2. **不做 Tool 层**（`semantic_search` / `keyword_search` / `symbol_search` / `read_source`）。
 3. **不做 Semantic-to-Symbol**。
 4. **不做 Search Replanner**。仍用现有 `TargetedQueryRewriter`，仍只改写一次。

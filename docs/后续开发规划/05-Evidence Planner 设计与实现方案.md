@@ -2,7 +2,7 @@
 
 > 阶段：Phase 2
 > 前置文档：`03-后续开发规划.md`（Phase 2 定义）、`04-Question Planner 与 ask 主流程改造方案.md`（Phase 0+1 实现）
-> 状态：已实现
+> 状态：**已被取代** —— 本文描述的独立证据规划调用已在 `07-规划合并为一次调用设计与实现方案.md` 中并入问题规划，`EvidencePlan` / `EvidenceRequirement` 类型已删除。本文保留为那一阶段的设计记录。
 
 ---
 

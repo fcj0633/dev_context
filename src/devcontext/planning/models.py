@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from typing import Any
 
 
@@ -16,9 +16,17 @@ class SubQuestion:
     id: str
     question: str
     purpose: str
+    evidence_description: str
+    preferred_sources: tuple[str, ...]
 
-    def to_dict(self) -> dict[str, str]:
-        return asdict(self)
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "question": self.question,
+            "purpose": self.purpose,
+            "evidence_description": self.evidence_description,
+            "preferred_sources": list(self.preferred_sources),
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,34 +44,4 @@ class QuestionPlan:
             "answer_depth": self.answer_depth,
             "decision_source": self.decision_source,
             "sub_questions": [item.to_dict() for item in self.sub_questions],
-        }
-
-
-@dataclass(frozen=True, slots=True)
-class EvidenceRequirement:
-    """What one sub-question needs to look up, and which sources can answer it."""
-
-    id: str
-    sub_question_id: str
-    description: str
-    preferred_sources: tuple[str, ...]
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "id": self.id,
-            "sub_question_id": self.sub_question_id,
-            "description": self.description,
-            "preferred_sources": list(self.preferred_sources),
-        }
-
-
-@dataclass(frozen=True, slots=True)
-class EvidencePlan:
-    requirements: tuple[EvidenceRequirement, ...]
-    decision_source: str = "llm"
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "decision_source": self.decision_source,
-            "requirements": [item.to_dict() for item in self.requirements],
         }
