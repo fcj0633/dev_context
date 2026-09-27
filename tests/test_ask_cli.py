@@ -380,6 +380,18 @@ def _evidence_payload() -> str:
     )
 
 
+def _requirement_statuses_payload(*satisfied: bool) -> str:
+    return json.dumps(
+        {
+            "statuses": [
+                {"satisfied": flag, "reason": "证据直接支持该需求"}
+                for flag in (satisfied or (True, True))
+            ]
+        },
+        ensure_ascii=False,
+    )
+
+
 def test_ask_cli_planned_path_fans_out_over_sub_questions(
     monkeypatch, capsys
 ) -> None:
@@ -411,6 +423,8 @@ def test_ask_cli_planned_path_fans_out_over_sub_questions(
                 return _planner_payload()
             if "证据规划器" in system_prompt:
                 return _evidence_payload()
+            if "证据需求审查器" in system_prompt:
+                return _requirement_statuses_payload()
             if "证据充分性审查器" in system_prompt:
                 return '{"enough": true, "missing_aspects": [], "reason": "双源足够"}'
             return "订单关闭分为入口与设计两部分。\n[C1][C2]"
@@ -431,6 +445,53 @@ def test_ask_cli_planned_path_fans_out_over_sub_questions(
     assert retrieval_calls == [("hybrid", "CODE"), ("vector", "DOCUMENT")]
     assert "订单关闭分为入口与设计两部分。" in captured.out
     assert "Sources:" not in captured.out
+
+
+def test_ask_cli_debug_prints_per_requirement_status(monkeypatch, capsys) -> None:
+    class FakeRetrievalService:
+        def __init__(self, settings: object) -> None:
+            pass
+
+        def search_with_trace(
+            self,
+            strategy: str,
+            query: str,
+            top_k: int,
+            *,
+            source_type: str | None = None,
+        ) -> SearchExecution:
+            results = [code_result()] if source_type == "CODE" else [document_result()]
+            return SearchExecution(results, SearchTimings())
+
+    class FakeDeepSeekClient:
+        def __init__(self, **kwargs: object) -> None:
+            pass
+
+        def generate(self, messages: list[object]) -> str:
+            system_prompt = messages[0].content  # type: ignore[attr-defined]
+            if "问题规划器" in system_prompt:
+                return _planner_payload()
+            if "证据规划器" in system_prompt:
+                return _evidence_payload()
+            if "证据需求审查器" in system_prompt:
+                return _requirement_statuses_payload(True, False)
+            return "订单关闭分为入口与设计两部分。\n[C1]"
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-secret")
+    monkeypatch.setattr(cli_module, "RetrievalService", FakeRetrievalService)
+    monkeypatch.setattr(cli_module, "DeepSeekLLMClient", FakeDeepSeekClient)
+
+    exit_code = cli_module.main(["ask", "订单关闭怎么实现？", "--debug"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "Requirements: ER1 ok, ER2 missing" in captured.out
+    trace = json.loads(captured.out.split("Trace:\n", maxsplit=1)[1])
+    assert [status["requirement_id"] for status in trace["final_sufficiency"]["statuses"]] == [
+        "ER1",
+        "ER2",
+    ]
+    assert trace["final_sufficiency"]["missing_aspects"][0]["requirement_id"] == "ER2"
 
 
 def test_ask_cli_planned_path_asks_for_a_sectioned_answer(
@@ -463,6 +524,8 @@ def test_ask_cli_planned_path_asks_for_a_sectioned_answer(
                 return _planner_payload()
             if "证据规划器" in system_prompt:
                 return _evidence_payload()
+            if "证据需求审查器" in system_prompt:
+                return _requirement_statuses_payload()
             if "证据充分性审查器" in system_prompt:
                 return '{"enough": true, "missing_aspects": [], "reason": "足够"}'
             prompts.append(messages[1].content)  # type: ignore[attr-defined]

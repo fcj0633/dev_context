@@ -6,8 +6,10 @@ from devcontext.agentic.models import (
     AgenticAnswerResult,
     AgenticRoundTrace,
     AgenticTrace,
+    MissingAspect,
     SelectedChunkTrace,
     SubQuestionTrace,
+    SufficiencyResult,
     build_citation_trace,
 )
 from devcontext.agentic.rewrite import QueryRewriteError, TargetedQueryRewriter
@@ -26,11 +28,11 @@ from devcontext.context import ContextBuilder
 from devcontext.models import AnswerResult, ContextBundle, SearchResult
 from devcontext.planning import (
     MAX_SUB_QUESTIONS,
-    EvidencePlan,
     EvidencePlanner,
     EvidenceRequirement,
     QuestionPlan,
     QuestionPlanner,
+    SubQuestion,
 )
 from devcontext.retrieval import RetrievalPolicy
 from devcontext.routing import DecisionSource, QueryRouter, QueryType, RouteDecision
@@ -92,10 +94,16 @@ class PlannedRetrievalWorkflow:
             return self._legacy_result(query, top_k, plan)
 
         evidence_plan = self.evidence_planner.plan(plan)
-        decisions, merged, sub_question_traces = self._fan_out(plan, evidence_plan)
+        # Slice both together: a truncated sub-question must not leave its
+        # requirement behind, or that requirement could never be satisfied.
+        sub_questions = plan.sub_questions[: self.max_sub_questions]
+        requirements = evidence_plan.requirements[: len(sub_questions)]
+        decisions, merged, sub_question_traces, evidence_index = self._fan_out(
+            sub_questions, requirements
+        )
         route = union_route(decisions)
         bundle = self.context_builder.build(query, merged[:top_k])
-        sufficiency = self.sufficiency_checker.check(query, route, bundle)
+        sufficiency = self._check(query, route, requirements, evidence_index, bundle)
 
         rounds = [
             _round_trace(0, query, route, bundle, sufficiency)
@@ -120,9 +128,14 @@ class PlannedRetrievalWorkflow:
             execution = self.retrieval_policy.search_with_trace(
                 rewrite.rewritten_query, decision, top_k
             )
+            _attribute_retry(
+                evidence_index, rewrite.targeted_aspects, execution.results
+            )
             merged = _merge_results(execution.results, merged)
             bundle = self.context_builder.build(query, merged[:top_k])
-            sufficiency = self.sufficiency_checker.check(query, route, bundle)
+            sufficiency = self._check(
+                query, route, requirements, evidence_index, bundle
+            )
             retry_count += 1
             rounds.append(
                 _round_trace(
@@ -156,19 +169,29 @@ class PlannedRetrievalWorkflow:
         return AgenticAnswerResult(answer_result, bundle, trace)
 
     def _fan_out(
-        self, plan: QuestionPlan, evidence_plan: EvidencePlan
-    ) -> tuple[list[RouteDecision], list[SearchResult], list[SubQuestionTrace]]:
+        self,
+        sub_questions: Sequence[SubQuestion],
+        requirements: Sequence[EvidenceRequirement],
+    ) -> tuple[
+        list[RouteDecision],
+        list[SearchResult],
+        list[SubQuestionTrace],
+        dict[str, list[int]],
+    ]:
         decisions: list[RouteDecision] = []
         merged: list[SearchResult] = []
         traces: list[SubQuestionTrace] = []
-        for index, sub_question in enumerate(
-            plan.sub_questions[: self.max_sub_questions]
-        ):
-            decision = self._route_for(sub_question.question, evidence_plan, index)
+        evidence_index: dict[str, list[int]] = {}
+        for index, sub_question in enumerate(sub_questions):
+            decision = self._route_for(sub_question.question, requirements, index)
             execution = self.retrieval_policy.search_with_trace(
                 sub_question.question, decision, self.sub_question_top_k
             )
             decisions.append(decision)
+            if index < len(requirements):
+                evidence_index[requirements[index].id] = [
+                    result.id for result in execution.results
+                ]
             traces.append(
                 SubQuestionTrace(
                     sub_question_id=sub_question.id,
@@ -183,21 +206,42 @@ class PlannedRetrievalWorkflow:
                 )
             )
             merged = _merge_results(merged, execution.results)
-        return decisions, merged, traces
+        return decisions, merged, traces, evidence_index
 
     def _route_for(
-        self, question: str, evidence_plan: EvidencePlan, index: int
+        self,
+        question: str,
+        requirements: Sequence[EvidenceRequirement],
+        index: int,
     ) -> RouteDecision:
         """Prefer the planned requirement; fall back to classifying the sub-question.
 
-        The fallback keeps the pre-Evidence-Planner behaviour exactly, so a planning
-        failure cannot make retrieval worse than it was.
+        `requirements` is empty whenever the Evidence Planner fell back, so the
+        fallback keeps the pre-Evidence-Planner behaviour exactly.
         """
-        if evidence_plan.decision_source == "fallback":
+        if index >= len(requirements):
             return self.router.route(question)
-        if index >= len(evidence_plan.requirements):
-            return self.router.route(question)
-        return to_route_decision(evidence_plan.requirements[index])
+        return to_route_decision(requirements[index])
+
+    def _check(
+        self,
+        query: str,
+        route: RouteDecision,
+        requirements: Sequence[EvidenceRequirement],
+        evidence_index: dict[str, list[int]],
+        bundle: ContextBundle,
+    ) -> SufficiencyResult:
+        """Per-requirement when there are requirements, legacy union otherwise.
+
+        Both call sites (first pass and retry) go through here so the branch can
+        never differ between them. Empty requirements must take the legacy path:
+        judging zero requirements per-requirement would pass vacuously.
+        """
+        if not requirements:
+            return self.sufficiency_checker.check(query, route, bundle)
+        return self.sufficiency_checker.check_requirements(
+            query, requirements, evidence_index, bundle
+        )
 
     def _legacy_result(
         self, query: str, top_k: int, plan: QuestionPlan
@@ -231,6 +275,28 @@ class PlannedRetrievalWorkflow:
         return generator.generate_partial(
             query, context_bundle, missing_aspects, outline=outline
         )
+
+
+def _attribute_retry(
+    evidence_index: dict[str, list[int]],
+    targeted_aspects: Sequence[MissingAspect],
+    results: Sequence[SearchResult],
+) -> None:
+    """Attribute retry results to the requirements the rewrite was aimed at.
+
+    The rewriter copies the missing aspects into `targeted_aspects` verbatim, so
+    that tuple already names the requirements this single rewritten query is for.
+    Matching by source type instead would credit same-source requirements that the
+    rewrite was never aimed at.
+    """
+    chunk_ids = [result.id for result in results]
+    for aspect in targeted_aspects:
+        if not aspect.requirement_id:
+            continue
+        attributed = evidence_index.setdefault(aspect.requirement_id, [])
+        for chunk_id in chunk_ids:
+            if chunk_id not in attributed:
+                attributed.append(chunk_id)
 
 
 def to_route_decision(requirement: EvidenceRequirement) -> RouteDecision:

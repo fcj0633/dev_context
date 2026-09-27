@@ -12,8 +12,20 @@ from devcontext.routing import QueryType, RouteDecision
 class MissingAspect:
     source_type: str
     description: str
+    # Empty on the legacy path, which has no evidence requirements to name.
+    requirement_id: str = ""
 
-    def to_dict(self) -> dict[str, str]:
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True, slots=True)
+class EvidenceStatus:
+    requirement_id: str
+    satisfied: bool
+    reason: str
+
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
@@ -23,6 +35,7 @@ class SufficiencyResult:
     missing_aspects: tuple[MissingAspect, ...]
     reason: str
     decision_source: str
+    statuses: tuple[EvidenceStatus, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -30,6 +43,7 @@ class SufficiencyResult:
             "missing_aspects": [aspect.to_dict() for aspect in self.missing_aspects],
             "reason": self.reason,
             "decision_source": self.decision_source,
+            "statuses": [status.to_dict() for status in self.statuses],
         }
 
 

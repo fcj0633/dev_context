@@ -2,6 +2,7 @@ from devcontext.agentic.models import (
     AgenticAnswerResult,
     AgenticRoundTrace,
     AgenticTrace,
+    EvidenceStatus,
     MissingAspect,
     RewriteResult,
     SelectedChunkTrace,

@@ -12,6 +12,7 @@ from devcontext.agentic import (
     AgenticRetrievalWorkflow,
     ContextSufficiencyChecker,
     PlannedRetrievalWorkflow,
+    SufficiencyResult,
     TargetedQueryRewriter,
 )
 from devcontext.answer import ANSWER_MAX_TOKENS, AnswerGenerator, format_source
@@ -41,6 +42,14 @@ PLANNED_MAX_CHARS = 10000
 # the model reason long enough that reasoning tokens exhaust a 1024 budget before the
 # JSON is emitted, which surfaces as finish_reason=length and silently falls back.
 PLANNER_MAX_TOKENS = 1536
+
+# Per-requirement sufficiency emits one status object per requirement, so it needs
+# more room than the single-object legacy check for the same reason.
+REQUIREMENT_SUFFICIENCY_MAX_TOKENS = 4096
+
+# The rewriter's prompt carries every missing aspect, and per-requirement judging
+# produces a much longer gap list than the old source-type check did.
+REWRITE_MAX_TOKENS = 2048
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -119,6 +128,8 @@ def _print_agentic_answer(
     )
     status = "enough" if trace.final_sufficiency.enough else "insufficient"
     print(f"Sufficiency: {status}")
+    if debug:
+        _print_requirement_statuses(trace.final_sufficiency)
     print(f"Retries: {trace.retry_count}")
     print("\nAnswer:")
     print(result.answer_result.answer)
@@ -126,6 +137,17 @@ def _print_agentic_answer(
         _print_sources(result)
         print("\nTrace:")
         print(json.dumps(trace.to_dict(), ensure_ascii=False, indent=2))
+
+
+def _print_requirement_statuses(sufficiency: SufficiencyResult) -> None:
+    """Only the per-requirement path fills statuses; the legacy path prints nothing."""
+    if not sufficiency.statuses:
+        return
+    summary = ", ".join(
+        f"{status.requirement_id} {'ok' if status.satisfied else 'missing'}"
+        for status in sufficiency.statuses
+    )
+    print(f"Requirements: {summary}")
 
 
 def _print_sources(result: AgenticAnswerResult) -> None:
@@ -185,6 +207,26 @@ def _planner_llm_factory(settings: Settings) -> Callable[[], LLMClient]:
     )
 
 
+def _rewrite_llm_factory(settings: Settings) -> Callable[[], LLMClient]:
+    return lambda: DeepSeekLLMClient(
+        api_key=settings.deepseek_key(),
+        base_url=settings.deepseek_base_url,
+        model=settings.deepseek_model,
+        max_tokens=REWRITE_MAX_TOKENS,
+    )
+
+
+def _requirement_sufficiency_factory(
+    settings: Settings,
+) -> Callable[[], LLMClient]:
+    return lambda: DeepSeekLLMClient(
+        api_key=settings.deepseek_key(),
+        base_url=settings.deepseek_base_url,
+        model=settings.deepseek_model,
+        max_tokens=REQUIREMENT_SUFFICIENCY_MAX_TOKENS,
+    )
+
+
 def _question_planner(settings: Settings) -> QuestionPlanner:
     return QuestionPlanner(_planner_llm_factory(settings))
 
@@ -204,7 +246,7 @@ def _agentic_workflow(
         retrieval_policy=RetrievalPolicy(RetrievalService(settings)),
         context_builder=builder,
         sufficiency_checker=ContextSufficiencyChecker(short_llm_factory),
-        query_rewriter=TargetedQueryRewriter(short_llm_factory),
+        query_rewriter=TargetedQueryRewriter(_rewrite_llm_factory(settings)),
         answer_generator_factory=lambda: AnswerGenerator(_answer_client(settings)),
     )
 
@@ -221,8 +263,10 @@ def _planned_workflow(
         router=_query_router(settings),
         retrieval_policy=RetrievalPolicy(RetrievalService(settings)),
         context_builder=planned_builder,
-        sufficiency_checker=ContextSufficiencyChecker(short_llm_factory),
-        query_rewriter=TargetedQueryRewriter(short_llm_factory),
+        sufficiency_checker=ContextSufficiencyChecker(
+            short_llm_factory, _requirement_sufficiency_factory(settings)
+        ),
+        query_rewriter=TargetedQueryRewriter(_rewrite_llm_factory(settings)),
         legacy_workflow=_agentic_workflow(settings, legacy_builder),
         answer_generator_factory=lambda: AnswerGenerator(_answer_client(settings)),
     )

@@ -124,15 +124,58 @@ class FakePolicy:
 
 
 class FakeSufficiency:
-    def __init__(self, results: list[SufficiencyResult]) -> None:
-        self.results = list(results)
-        self.calls = 0
+    """Records which entry point ran, so tests can assert the branch taken.
 
-    def check(self, query: str, route: RouteDecision, bundle: object) -> SufficiencyResult:
-        self.calls += 1
-        if len(self.results) > 1:
-            return self.results.pop(0)
-        return self.results[0]
+    Both entry points share one result queue unless `requirement_results` is given.
+    """
+
+    def __init__(
+        self,
+        results: list[SufficiencyResult],
+        requirement_results: list[SufficiencyResult] | None = None,
+    ) -> None:
+        self.results = list(results)
+        self.requirement_results = (
+            None if requirement_results is None else list(requirement_results)
+        )
+        self.legacy_calls = 0
+        self.requirement_calls: list[tuple[list[object], dict[str, list[int]]]] = []
+
+    @staticmethod
+    def _next(queue: list[SufficiencyResult]) -> SufficiencyResult:
+        if len(queue) > 1:
+            return queue.pop(0)
+        return queue[0]
+
+    def check(
+        self, query: str, route: RouteDecision, bundle: object
+    ) -> SufficiencyResult:
+        self.legacy_calls += 1
+        return self._next(self.results)
+
+    def check_requirements(
+        self,
+        query: str,
+        requirements: object,
+        evidence_index: object,
+        bundle: object,
+    ) -> SufficiencyResult:
+        self.requirement_calls.append(
+            (
+                list(requirements),  # type: ignore[arg-type]
+                # Snapshot the lists too: retry attribution mutates them in place.
+                {
+                    key: list(value)
+                    for key, value in evidence_index.items()  # type: ignore[union-attr]
+                },
+            )
+        )
+        queue = (
+            self.results
+            if self.requirement_results is None
+            else self.requirement_results
+        )
+        return self._next(queue)
 
 
 class FakeRewriter:
@@ -207,10 +250,18 @@ def workflow(
     max_sub_questions: int = 6,
     sub_question_top_k: int = 3,
     max_rewrites: int = 1,
-) -> tuple[PlannedRetrievalWorkflow, FakePolicy, FakeLegacy, FakeGenerator, FakeRewriter]:
+) -> tuple[
+    PlannedRetrievalWorkflow,
+    FakePolicy,
+    FakeLegacy,
+    FakeGenerator,
+    FakeRewriter,
+    FakeSufficiency,
+]:
     policy = FakePolicy(responses)
     legacy = FakeLegacy()
     generator = generator or FakeGenerator()
+    checker = FakeSufficiency(sufficiency)
     query_rewriter = rewriter or FakeRewriter(
         QueryRewriteError("must not be called")
     )
@@ -220,7 +271,7 @@ def workflow(
         router=FakeRouter(routes),  # type: ignore[arg-type]
         retrieval_policy=policy,  # type: ignore[arg-type]
         context_builder=ContextBuilder(),
-        sufficiency_checker=FakeSufficiency(sufficiency),  # type: ignore[arg-type]
+        sufficiency_checker=checker,  # type: ignore[arg-type]
         query_rewriter=query_rewriter,  # type: ignore[arg-type]
         legacy_workflow=legacy,  # type: ignore[arg-type]
         answer_generator_factory=lambda: generator,  # type: ignore[arg-type]
@@ -228,11 +279,11 @@ def workflow(
         sub_question_top_k=sub_question_top_k,
         max_rewrites=max_rewrites,
     )
-    return subject, policy, legacy, generator, query_rewriter
+    return subject, policy, legacy, generator, query_rewriter, checker
 
 
 def test_each_sub_question_is_searched_independently() -> None:
-    subject, policy, _, _, _ = workflow(
+    subject, policy, _, _, _, _ = workflow(
         plan("入口在哪里", "设计依据是什么"),
         {"入口在哪里": QueryType.CODE, "设计依据是什么": QueryType.DOC},
         {
@@ -259,7 +310,7 @@ def test_each_sub_question_is_searched_independently() -> None:
 
 
 def test_results_are_merged_with_earlier_sub_questions_first() -> None:
-    subject, _, _, _, _ = workflow(
+    subject, _, _, _, _, _ = workflow(
         plan("入口在哪里", "设计依据是什么"),
         {"入口在哪里": QueryType.CODE, "设计依据是什么": QueryType.CODE},
         {
@@ -277,7 +328,7 @@ def test_results_are_merged_with_earlier_sub_questions_first() -> None:
 
 
 def test_sub_questions_are_capped() -> None:
-    subject, policy, _, _, _ = workflow(
+    subject, policy, _, _, _, _ = workflow(
         plan(*[f"问题{index}" for index in range(8)]),
         {f"问题{index}": QueryType.CODE for index in range(8)},
         {f"问题{index}": [result(index + 1, "CODE")] for index in range(8)},
@@ -291,7 +342,7 @@ def test_sub_questions_are_capped() -> None:
 
 
 def test_fallback_plan_delegates_to_the_legacy_workflow() -> None:
-    subject, policy, legacy, generator, _ = workflow(
+    subject, policy, legacy, generator, _, _ = workflow(
         plan(QUERY, decision_source="fallback"),
         {QUERY: QueryType.CODE},
         {QUERY: [result(1, "CODE")]},
@@ -308,7 +359,7 @@ def test_fallback_plan_delegates_to_the_legacy_workflow() -> None:
 
 
 def test_insufficient_evidence_triggers_one_targeted_rewrite() -> None:
-    subject, policy, _, generator, rewriter = workflow(
+    subject, policy, _, generator, rewriter, _ = workflow(
         plan("入口在哪里"),
         {"入口在哪里": QueryType.CODE},
         {"入口在哪里": [result(1, "CODE")], "Service run 精确代码": [result(2, "CODE")]},
@@ -328,7 +379,7 @@ def test_insufficient_evidence_triggers_one_targeted_rewrite() -> None:
 
 
 def test_rewrite_failure_stops_with_a_partial_answer() -> None:
-    subject, _, _, generator, _ = workflow(
+    subject, _, _, generator, _, _ = workflow(
         plan("入口在哪里"),
         {"入口在哪里": QueryType.CODE},
         {"入口在哪里": [result(1, "CODE")]},
@@ -344,7 +395,7 @@ def test_rewrite_failure_stops_with_a_partial_answer() -> None:
 
 
 def test_empty_context_skips_the_answer_model() -> None:
-    subject, _, _, generator, _ = workflow(
+    subject, _, _, generator, _, _ = workflow(
         plan("入口在哪里"),
         {"入口在哪里": QueryType.CODE},
         {"入口在哪里": []},
@@ -360,7 +411,7 @@ def test_empty_context_skips_the_answer_model() -> None:
 
 
 def test_answer_receives_the_plan_outline() -> None:
-    subject, _, _, generator, _ = workflow(
+    subject, _, _, generator, _, _ = workflow(
         plan("入口在哪里", "设计依据是什么"),
         {"入口在哪里": QueryType.CODE, "设计依据是什么": QueryType.DOC},
         {
@@ -382,7 +433,7 @@ def test_answer_receives_the_plan_outline() -> None:
 
 def test_evidence_requirements_choose_the_retrieval_route() -> None:
     evidence = FakeEvidencePlanner(evidence_plan(["CODE"], ["DOCUMENT"]))
-    subject, policy, _, _, _ = workflow(
+    subject, policy, _, _, _, _ = workflow(
         plan("入口在哪里", "设计依据是什么"),
         {"入口在哪里": QueryType.CODE, "设计依据是什么": QueryType.DOC},
         {
@@ -404,7 +455,7 @@ def test_evidence_requirements_choose_the_retrieval_route() -> None:
 
 
 def test_two_sources_in_one_requirement_route_as_mixed() -> None:
-    subject, policy, _, _, _ = workflow(
+    subject, policy, _, _, _, _ = workflow(
         plan("入口在哪里"),
         {"入口在哪里": QueryType.CODE},
         {"入口在哪里": [result(1, "CODE")]},
@@ -418,7 +469,7 @@ def test_two_sources_in_one_requirement_route_as_mixed() -> None:
 
 
 def test_evidence_plan_failure_falls_back_to_the_router() -> None:
-    subject, policy, _, _, _ = workflow(
+    subject, policy, _, _, _, _ = workflow(
         plan("入口在哪里"),
         {"入口在哪里": QueryType.DOC},
         {"入口在哪里": [result(1, "DOCUMENT")]},
@@ -437,7 +488,7 @@ def test_evidence_plan_failure_falls_back_to_the_router() -> None:
 
 def test_evidence_planner_is_not_called_when_the_question_plan_falls_back() -> None:
     evidence = FakeEvidencePlanner(evidence_plan(["CODE"]))
-    subject, policy, legacy, _, _ = workflow(
+    subject, policy, legacy, _, _, _ = workflow(
         plan(QUERY, decision_source="fallback"),
         {QUERY: QueryType.CODE},
         {QUERY: [result(1, "CODE")]},
@@ -474,9 +525,114 @@ def test_to_route_decision_maps_preferred_sources(
     assert to_route_decision(requirement).query_type is expected
 
 
+def test_evidence_plan_uses_the_per_requirement_checker() -> None:
+    subject, _, _, _, _, checker = workflow(
+        plan("入口在哪里"),
+        {"入口在哪里": QueryType.CODE},
+        {"入口在哪里": [result(1, "CODE")]},
+        [enough()],
+        evidence=FakeEvidencePlanner(evidence_plan(["CODE"])),
+    )
+
+    subject.run(QUERY, 5)
+
+    assert checker.legacy_calls == 0
+    assert len(checker.requirement_calls) == 1
+    requirements, evidence_index = checker.requirement_calls[0]
+    assert [item.id for item in requirements] == ["ER1"]
+    assert evidence_index == {"ER1": [1]}
+
+
+def test_fallback_evidence_plan_uses_the_legacy_checker() -> None:
+    subject, _, _, _, _, checker = workflow(
+        plan("入口在哪里"),
+        {"入口在哪里": QueryType.CODE},
+        {"入口在哪里": [result(1, "CODE")]},
+        [enough()],
+        evidence=FakeEvidencePlanner(),  # fallback: no requirements
+    )
+
+    subject.run(QUERY, 5)
+
+    assert checker.requirement_calls == []
+    assert checker.legacy_calls == 1
+
+
+def test_requirements_follow_the_sub_question_slice() -> None:
+    """A truncated sub-question must not leave its requirement behind."""
+    subject, policy, _, _, _, checker = workflow(
+        plan("入口在哪里", "设计依据是什么", "还有别的吗"),
+        {
+            "入口在哪里": QueryType.CODE,
+            "设计依据是什么": QueryType.CODE,
+            "还有别的吗": QueryType.CODE,
+        },
+        {
+            "入口在哪里": [result(1, "CODE")],
+            "设计依据是什么": [result(2, "CODE")],
+            "还有别的吗": [result(3, "CODE")],
+        },
+        [enough()],
+        evidence=FakeEvidencePlanner(
+            evidence_plan(["CODE"], ["CODE"], ["CODE"])
+        ),
+        max_sub_questions=2,
+    )
+
+    subject.run(QUERY, 5)
+
+    assert len(policy.calls) == 2
+    requirements, evidence_index = checker.requirement_calls[0]
+    assert [item.id for item in requirements] == ["ER1", "ER2"]
+    assert "ER3" not in evidence_index
+
+
+def test_retry_results_are_attributed_to_the_targeted_requirements() -> None:
+    missing = MissingAspect("CODE", "缺少入口证据", "ER1")
+    subject, _, _, _, _, checker = workflow(
+        plan("入口在哪里"),
+        {"入口在哪里": QueryType.CODE},
+        {"入口在哪里": [result(1, "CODE")], "精确检索": [result(2, "CODE")]},
+        [SufficiencyResult(False, (missing,), "不足", "llm"), enough()],
+        rewriter=FakeRewriter(
+            RewriteResult(QUERY, "精确检索", QueryType.CODE, (missing,))
+        ),
+        evidence=FakeEvidencePlanner(evidence_plan(["CODE"])),
+    )
+
+    subject.run(QUERY, 5)
+
+    assert len(checker.requirement_calls) == 2
+    _, first_index = checker.requirement_calls[0]
+    _, second_index = checker.requirement_calls[1]
+    assert first_index == {"ER1": [1]}
+    assert second_index == {"ER1": [1, 2]}
+
+
+def test_unattributed_aspects_do_not_add_evidence() -> None:
+    """An aspect without a requirement id (legacy shape) must not invent an entry."""
+    missing = MissingAspect("CODE", "缺少证据")
+    subject, _, _, _, _, checker = workflow(
+        plan("入口在哪里"),
+        {"入口在哪里": QueryType.CODE},
+        {"入口在哪里": [result(1, "CODE")], "精确检索": [result(2, "CODE")]},
+        [SufficiencyResult(False, (missing,), "不足", "llm"), enough()],
+        rewriter=FakeRewriter(
+            RewriteResult(QUERY, "精确检索", QueryType.CODE, (missing,))
+        ),
+        evidence=FakeEvidencePlanner(evidence_plan(["CODE"])),
+    )
+
+    subject.run(QUERY, 5)
+
+    _, first_index = checker.requirement_calls[0]
+    _, second_index = checker.requirement_calls[1]
+    assert second_index == first_index == {"ER1": [1]}
+
+
 def test_section_lengths_are_measured_into_the_trace() -> None:
     answer = "## 第一节\n\n" + "字" * 200 + "\n\n## 第二节\n\n" + "字" * 400
-    subject, _, _, _, _ = workflow(
+    subject, _, _, _, _, _ = workflow(
         plan("入口在哪里"),
         {"入口在哪里": QueryType.CODE},
         {"入口在哪里": [result(1, "CODE")]},
@@ -493,7 +649,7 @@ def test_section_lengths_are_measured_into_the_trace() -> None:
 
 
 def test_citations_are_recorded_in_the_trace() -> None:
-    subject, _, _, _, _ = workflow(
+    subject, _, _, _, _, _ = workflow(
         plan("入口在哪里"),
         {"入口在哪里": QueryType.CODE},
         {"入口在哪里": [result(1, "CODE")]},
@@ -528,7 +684,7 @@ def test_union_route_collapses_sub_question_evidence_needs(
 
 
 def test_empty_query_is_rejected() -> None:
-    subject, _, _, _, _ = workflow(
+    subject, _, _, _, _, _ = workflow(
         plan("入口在哪里"),
         {"入口在哪里": QueryType.CODE},
         {"入口在哪里": [result(1, "CODE")]},

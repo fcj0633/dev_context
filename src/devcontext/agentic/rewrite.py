@@ -66,7 +66,11 @@ class TargetedQueryRewriter:
         except QueryRewriteError:
             raise
         except Exception as exception:
-            raise QueryRewriteError("query rewrite generation failed") from exception
+            # The failure class is named, not the exception text: truncation, bad
+            # JSON and network errors are otherwise indistinguishable here.
+            raise QueryRewriteError(
+                f"query rewrite generation failed: {type(exception).__name__}"
+            ) from exception
 
         return RewriteResult(
             original_query=original_query,
