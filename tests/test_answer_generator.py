@@ -5,9 +5,10 @@ import pytest
 from devcontext.answer import (
     EMPTY_CONTEXT_ANSWER,
     AnswerGenerator,
-    InvalidCitationError,
+    describe_sections,
     extract_citations,
     format_source,
+    strip_citations,
 )
 from devcontext.llm import LLMMessage
 from devcontext.models import Citation, ContextBundle, ContextItem
@@ -59,12 +60,14 @@ def bundle(*labels: str) -> ContextBundle:
 
 def test_generator_passes_query_and_context_to_grounded_prompt() -> None:
     context_bundle = bundle("C1", "C2")
-    client = FakeLLMClient("事务入口见 [C1]，设计依据见 [C2]。")
+    client = FakeLLMClient("事务入口见 Service#run。\n[C1][C2]")
 
     result = AnswerGenerator(client).generate("购票事务如何实现？", context_bundle)
 
-    assert result.answer == "事务入口见 [C1]，设计依据见 [C2]。"
+    assert result.answer == "事务入口见 Service#run。"
     assert result.used_citations == ["C1", "C2"]
+    assert result.invalid_citations == []
+    assert result.zero_valid_citation is False
     assert len(client.calls) == 1
     messages = client.calls[0]
     assert [message.role for message in messages] == ["system", "user"]
@@ -73,6 +76,75 @@ def test_generator_passes_query_and_context_to_grounded_prompt() -> None:
     assert "购票事务如何实现？" in messages[1].content
     assert context_bundle.rendered_text in messages[1].content
     assert "[C1], [C2]" in messages[1].content
+
+
+def test_outline_adds_answer_chain_and_section_budget() -> None:
+    client = FakeLLMClient("第一节内容。\n[C1]")
+
+    AnswerGenerator(client).generate(
+        "问题",
+        bundle("C1"),
+        outline="Answer Outline:\nIntent: 了解流程\nDepth: detailed\n1. 入口在哪",
+    )
+
+    prompt = client.calls[0][1].content
+    assert "Answer Outline:" in prompt
+    assert "1. 入口在哪" in prompt
+    assert "结论 → 依据" in prompt
+    assert "150–350 字" in prompt
+    assert "不要在句子中间插入引用标记" in prompt
+
+
+def test_section_budget_is_stated_as_a_hard_limit() -> None:
+    client = FakeLLMClient("第一节内容。\n[C1]")
+
+    AnswerGenerator(client).generate(
+        "问题",
+        bundle("C1"),
+        outline="Answer Outline:\n1. 入口在哪",
+    )
+
+    prompt = client.calls[0][1].content
+    assert "这是硬性上限" in prompt
+    assert "每写完一节" in prompt
+    assert "不要用罗列细节来充篇幅" in prompt
+
+
+def test_without_outline_the_prompt_carries_no_answer_chain() -> None:
+    client = FakeLLMClient("第一节内容。\n[C1]")
+
+    AnswerGenerator(client).generate("问题", bundle("C1"))
+
+    prompt = client.calls[0][1].content
+    assert "Answer Outline:" not in prompt
+    assert "150–350 字" not in prompt
+
+
+def test_describe_sections_measures_each_section() -> None:
+    answer = "导语。\n\n## 第一节\n\n" + "字" * 200 + "\n\n## 第二节\n\n" + "字" * 400
+
+    described = describe_sections(answer)
+
+    assert described["count"] == 2
+    assert described["lengths"][0] < described["lengths"][1]
+    assert described["max_chars"] == described["lengths"][1]
+    assert described["over_budget"] == 1
+
+
+def test_describe_sections_handles_an_answer_without_sections() -> None:
+    assert describe_sections("一段没有小节的回答。") == {
+        "count": 0,
+        "lengths": [],
+        "max_chars": 0,
+        "over_budget": 0,
+    }
+
+
+def test_describe_sections_counts_nothing_over_budget_when_all_fit() -> None:
+    described = describe_sections("## 甲\n\n" + "字" * 100 + "\n\n## 乙\n\n" + "字" * 100)
+
+    assert described["count"] == 2
+    assert described["over_budget"] == 0
 
 
 def test_empty_context_returns_fixed_answer_without_calling_llm() -> None:
@@ -94,22 +166,39 @@ def test_citations_are_deduplicated_in_first_appearance_order() -> None:
     ]
 
 
-def test_invalid_citation_fails_closed() -> None:
-    client = FakeLLMClient("已有事实 [C1]，但还引用了 [C7] 和 [C0]。")
+def test_invalid_citations_are_dropped_without_losing_the_answer() -> None:
+    client = FakeLLMClient("已有事实。\n[C1][C7][C0]")
 
-    with pytest.raises(InvalidCitationError) as captured:
-        AnswerGenerator(client).generate("问题", bundle("C1", "C2"))
+    result = AnswerGenerator(client).generate("问题", bundle("C1", "C2"))
 
-    assert captured.value.invalid_citations == ["C7", "C0"]
-    assert "[C7], [C0]" in str(captured.value)
+    assert result.answer == "已有事实。"
+    assert result.used_citations == ["C1"]
+    assert result.invalid_citations == ["C7", "C0"]
+    assert result.zero_valid_citation is False
 
 
-def test_answer_without_citations_is_allowed() -> None:
+def test_answer_without_citations_is_allowed_and_flagged() -> None:
     result = AnswerGenerator(FakeLLMClient("当前证据不足以确认。")).generate(
         "问题", bundle("C1")
     )
 
     assert result.used_citations == []
+    assert result.answer == "当前证据不足以确认。"
+    assert result.zero_valid_citation is True
+
+
+def test_strip_citations_removes_markers_and_the_evidence_line() -> None:
+    text, labels = strip_citations("结论第一句。\n[C1][C3]\n\n结论第二句。\n[C2]")
+
+    assert text == "结论第一句。\n\n结论第二句。"
+    assert labels == ["C1", "C3", "C2"]
+
+
+def test_strip_citations_handles_inline_markers() -> None:
+    text, labels = strip_citations("入口见 [C1]。")
+
+    assert text == "入口见。"
+    assert labels == ["C1"]
 
 
 def test_empty_llm_answer_is_rejected() -> None:

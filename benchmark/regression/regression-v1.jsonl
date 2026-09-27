@@ -1,0 +1,5 @@
+{"id":"REG-001","question":"订单关闭为何这样设计","answerable_today":true,"focus":"是否同时给出设计依据与实现位置"}
+{"id":"REG-002","question":"简单解释用户注册的整个业务流程","answerable_today":true,"focus":"是否分节完整、是否触发 finish_reason=length"}
+{"id":"REG-003","question":"用户注册参数校验逻辑","answerable_today":true,"focus":"是否定位到参数校验责任链，而非泛泛而谈"}
+{"id":"REG-004","question":"为什么购票没有使用 MQ 作为异步中间件提高性能","answerable_today":false,"focus":"是否明确回答当前证据不足以确认该取舍"}
+{"id":"REG-005","question":"为什么使用 Redis 余票桶，而不直接 Redis 原子扣减 + MQ","answerable_today":false,"focus":"是否能分别找到余票桶职责、真实库存扣减位置、设计说明三块证据"}

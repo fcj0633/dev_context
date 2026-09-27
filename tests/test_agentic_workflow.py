@@ -10,7 +10,7 @@ from devcontext.agentic import (
     SufficiencyResult,
 )
 from devcontext.agentic.workflow import _merge_results
-from devcontext.answer import AnswerGenerator, InvalidCitationError
+from devcontext.answer import AnswerGenerator
 from devcontext.context import ContextBuilder
 from devcontext.models import SearchResult
 from devcontext.routing import DecisionSource, QueryType, RouteDecision
@@ -287,17 +287,20 @@ def test_empty_context_never_constructs_answer_generator() -> None:
     assert "缺少" in output.answer_result.answer
 
 
-def test_invalid_final_citation_still_fails_closed() -> None:
+def test_invalid_final_citation_is_dropped_instead_of_failing_closed() -> None:
     runner, _ = workflow(
         QueryType.CODE,
         FakePolicy([[result(1, "CODE")]]),
         SourceAwareChecker(QueryType.CODE),
         StaticRewriter([]),
-        FakeAnswerClient("伪造引用 [C9]。"),
+        FakeAnswerClient("伪造引用。\n[C9]"),
     )
 
-    with pytest.raises(InvalidCitationError):
-        runner.run("代码在哪里？", 5)
+    output = runner.run("代码在哪里？", 5)
+
+    assert output.answer_result.answer == "伪造引用。"
+    assert output.answer_result.used_citations == []
+    assert output.answer_result.invalid_citations == ["C9"]
 
 
 def test_new_results_are_first_and_ids_are_stably_deduplicated() -> None:

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
+from devcontext.answer import format_source
 from devcontext.models import AnswerResult, ContextBundle, ContextItem
 from devcontext.routing import QueryType, RouteDecision
 
@@ -106,6 +107,30 @@ class AgenticRoundTrace:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class SubQuestionTrace:
+    """One planned sub-question and what it retrieved.
+
+    ``selected_chunks`` labels are local to this sub-question's own candidate view
+    (``C1``..``Cn``), not the final ContextBundle labels.
+    """
+
+    sub_question_id: str
+    question: str
+    purpose: str
+    query_type: str
+    selected_chunks: list[SelectedChunkTrace]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "sub_question_id": self.sub_question_id,
+            "question": self.question,
+            "purpose": self.purpose,
+            "query_type": self.query_type,
+            "selected_chunks": [chunk.to_dict() for chunk in self.selected_chunks],
+        }
+
+
 @dataclass(slots=True)
 class AgenticTrace:
     route: RouteDecision
@@ -113,6 +138,11 @@ class AgenticTrace:
     retry_count: int
     final_sufficiency: SufficiencyResult
     stop_reason: str
+    plan: dict[str, Any] | None = None
+    sub_question_traces: list[SubQuestionTrace] = field(default_factory=list)
+    citations: dict[str, Any] | None = None
+    sections: dict[str, Any] | None = None
+    evidence_plan: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -121,7 +151,33 @@ class AgenticTrace:
             "retry_count": self.retry_count,
             "final_sufficiency": self.final_sufficiency.to_dict(),
             "stop_reason": self.stop_reason,
+            "plan": self.plan,
+            "sub_question_traces": [
+                trace.to_dict() for trace in self.sub_question_traces
+            ],
+            "citations": self.citations,
+            "sections": self.sections,
+            "evidence_plan": self.evidence_plan,
         }
+
+
+def build_citation_trace(
+    answer_result: AnswerResult, context_bundle: ContextBundle
+) -> dict[str, Any]:
+    """The only remaining trace of citations, since they are stripped from the answer."""
+    citations = {
+        item.citation.label: item.citation for item in context_bundle.items
+    }
+    return {
+        "used_labels": list(answer_result.used_citations),
+        "invalid_labels": list(answer_result.invalid_citations),
+        "zero_valid": answer_result.zero_valid_citation,
+        "sources": [
+            format_source(citations[label])
+            for label in answer_result.used_citations
+            if label in citations
+        ],
+    }
 
 
 @dataclass(slots=True)

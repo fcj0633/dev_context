@@ -14,6 +14,16 @@ DevContext-Java 从 `my12306` 的 Java 源码和 Markdown 项目文档中提取�
 
 要求：Java 21、Maven、Docker Desktop 和已配置的 `DASHSCOPE_API_KEY`。
 
+> **本机开着 VPN 时，必须把阿里云域名排除出代理。** Hiddify 这类工具会设置 `HTTP_PROXY` / `HTTPS_PROXY`，而经代理访问 `dashscope.aliyuncs.com` 会在 TLS 握手阶段失败（报 `schannel: failed to receive handshake`，Embedding 调用随即报错）。
+>
+> 解决办法是把它加进 `NO_PROXY`，**不需要改代码**：
+>
+> ```powershell
+> setx NO_PROXY "localhost,127.0.0.1,::1,.local,.aliyuncs.com"
+> ```
+>
+> 只排除阿里云域名、保留 DeepSeek 继续走代理是有意的——DeepSeek 经代理访问正常，全量关掉代理反而会引入新问题。设置后需重开终端。注意 **curl 优先读小写 `no_proxy`**：如果环境里同时存在该变量，不要在只设大写时把它留成空值，否则绕过会失效。
+
 ```powershell
 cd D:\Java-learning\DevContext
 .\scripts\bootstrap.ps1

@@ -9,10 +9,15 @@ from devcontext.agentic.models import (
     MissingAspect,
     SelectedChunkTrace,
     SufficiencyResult,
+    build_citation_trace,
 )
 from devcontext.agentic.rewrite import QueryRewriteError, TargetedQueryRewriter
 from devcontext.agentic.sufficiency import ContextSufficiencyChecker
-from devcontext.answer import EMPTY_CONTEXT_ANSWER, AnswerGenerator
+from devcontext.answer import (
+    EMPTY_CONTEXT_ANSWER,
+    AnswerGenerator,
+    describe_sections,
+)
 from devcontext.context import ContextBuilder
 from devcontext.models import AnswerResult, ContextBundle, SearchResult
 from devcontext.retrieval import RetrievalPolicy
@@ -128,6 +133,8 @@ class AgenticRetrievalWorkflow:
             retry_count=retry_count,
             final_sufficiency=final_sufficiency,
             stop_reason=stop_reason,
+            citations=build_citation_trace(answer_result, final_bundle),
+            sections=describe_sections(answer_result.answer),
         )
         return AgenticAnswerResult(answer_result, final_bundle, trace)
 

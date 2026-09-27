@@ -151,6 +151,8 @@ class ContextBundle:
 class AnswerResult:
     answer: str
     used_citations: list[str]
+    invalid_citations: list[str] = field(default_factory=list)
+    zero_valid_citation: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
