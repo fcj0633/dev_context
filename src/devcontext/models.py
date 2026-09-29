@@ -129,6 +129,10 @@ class ContextItem:
     score: float
     retrieval_rank: int
     truncated: bool = False
+    source_role: str = "UNKNOWN"
+    temporal_status: str = "UNKNOWN"
+    authority_priority: int = 50
+    sub_question_ids: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

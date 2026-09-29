@@ -43,6 +43,9 @@ def sub_question(**overrides: object) -> dict[str, object]:
         "purpose": "确定流程起点",
         "evidence_description": "注册入口的实现代码",
         "preferred_sources": ["CODE"],
+        "retrieval_query": "注册入口在哪个类 注册入口的实现代码",
+        "importance": "CORE",
+        "temporal_scope": "CURRENT",
     }
     entry.update(overrides)
     return entry
@@ -82,6 +85,43 @@ def test_valid_plan_is_accepted() -> None:
     assert plan.sub_questions[1].preferred_sources == ("DOCUMENT",)
     assert client.calls[0][0].content == QUESTION_PLANNER_SYSTEM_PROMPT
     assert QUERY in client.calls[0][1].content
+
+
+def test_investigation_plan_fields_are_preserved() -> None:
+    subject, _ = planner(plan_payload(
+        answer_goal="读者理解注册链路与边界",
+        explanation_strategy="flow",
+    ))
+
+    plan = subject.plan(QUERY)
+
+    assert plan.answer_goal == "读者理解注册链路与边界"
+    assert plan.explanation_strategy == "flow"
+    assert plan.sub_questions[0].retrieval_query == "注册入口在哪个类 注册入口的实现代码"
+    assert plan.sub_questions[0].importance == "CORE"
+    assert plan.sub_questions[0].temporal_scope == "CURRENT"
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"explanation_strategy": "unknown", "answer_goal": "目标"},
+        {
+            "answer_goal": "目标",
+            "explanation_strategy": "flow",
+            "sub_questions": [sub_question(importance="PRIMARY")],
+        },
+        {
+            "answer_goal": "目标",
+            "explanation_strategy": "flow",
+            "sub_questions": [sub_question(temporal_scope="PAST")],
+        },
+    ],
+)
+def test_invalid_investigation_fields_fall_back(overrides: dict[str, object]) -> None:
+    subject, _ = planner(plan_payload(**overrides))
+
+    assert subject.plan(QUERY).decision_source == "fallback"
 
 
 def test_both_sources_are_allowed_and_order_is_kept() -> None:
@@ -212,6 +252,9 @@ def test_plan_serializes_sources_as_a_list() -> None:
         "purpose": "确定流程起点",
         "evidence_description": "注册入口的实现代码",
         "preferred_sources": ["CODE"],
+        "retrieval_query": "注册入口在哪个类 注册入口的实现代码",
+        "importance": "CORE",
+        "temporal_scope": "CURRENT",
     }
 
 

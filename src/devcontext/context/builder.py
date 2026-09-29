@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
+from devcontext.evidence import EvidenceAnnotation
 from devcontext.models import Citation, ContextBundle, ContextItem, SearchResult
 
 
@@ -25,7 +26,10 @@ class ContextBuilder:
         self.max_chars = max_chars
 
     def build(
-        self, query: str, results: Sequence[SearchResult]
+        self,
+        query: str,
+        results: Sequence[SearchResult],
+        annotations: Mapping[int, EvidenceAnnotation] | None = None,
     ) -> ContextBundle:
         if not query.strip():
             raise ValueError("query must not be empty")
@@ -48,7 +52,9 @@ class ContextBuilder:
 
         for ranked in prioritized:
             label = f"C{len(items) + 1}"
-            item = self._item_from_result(ranked, label)
+            item = self._item_from_result(
+                ranked, label, (annotations or {}).get(ranked.result.id)
+            )
             header = self._render_header(item)
             full_block = self._render_block(header, item.content)
             separator_length = len(ITEM_SEPARATOR) if blocks else 0
@@ -126,7 +132,11 @@ class ContextBuilder:
         return self._render_block(self._render_header(item), item.content)
 
     @staticmethod
-    def _item_from_result(ranked: _RankedResult, label: str) -> ContextItem:
+    def _item_from_result(
+        ranked: _RankedResult,
+        label: str,
+        annotation: EvidenceAnnotation | None = None,
+    ) -> ContextItem:
         result = ranked.result
         citation = Citation(
             label=label,
@@ -146,6 +156,10 @@ class ContextBuilder:
             chunk_type=result.chunk_type,
             score=result.score,
             retrieval_rank=ranked.retrieval_rank,
+            source_role=annotation.source_role if annotation else "UNKNOWN",
+            temporal_status=annotation.temporal_status if annotation else "UNKNOWN",
+            authority_priority=annotation.authority_priority if annotation else 50,
+            sub_question_ids=list(annotation.sub_question_ids) if annotation else [],
         )
 
     @staticmethod
@@ -168,6 +182,13 @@ class ContextBuilder:
             heading = " > ".join(citation.heading_path) or "(root)"
             lines.append(f"Heading: {heading}")
         lines.append(f"Score: {item.score:.6f}")
+        if item.source_role != "UNKNOWN" or item.temporal_status != "UNKNOWN":
+            lines.append(
+                f"Evidence: role={item.source_role}; time={item.temporal_status}; "
+                f"priority={item.authority_priority}"
+            )
+        if item.sub_question_ids:
+            lines.append(f"Supports: {', '.join(item.sub_question_ids)}")
         return "\n".join(lines)
 
     @staticmethod

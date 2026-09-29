@@ -41,6 +41,15 @@ def document_result() -> SearchResult:
     )
 
 
+def test_answer_mode_defaults_to_legacy_and_accepts_explain() -> None:
+    parser = cli_module._parser()
+
+    assert parser.parse_args(["ask", "问题"]).answer_mode == "legacy"
+    assert parser.parse_args(
+        ["ask", "问题", "--answer-mode", "explain"]
+    ).answer_mode == "explain"
+
+
 def test_ask_cli_runs_grounded_pipeline_without_printing_sources(
     monkeypatch, capsys
 ) -> None:
@@ -352,21 +361,93 @@ def _planner_payload() -> str:
     return json.dumps(
         {
             "intent_summary": "用户想了解订单关闭的实现与设计",
+            "answer_goal": "理解订单关闭的执行链与设计取舍",
+            "explanation_strategy": "mixed",
             "sub_questions": [
                 {
                     "question": "订单关闭的入口方法在哪里",
                     "purpose": "定位实现",
                     "evidence_description": "订单关闭的触发与入口实现",
                     "preferred_sources": ["CODE"],
+                    "retrieval_query": "订单关闭 触发 入口 实现",
+                    "importance": "CORE",
+                    "temporal_scope": "CURRENT",
                 },
                 {
                     "question": "订单关闭的设计依据是什么",
                     "purpose": "确认设计原因",
                     "evidence_description": "订单关闭时序与取舍的设计说明",
                     "preferred_sources": ["DOCUMENT"],
+                    "retrieval_query": "订单关闭 时序 设计取舍",
+                    "importance": "SUPPORTING",
+                    "temporal_scope": "CURRENT",
                 },
             ],
             "answer_depth": "detailed",
+        },
+        ensure_ascii=False,
+    )
+
+
+def _evidence_plan_payload() -> str:
+    return json.dumps(
+        {
+            "schema_version": 2,
+            "requirements": [
+                {
+                    "target": "确认订单关闭的触发与入口实现",
+                    "success_criteria": "找到当前代码中的触发入口和关闭调用",
+                    "priority": "CORE",
+                    "temporal_scope": "CURRENT",
+                    "source_requirement": "CODE",
+                },
+                {
+                    "target": "确认订单关闭时序的设计依据",
+                    "success_criteria": "找到说明关闭时序和设计取舍的当前文档",
+                    "priority": "SUPPORTING",
+                    "temporal_scope": "CURRENT",
+                    "source_requirement": "DOCUMENT",
+                },
+            ],
+        },
+        ensure_ascii=False,
+    )
+
+
+def _search_actions_payload() -> str:
+    return json.dumps(
+        {
+            "actions": [
+                {
+                    "requirement_id": "ER1",
+                    "query": "订单关闭 触发 入口 实现",
+                    "reason": "定位当前关闭代码",
+                },
+                {
+                    "requirement_id": "ER2",
+                    "query": "订单关闭 时序 设计取舍",
+                    "reason": "定位当前设计说明",
+                },
+            ]
+        },
+        ensure_ascii=False,
+    )
+
+
+def _coverage_payload(*states: str) -> str:
+    selected = states or ("SATISFIED", "SATISFIED")
+    return json.dumps(
+        {
+            "statuses": [
+                {
+                    "requirement_id": f"ER{index}",
+                    "state": state,
+                    "evidence_ids": [index],
+                    "missing_criteria": [] if state == "SATISFIED" else ["尚缺直接证据"],
+                    "reason": "证据直接支持该需求" if state == "SATISFIED" else "只有部分证据",
+                }
+                for index, state in enumerate(selected, start=1)
+            ]
         },
         ensure_ascii=False,
     )
@@ -411,12 +492,12 @@ def test_ask_cli_planned_path_fans_out_over_sub_questions(
 
         def generate(self, messages: list[object]) -> str:
             system_prompt = messages[0].content  # type: ignore[attr-defined]
-            if "问题规划器" in system_prompt:
-                return _planner_payload()
-            if "证据需求审查器" in system_prompt:
-                return _requirement_statuses_payload()
-            if "证据充分性审查器" in system_prompt:
-                return '{"enough": true, "missing_aspects": [], "reason": "双源足够"}'
+            if "项目证据需求规划器" in system_prompt:
+                return _evidence_plan_payload()
+            if "查询生成器" in system_prompt:
+                return _search_actions_payload()
+            if "证据覆盖审查器" in system_prompt:
+                return _coverage_payload()
             return "订单关闭分为入口与设计两部分。\n[C1][C2]"
 
     monkeypatch.setenv("DEEPSEEK_API_KEY", "test-secret")
@@ -427,10 +508,9 @@ def test_ask_cli_planned_path_fans_out_over_sub_questions(
     captured = capsys.readouterr()
 
     assert exit_code == 0
-    assert "Plan: llm" in captured.out
-    assert "Intent: 用户想了解订单关闭的实现与设计" in captured.out
-    assert "SQ1. 订单关闭的入口方法在哪里 — 定位实现" in captured.out
-    assert "SQ2. 订单关闭的设计依据是什么 — 确认设计原因" in captured.out
+    assert "Evidence Plan: llm" in captured.out
+    assert "ER1. 确认订单关闭的触发与入口实现 — CODE" in captured.out
+    assert "ER2. 确认订单关闭时序的设计依据 — DOCUMENT" in captured.out
     assert "Route: MIXED (rules)" in captured.out
     assert retrieval_calls == [("hybrid", "CODE"), ("vector", "DOCUMENT")]
     assert "订单关闭分为入口与设计两部分。" in captured.out
@@ -459,10 +539,12 @@ def test_ask_cli_debug_prints_per_requirement_status(monkeypatch, capsys) -> Non
 
         def generate(self, messages: list[object]) -> str:
             system_prompt = messages[0].content  # type: ignore[attr-defined]
-            if "问题规划器" in system_prompt:
-                return _planner_payload()
-            if "证据需求审查器" in system_prompt:
-                return _requirement_statuses_payload(True, False)
+            if "项目证据需求规划器" in system_prompt:
+                return _evidence_plan_payload()
+            if "查询生成器" in system_prompt:
+                return _search_actions_payload()
+            if "证据覆盖审查器" in system_prompt:
+                return _coverage_payload("SATISFIED", "PARTIAL")
             return "订单关闭分为入口与设计两部分。\n[C1]"
 
     monkeypatch.setenv("DEEPSEEK_API_KEY", "test-secret")
@@ -473,13 +555,13 @@ def test_ask_cli_debug_prints_per_requirement_status(monkeypatch, capsys) -> Non
     captured = capsys.readouterr()
 
     assert exit_code == 0
-    assert "Sub-questions: SQ1 ok, SQ2 missing" in captured.out
+    assert "Requirements: ER1 ok, ER2 missing" in captured.out
     trace = json.loads(captured.out.split("Trace:\n", maxsplit=1)[1])
     assert [status["sub_question_id"] for status in trace["final_sufficiency"]["statuses"]] == [
-        "SQ1",
-        "SQ2",
+        "ER1",
+        "ER2",
     ]
-    assert trace["final_sufficiency"]["missing_aspects"][0]["sub_question_id"] == "SQ2"
+    assert trace["final_sufficiency"]["missing_aspects"][0]["sub_question_id"] == "ER2"
 
 
 def test_ask_cli_planned_path_asks_for_a_sectioned_answer(
@@ -508,12 +590,12 @@ def test_ask_cli_planned_path_asks_for_a_sectioned_answer(
 
         def generate(self, messages: list[object]) -> str:
             system_prompt = messages[0].content  # type: ignore[attr-defined]
-            if "问题规划器" in system_prompt:
-                return _planner_payload()
-            if "证据需求审查器" in system_prompt:
-                return _requirement_statuses_payload()
-            if "证据充分性审查器" in system_prompt:
-                return '{"enough": true, "missing_aspects": [], "reason": "足够"}'
+            if "项目证据需求规划器" in system_prompt:
+                return _evidence_plan_payload()
+            if "查询生成器" in system_prompt:
+                return _search_actions_payload()
+            if "证据覆盖审查器" in system_prompt:
+                return _coverage_payload()
             prompts.append(messages[1].content)  # type: ignore[attr-defined]
             return "第一节内容。\n[C1]"
 
@@ -526,9 +608,9 @@ def test_ask_cli_planned_path_asks_for_a_sectioned_answer(
 
     assert exit_code == 0
     assert len(prompts) == 1
-    assert "Answer Outline:" in prompts[0]
-    assert "1. 订单关闭的入口方法在哪里" in prompts[0]
-    assert "150–350 字" in prompts[0]
+    assert "Answer Outline:" not in prompts[0]
+    assert "Evidence Plan" not in prompts[0]
+    assert "只依据以上 Context" in prompts[0]
 
 
 def test_ask_cli_plan_only_prints_json_without_retrieving(
@@ -547,7 +629,7 @@ def test_ask_cli_plan_only_prints_json_without_retrieving(
 
         def generate(self, messages: list[object]) -> str:
             model_calls.append(messages[0].content)  # type: ignore[attr-defined]
-            return _planner_payload()
+            return _evidence_plan_payload()
 
     monkeypatch.setenv("DEEPSEEK_API_KEY", "test-secret")
     monkeypatch.setattr(cli_module, "RetrievalService", ForbiddenRetrievalService)
@@ -560,16 +642,88 @@ def test_ask_cli_plan_only_prints_json_without_retrieving(
     assert retrieval_attempts == []
     # Splitting and evidence planning are now one call, not two.
     assert len(model_calls) == 1
-    assert "问题规划器" in model_calls[0]
+    assert "项目证据需求规划器" in model_calls[0]
     plan = json.loads(captured.out)
     assert plan["decision_source"] == "llm"
-    assert [item["id"] for item in plan["sub_questions"]] == ["SQ1", "SQ2"]
-    assert plan["sub_questions"][0]["purpose"] == "定位实现"
-    # One call now yields both the split and each sub-question's evidence needs.
-    assert plan["sub_questions"][0]["evidence_description"] == "订单关闭的触发与入口实现"
-    assert plan["sub_questions"][0]["preferred_sources"] == ["CODE"]
-    assert plan["sub_questions"][1]["preferred_sources"] == ["DOCUMENT"]
-    assert "evidence_plan" not in plan
+    assert plan["schema_version"] == 2
+    assert [item["id"] for item in plan["requirements"]] == ["ER1", "ER2"]
+    assert plan["requirements"][0]["target"] == "确认订单关闭的触发与入口实现"
+    assert plan["requirements"][0]["source_requirement"] == "CODE"
+    assert plan["requirements"][1]["source_requirement"] == "DOCUMENT"
+    assert "answer_depth" not in plan
+
+
+def test_ask_cli_explain_mode_runs_answer_plan_and_review(
+    monkeypatch, capsys
+) -> None:
+    client_settings: list[dict[str, object]] = []
+
+    class FakeRetrievalService:
+        def __init__(self, settings: object) -> None:
+            pass
+
+        def search_with_trace(
+            self, strategy: str, query: str, top_k: int, *, source_type=None
+        ) -> SearchExecution:
+            results = [code_result()] if source_type == "CODE" else [document_result()]
+            return SearchExecution(results, SearchTimings())
+
+    class FakeDeepSeekClient:
+        def __init__(self, **kwargs: object) -> None:
+            client_settings.append(kwargs)
+            self.model = kwargs.get("model")
+            self.reasoning_effort = kwargs.get("reasoning_effort")
+            self.last_usage = {"prompt_tokens": 10, "completion_tokens": 5}
+
+        def generate(self, messages: list[object]) -> str:
+            system_prompt = messages[0].content  # type: ignore[attr-defined]
+            if "项目证据需求规划器" in system_prompt:
+                return _evidence_plan_payload()
+            if "查询生成器" in system_prompt:
+                return _search_actions_payload()
+            if "证据覆盖审查器" in system_prompt:
+                return _coverage_payload()
+            if "回答编排器" in system_prompt:
+                return json.dumps({
+                    "answer_goal": "理解订单关闭的执行链与设计取舍",
+                    "answer_depth": "detailed",
+                    "direct_answer": "当前实现由关闭代码与设计约束共同构成。",
+                    "summary_citation_labels": ["C1", "C2"],
+                    "explanation_strategy": "mixed",
+                    "sections": [
+                        {"title": "执行主线", "purpose": "解释执行", "key_points": ["入口与关闭"], "evidence_labels": ["C1"], "target_chars": 734},
+                        {"title": "设计约束", "purpose": "解释原因", "key_points": ["时序取舍"], "evidence_labels": ["C2"], "target_chars": 733},
+                        {"title": "边界", "purpose": "解释边界", "key_points": ["证据范围"], "evidence_labels": ["C1", "C2"], "target_chars": 733},
+                    ],
+                    "unresolved_gaps": [],
+                    "conflicts": [],
+                }, ensure_ascii=False)
+            if "回答审稿器" in system_prompt:
+                return json.dumps({
+                    "accepted": False,
+                    "issues": [{"issue_type": "POOR_ORDER", "description": "调整顺序"}],
+                    "final_answer_with_citations": "审稿后的连贯解释。 [C1][C2]",
+                }, ensure_ascii=False)
+            return "原始草稿。 [C1][C2]"
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-secret")
+    monkeypatch.setattr(cli_module, "RetrievalService", FakeRetrievalService)
+    monkeypatch.setattr(cli_module, "DeepSeekLLMClient", FakeDeepSeekClient)
+
+    exit_code = cli_module.main([
+        "ask", "订单关闭是怎么实现的，为什么这样设计？",
+        "--answer-mode", "explain", "--debug",
+    ])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "审稿后的连贯解释。" in captured.out
+    trace = json.loads(captured.out.split("Trace:\n", maxsplit=1)[1])
+    assert trace["answer_plan"]["direct_answer"].startswith("当前实现")
+    assert trace["review"]["issues"][0]["issue_type"] == "POOR_ORDER"
+    assert any(item.get("reasoning_effort") == "high" for item in client_settings)
+    assert any(item.get("max_tokens") == 32768 for item in client_settings)
+    assert any(item.get("json_mode") is True for item in client_settings)
 
 
 def test_ask_cli_planning_failure_falls_back_to_legacy_single_query(
@@ -598,10 +752,13 @@ def test_ask_cli_planning_failure_falls_back_to_legacy_single_query(
 
         def generate(self, messages: list[object]) -> str:
             system_prompt = messages[0].content  # type: ignore[attr-defined]
-            if "问题规划器" in system_prompt:
+            if "项目证据需求规划器" in system_prompt:
                 return "not a json plan"
-            if "证据充分性审查器" in system_prompt:
-                return '{"enough": true, "missing_aspects": [], "reason": "足够"}'
+            if "证据覆盖审查器" in system_prompt:
+                return json.dumps({"statuses": [{
+                    "requirement_id": "ER1", "state": "SATISFIED",
+                    "evidence_ids": [1], "missing_criteria": [], "reason": "足够",
+                }]}, ensure_ascii=False)
             return "回退回答。\n[C1]"
 
     monkeypatch.setenv("DEEPSEEK_API_KEY", "test-secret")
@@ -612,6 +769,82 @@ def test_ask_cli_planning_failure_falls_back_to_legacy_single_query(
     captured = capsys.readouterr()
 
     assert exit_code == 0
-    assert "Plan: fallback" in captured.out
-    assert retrieval_calls == [("hybrid", "创建订单的代码在哪里？")]
+    assert "Evidence Plan: fallback" in captured.out
+    assert retrieval_calls[0][0] == "hybrid"
+    assert "创建订单的代码在哪里" in retrieval_calls[0][1]
     assert "回退回答。" in captured.out
+
+
+def test_evaluate_answers_parses_its_arguments() -> None:
+    parser = cli_module._parser()
+
+    defaults = parser.parse_args(["evaluate-answers"])
+    assert defaults.cases is None
+    assert defaults.only is None
+    assert defaults.limit is None
+    assert defaults.resume is False
+    assert defaults.judge_model is None
+
+    explicit = parser.parse_args(
+        [
+            "evaluate-answers",
+            "--only", "flow-01,locate-01",
+            "--limit", "2",
+            "--resume",
+            "--judge-model", "deepseek-v4-pro",
+        ]
+    )
+    assert explicit.only == "flow-01,locate-01"
+    assert explicit.limit == 2
+    assert explicit.resume is True
+    assert explicit.judge_model == "deepseek-v4-pro"
+
+
+def test_evaluate_answers_forces_the_case_depth_and_report_path(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    captured: dict[str, object] = {}
+    workflow_calls: list[tuple[tuple, dict]] = []
+
+    def fake_workflow(*args, **kwargs):
+        workflow_calls.append((args, kwargs))
+        return "workflow"
+
+    def fake_runner(**kwargs):
+        captured.update(kwargs)
+        kwargs["workflow_factory"]("explain", "detailed")
+        return {
+            "summary": {
+                "judge_winners": {"V2": 18},
+                "arms": {},
+                "acceptance": [],
+                "human_review_queue": [],
+            },
+            "records": [],
+        }
+
+    monkeypatch.setattr(cli_module, "_planned_workflow", fake_workflow)
+    monkeypatch.setattr(cli_module, "run_answer_quality_evaluation", fake_runner)
+    output = tmp_path / "report.json"
+
+    code = cli_module.main(
+        [
+            "evaluate-answers",
+            "--only", "flow-01",
+            "--judge-model", "deepseek-v4-pro",
+            "--output", str(output),
+        ]
+    )
+
+    assert code == 0
+    assert captured["only"] == ["flow-01"]
+    # the depth comes from the dataset case, never from the planner
+    assert len(workflow_calls) == 1
+    args, _ = workflow_calls[0]
+    assert args[3] == "explain"  # answer_mode
+    assert args[4] is None  # no explicit context override; EvidencePlan complexity governs
+    assert args[5] == "detailed"  # depth_override
+    assert json.loads(output.read_text(encoding="utf-8"))["summary"]["judge_winners"] == {
+        "V2": 18
+    }
+    assert json.loads(capsys.readouterr().out)["judge_winners"] == {"V2": 18}

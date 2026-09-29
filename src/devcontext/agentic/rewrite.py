@@ -33,6 +33,7 @@ class TargetedQueryRewriter:
             raise ValueError("max_query_chars must be positive")
         self.llm_client_factory = llm_client_factory
         self.max_query_chars = max_query_chars
+        self.last_client: LLMClient | None = None
 
     def rewrite(
         self,
@@ -53,6 +54,7 @@ class TargetedQueryRewriter:
 
         try:
             client = self.llm_client_factory()
+            self.last_client = client
             response = client.generate(
                 _build_messages(
                     original_query,

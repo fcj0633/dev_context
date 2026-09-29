@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import time
 from collections.abc import Sequence
 
 from devcontext.llm.client import LLMMessage
@@ -19,6 +20,7 @@ class DeepSeekLLMClient:
         reasoning_effort: str = "low",
         max_tokens: int = 4096,
         timeout_seconds: int = 120,
+        json_mode: bool = False,
     ) -> None:
         if not api_key.strip():
             raise ValueError("DEEPSEEK_API_KEY is not configured")
@@ -38,6 +40,9 @@ class DeepSeekLLMClient:
         self.reasoning_effort = reasoning_effort
         self.max_tokens = max_tokens
         self.timeout_seconds = timeout_seconds
+        self.json_mode = json_mode
+        self.last_usage: dict[str, int] = {}
+        self.last_latency_ms: float = 0.0
 
     def generate(self, messages: Sequence[LLMMessage]) -> str:
         if not messages:
@@ -53,6 +58,8 @@ class DeepSeekLLMClient:
             "max_tokens": self.max_tokens,
             "stream": False,
         }
+        if self.json_mode:
+            body["response_format"] = {"type": "json_object"}
         config = "\n".join(
             [
                 f'url = "{self.base_url}/chat/completions"',
@@ -70,6 +77,7 @@ class DeepSeekLLMClient:
             ) as request_file:
                 json.dump(body, request_file, ensure_ascii=False)
                 request_path = request_file.name
+            started = time.perf_counter()
             try:
                 completed = subprocess.run(
                     [
@@ -88,6 +96,7 @@ class DeepSeekLLMClient:
                     timeout=self.timeout_seconds,
                     check=False,
                 )
+                self.last_latency_ms = (time.perf_counter() - started) * 1000
             except subprocess.TimeoutExpired as exception:
                 raise RuntimeError(
                     f"DeepSeek request timed out after {self.timeout_seconds} seconds"
@@ -115,6 +124,11 @@ class DeepSeekLLMClient:
             choice = payload["choices"][0]
             finish_reason = choice["finish_reason"]
             content = choice["message"]["content"]
+            usage = payload.get("usage", {})
+            if isinstance(usage, dict):
+                self.last_usage = {
+                    key: value for key, value in usage.items() if isinstance(value, int)
+                }
         except (json.JSONDecodeError, KeyError, IndexError, TypeError) as exception:
             raise RuntimeError("DeepSeek returned an invalid response payload") from exception
         if finish_reason != "stop":

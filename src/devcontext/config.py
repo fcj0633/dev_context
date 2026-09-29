@@ -25,6 +25,11 @@ class Settings(BaseSettings):
     deepseek_api_key: SecretStr | None = Field(default=None, alias="DEEPSEEK_API_KEY")
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_model: str = "deepseek-flash"
+    deepseek_planner_model: str | None = None
+    deepseek_answer_planner_model: str | None = None
+    deepseek_answer_model: str | None = None
+    deepseek_reviewer_model: str | None = None
+    source_policy_path: Path | None = None
     repository_name: str = "my12306"
 
     def validate_sources(self) -> None:

@@ -121,6 +121,33 @@ def test_truncated_evidence_is_reported_differently_from_missing_evidence() -> N
     assert "没有检索到任何证据" not in reasons["SQ2"]
 
 
+def test_partially_truncated_item_does_not_count_as_sufficient() -> None:
+    subject, client = checker(statuses_payload(True))
+    context = bundle((1, "CODE"))
+    context.items[0].truncated = True
+
+    result = subject.check_sub_questions(
+        QUERY, [sub_question("SQ1", "CODE")], {"SQ1": [1]}, context
+    )
+
+    assert result.enough is False
+    assert client.calls == []
+
+
+def test_mixed_requirement_needs_both_sources_before_semantic_judging() -> None:
+    subject, client = checker(statuses_payload(True))
+
+    result = subject.check_sub_questions(
+        QUERY,
+        [sub_question("SQ1", "CODE", "DOCUMENT")],
+        {"SQ1": [1]},
+        bundle((1, "CODE")),
+    )
+
+    assert result.enough is False
+    assert client.calls == []
+
+
 def test_source_mismatch_is_reported_as_a_mismatch() -> None:
     subject, _ = checker(statuses_payload(True, True))
     sub_questions = [sub_question("SQ1", "DOCUMENT")]

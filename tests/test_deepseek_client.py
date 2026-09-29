@@ -78,6 +78,28 @@ def test_deepseek_client_reports_http_error_without_exposing_key(monkeypatch) ->
     assert "[redacted]" in str(captured.value)
 
 
+def test_deepseek_client_enables_json_output_mode(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_run(arguments: list[str], **kwargs: object) -> SimpleNamespace:
+        request_argument = next(value for value in arguments if value.startswith("@"))
+        captured.update(json.loads(Path(request_argument[1:]).read_text(encoding="utf-8")))
+        return SimpleNamespace(
+            returncode=0,
+            stdout='{"choices":[{"finish_reason":"stop","message":{"content":"{}"}}],"usage":{"prompt_tokens":7,"completion_tokens":2}}\n__HTTP_STATUS__:200',
+            stderr="",
+        )
+
+    monkeypatch.setattr(deepseek_module.shutil, "which", lambda name: "curl.exe")
+    monkeypatch.setattr(deepseek_module.subprocess, "run", fake_run)
+    client = DeepSeekLLMClient(api_key="secret", json_mode=True)
+
+    client.generate([LLMMessage(role="user", content="json")])
+
+    assert captured["response_format"] == {"type": "json_object"}
+    assert client.last_usage == {"prompt_tokens": 7, "completion_tokens": 2}
+
+
 def test_deepseek_client_rejects_invalid_or_empty_response(monkeypatch) -> None:
     monkeypatch.setattr(deepseek_module.shutil, "which", lambda name: "curl.exe")
     monkeypatch.setattr(

@@ -194,3 +194,31 @@ def test_policy_rejects_invalid_input(query: str, top_k: int) -> None:
         RetrievalPolicy(FakeRetrievalService()).search(  # type: ignore[arg-type]
             query, decision(QueryType.CODE), top_k
         )
+
+
+@pytest.mark.parametrize(
+    ("scope", "expected_calls"),
+    [
+        ("CODE", [("hybrid", "查询", 5, "CODE")]),
+        ("DOCUMENT", [("vector", "查询", 5, "DOCUMENT")]),
+        (
+            "BOTH",
+            [
+                ("vector", "查询", 5, "CODE"),
+                ("vector", "查询", 20, "DOCUMENT"),
+            ],
+        ),
+        ("ANY", [("hybrid", "查询", 5, None)]),
+    ],
+)
+def test_evidence_source_scope_maps_to_existing_retrieval_strategies(
+    scope: str,
+    expected_calls: list[tuple[str, str, int, str | None]],
+) -> None:
+    service = FakeRetrievalService(
+        [result(1, "CODE")], [result(2, "DOCUMENT")]
+    )
+
+    RetrievalPolicy(service).search_scope_with_trace("查询", scope, 5)  # type: ignore[arg-type]
+
+    assert service.calls == expected_calls

@@ -1,0 +1,40 @@
+{
+  "rules": [
+    {
+      "pattern": "**/*验证报告*.md",
+      "source_role": "VERIFICATION",
+      "temporal_status": "CURRENT",
+      "priority": 95
+    },
+    {
+      "pattern": "**/*实验报告*.md",
+      "source_role": "VERIFICATION",
+      "temporal_status": "CURRENT",
+      "priority": 90
+    },
+    {
+      "pattern": "**/*历史*.md",
+      "source_role": "HISTORICAL_PLAN",
+      "temporal_status": "HISTORICAL",
+      "priority": 35
+    },
+    {
+      "pattern": "**/*后续*规划*.md",
+      "source_role": "HISTORICAL_PLAN",
+      "temporal_status": "FUTURE",
+      "priority": 30
+    },
+    {
+      "pattern": "**/*设计*.md",
+      "source_role": "CURRENT_DESIGN",
+      "temporal_status": "UNKNOWN",
+      "priority": 70
+    },
+    {
+      "pattern": "**/*.md",
+      "source_role": "GENERAL_DOCUMENT",
+      "temporal_status": "UNKNOWN",
+      "priority": 55
+    }
+  ]
+}

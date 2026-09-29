@@ -5,6 +5,8 @@ import pytest
 from devcontext.answer import (
     EMPTY_CONTEXT_ANSWER,
     AnswerGenerator,
+    AnswerPlan,
+    AnswerSection,
     describe_sections,
     extract_citations,
     format_source,
@@ -228,6 +230,30 @@ def test_partial_answer_requires_a_missing_aspect() -> None:
         AnswerGenerator(FakeLLMClient("unused")).generate_partial(
             "问题", bundle("C1"), []
         )
+
+
+def test_explain_draft_uses_adaptive_plan_without_legacy_chain() -> None:
+    client = FakeLLMClient("直接回答，然后解释。 [C1]")
+    plan = AnswerPlan(
+        "直接回答用户问题",
+        ("C1",),
+        "flow",
+        (AnswerSection("执行链", "按时序解释", ("入口到结果",), ("C1",), 400),),
+        (),
+        (),
+    )
+
+    draft = AnswerGenerator(client).generate_explained_draft(
+        "问题", bundle("C1"), plan
+    )
+    result = AnswerGenerator.finalize_draft(draft)
+
+    assert draft.used_citations == ("C1",)
+    assert result.answer == "直接回答，然后解释。"
+    prompt = client.calls[0][1].content
+    assert '"direct_answer": "直接回答用户问题"' in prompt
+    assert "不得每节重复“结论：”" in prompt
+    assert "结论 → 依据 → 具体实现" not in prompt
 
 
 def test_source_formatting_uses_real_citation_metadata() -> None:

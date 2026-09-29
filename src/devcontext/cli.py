@@ -5,25 +5,51 @@ import json
 import sys
 from collections.abc import Callable
 from dataclasses import asdict
+from datetime import datetime
 from pathlib import Path
 
 from devcontext.agentic import (
     AgenticAnswerResult,
     AgenticRetrievalWorkflow,
     ContextSufficiencyChecker,
+    CoverageChecker,
+    EvidenceDrivenWorkflow,
     PlannedRetrievalWorkflow,
+    RetrievalController,
+    RetrievalObserver,
+    SearchActionPlanner,
     SufficiencyResult,
     TargetedQueryRewriter,
 )
-from devcontext.answer import ANSWER_MAX_TOKENS, AnswerGenerator, format_source
-from devcontext.config import Settings
+from devcontext.answer import (
+    ANSWER_MAX_TOKENS,
+    EXPLAIN_ANSWER_MAX_TOKENS,
+    AnswerGenerator,
+    AnswerPlanner,
+    AnswerReviewer,
+    format_source,
+)
+from devcontext.config import Settings, project_root
 from devcontext.context import ContextBuilder
 from devcontext.embedding.client import BailianEmbeddingClient
+from devcontext.evidence import SourcePolicy, default_source_policy_path
+from devcontext.evaluation.answer_quality_runner import (
+    run_answer_quality_evaluation,
+)
 from devcontext.evaluation.runner import evaluate
+from devcontext.evaluation.retrieval_workflow_runner import (
+    FrozenEvidencePlanner,
+    FrozenSearchActionPlanner,
+    OracleCoverageChecker,
+    RetrievalTraceRecorder,
+    build_workflow_baseline,
+    compare_workflow_baseline,
+    run_retrieval_workflow_evaluation,
+)
 from devcontext.ingestion.pipeline import ingest
 from devcontext.llm import DeepSeekLLMClient, LLMClient
 from devcontext.models import SearchResult
-from devcontext.planning import QuestionPlan, QuestionPlanner
+from devcontext.planning import EvidencePlan, EvidencePlanner, QuestionPlan, QuestionPlanner
 from devcontext.retrieval import RetrievalPolicy, RetrievalService
 from devcontext.routing import QueryRouter, RouteDecision
 from devcontext.storage import ChunkStore
@@ -33,18 +59,24 @@ LEGACY_MAX_CHARS = 6000
 PLANNED_TOP_K = 12
 PLANNED_MAX_CHARS = 10000
 
-# Planning emits one object per sub-question, each carrying four prose/source fields,
-# so it needs more room than the other short calls: reasoning tokens exhaust a smaller
-# budget before the JSON is emitted, which surfaces as finish_reason=length.
-PLANNER_MAX_TOKENS = 2048
+# Evidence planning emits several structured requirement objects, so it needs more
+# room than the other short calls: reasoning tokens can exhaust a smaller budget
+# before the JSON is emitted, which surfaces as finish_reason=length.
+PLANNER_MAX_TOKENS = 8192
 
-# Per-sub-question sufficiency emits one status object per sub-question, so it needs
-# more room than the single-object legacy check for the same reason.
+# Coverage checking emits one status object per requirement, so it needs more room
+# than the single-object legacy check for the same reason.
 SUB_QUESTION_SUFFICIENCY_MAX_TOKENS = 4096
 
 # The rewriter's prompt carries every missing aspect, and per-requirement judging
 # produces a much longer gap list than the old source-type check did.
-REWRITE_MAX_TOKENS = 2048
+REWRITE_MAX_TOKENS = 4096
+ANSWER_PLANNER_MAX_TOKENS = 8192
+# The judge reads two full detailed answers, so it needs the same headroom as the
+# draft and reviewer; at 8192 its reasoning alone exhausted the cap and the verdict
+# came back as finish_reason=length.
+JUDGE_MAX_TOKENS = 32768
+REVIEWER_MAX_TOKENS = 32768
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -72,13 +104,68 @@ def _parser() -> argparse.ArgumentParser:
     ask.add_argument("query")
     ask.add_argument("--top-k", type=int, default=None)
     ask.add_argument("--max-chars", type=int, default=None)
-    ask.add_argument("--no-plan", action="store_true", help="Skip question planning and use the legacy single-query workflow")
-    ask.add_argument("--plan-only", action="store_true", help="Print the question plan as JSON without retrieving or answering")
+    ask.add_argument(
+        "--no-plan",
+        action="store_true",
+        help="Deprecated: use the legacy single-query workflow",
+    )
+    ask.add_argument(
+        "--plan-only",
+        action="store_true",
+        help="Print a plan as JSON without retrieving or answering",
+    )
+    ask.add_argument(
+        "--plan-format",
+        choices=("evidence", "legacy"),
+        default="evidence",
+        help="Choose the plan schema printed by --plan-only",
+    )
     ask.add_argument("--debug", action="store_true")
+    ask.add_argument(
+        "--answer-mode",
+        choices=("legacy", "explain"),
+        default="legacy",
+        help="Use the current template answer or the evidence-driven explanation path",
+    )
+    ask.add_argument(
+        "--depth",
+        choices=("brief", "standard", "detailed"),
+        default=None,
+        help="Force presentation depth without changing evidence retrieval",
+    )
 
     evaluation = subparsers.add_parser("evaluate", help="Run the retrieval benchmark")
     evaluation.add_argument("--benchmark", type=Path)
     evaluation.add_argument("--baseline", type=Path)
+
+    retrieval_workflow = subparsers.add_parser(
+        "evaluate-retrieval-workflow",
+        help="Run the L1.5 RetrievalController and regression benchmark",
+    )
+    retrieval_workflow.add_argument(
+        "--suite", choices=("l1.5", "regression", "all"), default="all"
+    )
+    retrieval_workflow.add_argument(
+        "--mode", choices=("frozen", "live", "both"), default="frozen"
+    )
+    retrieval_workflow.add_argument("--cases", type=Path)
+    retrieval_workflow.add_argument("--only", help="Comma-separated case ids")
+    retrieval_workflow.add_argument("--limit", type=int)
+    retrieval_workflow.add_argument("--runs", type=int, default=1)
+    retrieval_workflow.add_argument("--baseline", type=Path)
+    retrieval_workflow.add_argument("--output", type=Path)
+    retrieval_workflow.add_argument("--write-baseline", type=Path)
+
+    answers = subparsers.add_parser(
+        "evaluate-answers",
+        help="Run the L2 answer-quality set through both answer modes and judge them blind",
+    )
+    answers.add_argument("--cases", type=Path)
+    answers.add_argument("--only", help="Comma-separated case ids to run")
+    answers.add_argument("--limit", type=int)
+    answers.add_argument("--resume", action="store_true", help="Reuse the per-case journal if it exists")
+    answers.add_argument("--judge-model", help="Override the model used by the blind judge")
+    answers.add_argument("--output", type=Path, help="Where to write the JSON report")
     return parser
 
 
@@ -108,7 +195,14 @@ def _print_agentic_answer(
     trace = result.trace
     print("Question:")
     print(query)
-    if include_plan and trace.plan:
+    if include_plan and trace.evidence_plan:
+        print(f"\nEvidence Plan: {trace.evidence_plan['decision_source']}")
+        for requirement in trace.evidence_plan["requirements"]:
+            print(
+                f"  {requirement['id']}. {requirement['target']}"
+                f" — {requirement['source_requirement']}"
+            )
+    elif include_plan and trace.plan:
         print(f"\nPlan: {trace.plan['decision_source']}")
         print(f"Intent: {trace.plan['intent_summary']}")
         print(f"Depth: {trace.plan['answer_depth']}")
@@ -142,7 +236,7 @@ def _print_requirement_statuses(sufficiency: SufficiencyResult) -> None:
         f"{status.sub_question_id} {'ok' if status.satisfied else 'missing'}"
         for status in sufficiency.statuses
     )
-    print(f"Sub-questions: {summary}")
+    print(f"Requirements: {summary}")
 
 
 def _print_sources(result: AgenticAnswerResult) -> None:
@@ -158,6 +252,10 @@ def _print_sources(result: AgenticAnswerResult) -> None:
 
 
 def _print_question_plan(plan: QuestionPlan) -> None:
+    print(json.dumps(plan.to_dict(), ensure_ascii=False, indent=2))
+
+
+def _print_evidence_plan(plan: EvidencePlan) -> None:
     print(json.dumps(plan.to_dict(), ensure_ascii=False, indent=2))
 
 
@@ -181,12 +279,13 @@ def _short_llm_factory(settings: Settings) -> Callable[[], LLMClient]:
     )
 
 
-def _answer_client(settings: Settings) -> DeepSeekLLMClient:
+def _answer_client(settings: Settings, *, explain: bool = False) -> DeepSeekLLMClient:
     return DeepSeekLLMClient(
         api_key=settings.deepseek_key(),
         base_url=settings.deepseek_base_url,
-        model=settings.deepseek_model,
-        max_tokens=ANSWER_MAX_TOKENS,
+        model=settings.deepseek_answer_model or settings.deepseek_model,
+        reasoning_effort="high" if explain else "low",
+        max_tokens=EXPLAIN_ANSWER_MAX_TOKENS if explain else ANSWER_MAX_TOKENS,
     )
 
 
@@ -194,8 +293,10 @@ def _planner_llm_factory(settings: Settings) -> Callable[[], LLMClient]:
     return lambda: DeepSeekLLMClient(
         api_key=settings.deepseek_key(),
         base_url=settings.deepseek_base_url,
-        model=settings.deepseek_model,
+        model=settings.deepseek_planner_model or settings.deepseek_model,
+        reasoning_effort="high",
         max_tokens=PLANNER_MAX_TOKENS,
+        json_mode=True,
     )
 
 
@@ -204,7 +305,9 @@ def _rewrite_llm_factory(settings: Settings) -> Callable[[], LLMClient]:
         api_key=settings.deepseek_key(),
         base_url=settings.deepseek_base_url,
         model=settings.deepseek_model,
+        reasoning_effort="low",
         max_tokens=REWRITE_MAX_TOKENS,
+        json_mode=True,
     )
 
 
@@ -215,12 +318,54 @@ def _sub_question_sufficiency_factory(
         api_key=settings.deepseek_key(),
         base_url=settings.deepseek_base_url,
         model=settings.deepseek_model,
+        reasoning_effort="low",
         max_tokens=SUB_QUESTION_SUFFICIENCY_MAX_TOKENS,
+        json_mode=True,
+    )
+
+
+def _answer_planner_factory(settings: Settings) -> Callable[[], LLMClient]:
+    return lambda: DeepSeekLLMClient(
+        api_key=settings.deepseek_key(),
+        base_url=settings.deepseek_base_url,
+        model=settings.deepseek_answer_planner_model or settings.deepseek_model,
+        reasoning_effort="high",
+        max_tokens=ANSWER_PLANNER_MAX_TOKENS,
+        json_mode=True,
+    )
+
+
+def _reviewer_factory(settings: Settings) -> Callable[[], LLMClient]:
+    return lambda: DeepSeekLLMClient(
+        api_key=settings.deepseek_key(),
+        base_url=settings.deepseek_base_url,
+        model=settings.deepseek_reviewer_model or settings.deepseek_model,
+        reasoning_effort="high",
+        max_tokens=REVIEWER_MAX_TOKENS,
+        json_mode=True,
     )
 
 
 def _question_planner(settings: Settings) -> QuestionPlanner:
     return QuestionPlanner(_planner_llm_factory(settings))
+
+
+def _evidence_planner(settings: Settings) -> EvidencePlanner:
+    return EvidencePlanner(_planner_llm_factory(settings))
+
+
+def _answer_judge_factory(
+    settings: Settings, model: str | None = None
+) -> Callable[[], LLMClient]:
+    """The blind judge reads two long answers and emits a tiny verdict."""
+    return lambda: DeepSeekLLMClient(
+        api_key=settings.deepseek_key(),
+        base_url=settings.deepseek_base_url,
+        model=model or settings.deepseek_model,
+        reasoning_effort="high",
+        max_tokens=JUDGE_MAX_TOKENS,
+        json_mode=True,
+    )
 
 
 def _agentic_workflow(
@@ -242,18 +387,54 @@ def _planned_workflow(
     settings: Settings,
     planned_builder: ContextBuilder,
     legacy_builder: ContextBuilder,
-) -> PlannedRetrievalWorkflow:
-    short_llm_factory = _short_llm_factory(settings)
-    return PlannedRetrievalWorkflow(
-        planner=_question_planner(settings),
-        retrieval_policy=RetrievalPolicy(RetrievalService(settings)),
-        context_builder=planned_builder,
-        sufficiency_checker=ContextSufficiencyChecker(
-            short_llm_factory, _sub_question_sufficiency_factory(settings)
+    answer_mode: str = "legacy",
+    context_budget_override: int | None = None,
+    depth_override: str | None = None,
+) -> EvidenceDrivenWorkflow:
+    # Keep the builder arguments for one-cycle factory compatibility.  The new
+    # controller derives its budget from EvidencePlan complexity unless the
+    # caller explicitly supplies context_budget_override.
+    _ = planned_builder, legacy_builder
+    controller = _retrieval_controller(settings)
+    return EvidenceDrivenWorkflow(
+        controller,
+        answer_generator_factory=lambda: AnswerGenerator(
+            _answer_client(settings, explain=answer_mode == "explain")
         ),
-        query_rewriter=TargetedQueryRewriter(_rewrite_llm_factory(settings)),
-        legacy_workflow=_agentic_workflow(settings, legacy_builder),
-        answer_generator_factory=lambda: AnswerGenerator(_answer_client(settings)),
+        answer_planner=AnswerPlanner(_answer_planner_factory(settings)),
+        answer_reviewer=AnswerReviewer(_reviewer_factory(settings)),
+        answer_mode=answer_mode,
+        context_budget_override=context_budget_override,
+        depth_override=depth_override,
+    )
+
+
+def _retrieval_controller(
+    settings: Settings,
+    *,
+    observer: RetrievalObserver | None = None,
+    frozen_case: dict | None = None,
+) -> RetrievalController:
+    source_policy = SourcePolicy.from_file(
+        settings.source_policy_path or default_source_policy_path()
+    )
+    if frozen_case is None:
+        evidence_planner = _evidence_planner(settings)
+        action_planner = SearchActionPlanner(_rewrite_llm_factory(settings))
+        coverage_checker = CoverageChecker(
+            _sub_question_sufficiency_factory(settings)
+        )
+    else:
+        evidence_planner = FrozenEvidencePlanner(frozen_case)
+        action_planner = FrozenSearchActionPlanner(frozen_case)
+        coverage_checker = OracleCoverageChecker(frozen_case)
+    return RetrievalController(
+        evidence_planner=evidence_planner,
+        action_planner=action_planner,
+        retrieval_policy=RetrievalPolicy(RetrievalService(settings)),
+        coverage_checker=coverage_checker,
+        source_policy=source_policy,
+        observer=observer,
     )
 
 
@@ -312,7 +493,10 @@ def main(argv: list[str] | None = None) -> int:
                 print("No context found.")
         elif args.command == "ask":
             if args.plan_only:
-                _print_question_plan(_question_planner(settings).plan(args.query))
+                if args.plan_format == "legacy":
+                    _print_question_plan(_question_planner(settings).plan(args.query))
+                else:
+                    _print_evidence_plan(_evidence_planner(settings).plan(args.query))
             elif args.no_plan:
                 top_k, max_chars = _budget(args, planned=False)
                 result = _agentic_workflow(
@@ -326,6 +510,9 @@ def main(argv: list[str] | None = None) -> int:
                     settings,
                     ContextBuilder(max_chars=max_chars),
                     ContextBuilder(max_chars=legacy_max_chars),
+                    args.answer_mode,
+                    args.max_chars,
+                    args.depth,
                 )
                 result = workflow.run(args.query, top_k)
                 _print_agentic_answer(
@@ -360,6 +547,150 @@ def main(argv: list[str] | None = None) -> int:
                             if key != "cases"
                         },
                         "strategies": summary,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
+        elif args.command == "evaluate-retrieval-workflow":
+            if args.cases is not None and args.suite == "all":
+                raise ValueError("--cases requires --suite l1.5 or --suite regression")
+            if args.mode == "frozen" and args.runs != 1:
+                raise ValueError("--runs greater than 1 requires live or both mode")
+            benchmark_root = project_root() / "benchmark"
+            case_sets: dict[str, tuple[Path, bool]] = {}
+            if args.suite in {"l1.5", "all"}:
+                case_sets["l1.5"] = (
+                    args.cases if args.suite == "l1.5" and args.cases else
+                    benchmark_root / "l1.5-retrieval.jsonl",
+                    False,
+                )
+            if args.suite in {"regression", "all"}:
+                case_sets["regression"] = (
+                    args.cases if args.suite == "regression" and args.cases else
+                    benchmark_root / "regression" / "regression-v1.jsonl",
+                    True,
+                )
+            modes = {
+                "frozen": ("frozen",),
+                "live": ("live",),
+                "both": ("frozen", "live"),
+            }[args.mode]
+
+            def retrieval_controller_factory(
+                case: dict, mode: str, observer: RetrievalTraceRecorder
+            ) -> RetrievalController:
+                return _retrieval_controller(
+                    settings,
+                    observer=observer,
+                    frozen_case=case if mode == "frozen" else None,
+                )
+
+            source_policy_path = (
+                settings.source_policy_path or default_source_policy_path()
+            )
+            report = run_retrieval_workflow_evaluation(
+                case_sets=case_sets,
+                modes=modes,
+                runs=args.runs,
+                controller_factory=retrieval_controller_factory,
+                only=(
+                    [item for item in args.only.split(",") if item]
+                    if args.only else None
+                ),
+                limit=args.limit,
+                source_policy_path=source_policy_path,
+                progress=lambda message: print(message, flush=True),
+            )
+            baseline_path = (
+                args.baseline or benchmark_root / "baselines" /
+                "retrieval-workflow-v1.json"
+            )
+            if baseline_path.is_file():
+                baseline_value = json.loads(baseline_path.read_text(encoding="utf-8"))
+                report["baseline_comparison"] = compare_workflow_baseline(
+                    report, baseline_value
+                )
+            else:
+                report["baseline_comparison"] = {
+                    "status": "missing", "path": str(baseline_path)
+                }
+            artifacts = project_root() / "artifacts"
+            artifacts.mkdir(exist_ok=True)
+            timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            output = args.output or artifacts / f"retrieval-workflow-{timestamp}.json"
+            report["output"] = str(output)
+            output.write_text(
+                json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            if args.write_baseline:
+                baseline_value = build_workflow_baseline(report)
+                args.write_baseline.parent.mkdir(parents=True, exist_ok=True)
+                args.write_baseline.write_text(
+                    json.dumps(baseline_value, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+            print(
+                json.dumps(
+                    {
+                        "output": str(output),
+                        "summary": report["summary"],
+                        "acceptance": report["acceptance"],
+                        "quality_passed": report["quality_passed"],
+                        "baseline_comparison": report["baseline_comparison"],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
+        elif args.command == "evaluate-answers":
+            cases_path = args.cases or project_root() / "benchmark" / "l2-answer-quality.jsonl"
+            timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            artifacts = project_root() / "artifacts"
+            artifacts.mkdir(exist_ok=True)
+            output = args.output or artifacts / f"l2-answer-quality-{timestamp}.json"
+            # A stable journal so an interrupted run can be completed with --resume.
+            journal = artifacts / "l2-answer-quality-journal.jsonl"
+
+            def workflow_factory(mode: str, depth: str) -> EvidenceDrivenWorkflow:
+                # No explicit Context override: EvidencePlan complexity determines
+                # the retrieval budget; forced depth affects presentation only.
+                return _planned_workflow(
+                    settings,
+                    ContextBuilder(max_chars=PLANNED_MAX_CHARS),
+                    ContextBuilder(max_chars=LEGACY_MAX_CHARS),
+                    mode,
+                    None,
+                    depth,
+                )
+
+            outcome = run_answer_quality_evaluation(
+                cases_path=cases_path,
+                workflow_factory=workflow_factory,
+                judge_client_factory=_answer_judge_factory(settings, args.judge_model),
+                only=[item for item in args.only.split(",") if item] if args.only else None,
+                limit=args.limit,
+                journal_path=journal,
+                resume=args.resume,
+                progress=lambda message: print(message, flush=True),
+            )
+            summary = outcome["summary"]
+            output.write_text(
+                json.dumps(
+                    {"summary": summary, "records": outcome["records"]},
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            print(
+                json.dumps(
+                    {
+                        "output": str(output),
+                        "judge_winners": summary["judge_winners"],
+                        "arms": summary["arms"],
+                        "acceptance": summary["acceptance"],
+                        "human_review_queue": summary["human_review_queue"],
                     },
                     ensure_ascii=False,
                     indent=2,

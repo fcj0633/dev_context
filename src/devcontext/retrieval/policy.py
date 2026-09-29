@@ -6,7 +6,7 @@ import unicodedata
 
 from devcontext.models import SearchExecution, SearchResult, SearchTimings
 from devcontext.retrieval.service import RetrievalService
-from devcontext.routing import QueryType, RouteDecision
+from devcontext.routing import DecisionSource, QueryType, RouteDecision
 
 
 class RetrievalPolicy:
@@ -68,6 +68,56 @@ class RetrievalPolicy:
                 "DOCUMENT": document_candidates,
             },
         )
+
+    def search_scope_with_trace(
+        self, query: str, source_scope: str, top_k: int
+    ) -> SearchExecution:
+        """Execute an evidence-controller action using existing retrieval tools.
+
+        The LLM never selects a raw strategy.  Source scope is part of the
+        evidence contract and this deterministic policy maps it to the retrieval
+        behavior already benchmarked by the project.
+        """
+        if source_scope == "CODE":
+            return self.search_with_trace(
+                query,
+                RouteDecision(
+                    QueryType.CODE, DecisionSource.RULES, "evidence source scope CODE"
+                ),
+                top_k,
+            )
+        if source_scope == "DOCUMENT":
+            return self.search_with_trace(
+                query,
+                RouteDecision(
+                    QueryType.DOC,
+                    DecisionSource.RULES,
+                    "evidence source scope DOCUMENT",
+                ),
+                top_k,
+            )
+        if source_scope == "BOTH":
+            return self.search_with_trace(
+                query,
+                RouteDecision(
+                    QueryType.MIXED,
+                    DecisionSource.RULES,
+                    "evidence source scope BOTH",
+                ),
+                top_k,
+            )
+        if source_scope == "ANY":
+            execution = self.service.search_with_trace(
+                "hybrid", query, top_k, source_type=None
+            )
+            execution.source_candidates = {
+                source: [
+                    item for item in execution.results if item.source_type == source
+                ]
+                for source in ("CODE", "DOCUMENT")
+            }
+            return execution
+        raise ValueError("source_scope must be CODE, DOCUMENT, BOTH, or ANY")
 
 
 def _metadata_terms(value: str) -> set[str]:

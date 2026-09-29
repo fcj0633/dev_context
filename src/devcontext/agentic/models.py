@@ -3,9 +3,23 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
-from devcontext.answer import format_source
+from devcontext.answer.generator import format_source
 from devcontext.models import AnswerResult, ContextBundle, ContextItem
 from devcontext.routing import QueryType, RouteDecision
+
+
+@dataclass(frozen=True, slots=True)
+class StageUsage:
+    stage: str
+    latency_ms: float
+    decision_source: str
+    model: str | None = None
+    reasoning_effort: str | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,6 +87,10 @@ class SelectedChunkTrace:
     file_path: str
     identity: str
     retrieval_rank: int
+    source_role: str = "UNKNOWN"
+    temporal_status: str = "UNKNOWN"
+    authority_priority: int = 50
+    sub_question_ids: tuple[str, ...] = ()
 
     @classmethod
     def from_context_item(cls, item: ContextItem) -> "SelectedChunkTrace":
@@ -93,6 +111,10 @@ class SelectedChunkTrace:
             file_path=citation.file_path,
             identity=identity,
             retrieval_rank=item.retrieval_rank,
+            source_role=item.source_role,
+            temporal_status=item.temporal_status,
+            authority_priority=item.authority_priority,
+            sub_question_ids=tuple(item.sub_question_ids),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -108,6 +130,7 @@ class AgenticRoundTrace:
     sufficiency: SufficiencyResult
     rewrite: RewriteResult | None = None
     rewrite_error: str | None = None
+    rewrites: list[RewriteResult] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -118,6 +141,7 @@ class AgenticRoundTrace:
             "sufficiency": self.sufficiency.to_dict(),
             "rewrite": self.rewrite.to_dict() if self.rewrite else None,
             "rewrite_error": self.rewrite_error,
+            "rewrites": [rewrite.to_dict() for rewrite in self.rewrites],
         }
 
 
@@ -156,9 +180,19 @@ class AgenticTrace:
     sub_question_traces: list[SubQuestionTrace] = field(default_factory=list)
     citations: dict[str, Any] | None = None
     sections: dict[str, Any] | None = None
+    answer_plan: dict[str, Any] | None = None
+    source_conflicts: list[dict[str, Any]] = field(default_factory=list)
+    review: dict[str, Any] | None = None
+    stage_usage: list[StageUsage] = field(default_factory=list)
+    evidence_plan: dict[str, Any] | None = None
+    requirement_traces: list[dict[str, Any]] = field(default_factory=list)
+    search_actions: list[dict[str, Any]] = field(default_factory=list)
+    coverage_rounds: list[dict[str, Any]] = field(default_factory=list)
+    final_coverage: list[dict[str, Any]] = field(default_factory=list)
+    evidence_package_state: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        value = {
             "route": self.route.to_dict(),
             "rounds": [round_trace.to_dict() for round_trace in self.rounds],
             "retry_count": self.retry_count,
@@ -170,7 +204,23 @@ class AgenticTrace:
             ],
             "citations": self.citations,
             "sections": self.sections,
+            "answer_plan": self.answer_plan,
+            "source_conflicts": self.source_conflicts,
+            "review": self.review,
+            "stage_usage": [usage.to_dict() for usage in self.stage_usage],
         }
+        if self.evidence_plan is not None:
+            value.update(
+                {
+                    "evidence_plan": self.evidence_plan,
+                    "requirement_traces": self.requirement_traces,
+                    "search_actions": self.search_actions,
+                    "coverage_rounds": self.coverage_rounds,
+                    "final_coverage": self.final_coverage,
+                    "evidence_package_state": self.evidence_package_state,
+                }
+            )
+        return value
 
 
 def build_citation_trace(

@@ -55,6 +55,8 @@ class ContextSufficiencyChecker:
         self.requirement_llm_client_factory = (
             requirement_llm_client_factory or llm_client_factory
         )
+        self.last_client: LLMClient | None = None
+        self.last_requirement_client: LLMClient | None = None
 
     def check(
         self,
@@ -93,6 +95,7 @@ class ContextSufficiencyChecker:
 
         try:
             client = self.llm_client_factory()
+            self.last_client = client
             response = client.generate(
                 _build_messages(query, route, context_bundle)
             ).strip()
@@ -121,7 +124,14 @@ class ContextSufficiencyChecker:
         if not sub_questions:
             raise ValueError("check_sub_questions requires at least one sub-question")
 
-        by_chunk_id = {item.chunk_id: item for item in context_bundle.items}
+        # A partially cut chunk cannot prove that the needed fact survived the
+        # budget. It remains visible to the writer as context, but is deliberately
+        # excluded from the deterministic sufficiency gate.
+        by_chunk_id = {
+            item.chunk_id: item
+            for item in context_bundle.items
+            if not item.truncated
+        }
         statuses: list[EvidenceStatus] = []
         missing: list[MissingAspect] = []
         for sub_question in sub_questions:
@@ -131,10 +141,10 @@ class ContextSufficiencyChecker:
                 for chunk_id in retrieved
                 if chunk_id in by_chunk_id
             ]
-            if any(
-                item.citation.source_type in sub_question.preferred_sources
-                for item in in_bundle
-            ):
+            present_sources = {
+                item.citation.source_type for item in in_bundle
+            }
+            if set(sub_question.preferred_sources).issubset(present_sources):
                 statuses.append(
                     EvidenceStatus(
                         sub_question.id, True, "已有对应来源的证据进入 Context"
@@ -168,6 +178,7 @@ class ContextSufficiencyChecker:
             )
         try:
             client = self.requirement_llm_client_factory()
+            self.last_requirement_client = client
             response = client.generate(
                 _build_sub_question_messages(
                     query, sub_questions, evidence_index, context_bundle

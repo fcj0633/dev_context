@@ -14,6 +14,7 @@ from devcontext.evaluation.runner import (
     _strategy_metrics,
     compare_baseline,
     duplicate_result_rate,
+    full_case_success_at,
     load_cases,
     recall_at,
     reciprocal_rank,
@@ -145,6 +146,38 @@ def test_any_of_counts_as_one_requirement() -> None:
 
     for k in (1, 5, 10, 20):
         assert recall_at([document], relevant, k) == 1.0
+
+
+def test_full_case_success_requires_every_logical_group() -> None:
+    code = result(1)
+    document = result(
+        2,
+        source_type="DOCUMENT",
+        path="docs/design.md",
+        class_name=None,
+        symbol=None,
+        signature=None,
+        title="事务处理",
+        heading_path=["系统设计", "事务处理"],
+    )
+    relevant = [code_target(), doc_target()]
+
+    assert full_case_success_at([code], relevant, 5) is False
+    assert full_case_success_at([code, document], relevant, 5) is True
+
+
+def test_case_details_and_summaries_include_full_case_success() -> None:
+    case = benchmark_case("MIXED")
+    detail = _case_detail(
+        case,
+        SearchExecution([result(1)], SearchTimings()),
+    )
+    metrics = _strategy_metrics("hybrid", [detail])
+
+    assert detail["recall_at_5"] == 0.5
+    assert detail["full_case_success_at_5"] is False
+    assert metrics["full_case_success_at_5"] == 0.0
+    assert metrics["by_type"]["MIXED"]["full_case_success_at_5"] == 0.0
 
 
 def test_validate_cases_rejects_invalid_mixed_and_same_name_target() -> None:

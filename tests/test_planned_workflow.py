@@ -13,7 +13,13 @@ from devcontext.agentic import (
     union_route,
 )
 from devcontext.agentic.models import MissingAspect
-from devcontext.answer import SECTION_MAX_CHARS
+from devcontext.answer import (
+    SECTION_MAX_CHARS,
+    AnswerPlan,
+    AnswerSection,
+    GroundedDraft,
+    ReviewResult,
+)
 from devcontext.context import ContextBuilder
 from devcontext.models import AnswerResult, SearchExecution, SearchResult, SearchTimings
 from devcontext.planning import QuestionPlan, SubQuestion
@@ -56,6 +62,9 @@ def plan(*entries: tuple[str, tuple[str, ...]], decision_source: str = "llm") ->
                 "purpose",
                 f"{question} 要找的证据",
                 sources,
+                question,
+                "CORE" if index == 1 else "SUPPORTING",
+                "CURRENT",
             )
             for index, (question, sources) in enumerate(entries, start=1)
         ),
@@ -141,6 +150,21 @@ class FakeRewriter:
         return self.rewrite_result
 
 
+class PerAspectRewriter:
+    def __init__(self) -> None:
+        self.target_ids: list[str] = []
+
+    def rewrite(self, query, route, sufficiency, bundle):
+        target = sufficiency.missing_aspects[0].sub_question_id
+        self.target_ids.append(target)
+        return RewriteResult(
+            query,
+            f"retry-{target}",
+            QueryType.CODE,
+            sufficiency.missing_aspects,
+        )
+
+
 class FakeGenerator:
     def __init__(self, answer: str = "完整回答") -> None:
         self.answer = answer
@@ -202,6 +226,8 @@ def workflow(
     max_sub_questions: int = 6,
     sub_question_top_k: int = 3,
     max_rewrites: int = 1,
+    depth_override: str | None = None,
+    answer_mode: str = "legacy",
 ) -> tuple[
     PlannedRetrievalWorkflow,
     FakePolicy,
@@ -228,6 +254,8 @@ def workflow(
         max_sub_questions=max_sub_questions,
         sub_question_top_k=sub_question_top_k,
         max_rewrites=max_rewrites,
+        depth_override=depth_override,
+        answer_mode=answer_mode,
     )
     return subject, policy, legacy, generator, query_rewriter, checker
 
@@ -245,7 +273,7 @@ def test_each_sub_question_is_searched_independently() -> None:
     output = subject.run(QUERY, 5)
 
     assert policy.calls == [
-        ("入口在哪里", QueryType.CODE, 3),
+        ("入口在哪里", QueryType.CODE, 5),
         ("设计依据是什么", QueryType.DOC, 3),
     ]
     assert output.trace.route.query_type is QueryType.MIXED
@@ -450,6 +478,36 @@ def test_retry_results_are_attributed_to_the_targeted_sub_questions() -> None:
     assert second_index == {"SQ1": [1, 2]}
 
 
+def test_one_retry_round_uses_at_most_four_independent_search_tasks() -> None:
+    entries = tuple(sq(f"问题{index}") for index in range(1, 6))
+    missing = tuple(
+        MissingAspect("CODE", f"缺口 {index}", f"SQ{index}")
+        for index in range(1, 6)
+    )
+    responses = {
+        **{f"问题{index}": [result(index, "CODE")] for index in range(1, 6)},
+        "retry-SQ1": [result(11, "CODE")],
+        **{
+            f"问题{index} 缺口 {index} void run()": [result(index + 10, "CODE")]
+            for index in range(2, 5)
+        },
+    }
+    rewriter = PerAspectRewriter()
+    subject, policy, _, _, _, _ = workflow(
+        plan(*entries),
+        responses,
+        [SufficiencyResult(False, missing, "缺证据", "llm"), enough()],
+        rewriter=rewriter,  # type: ignore[arg-type]
+    )
+
+    output = subject.run(QUERY, 12)
+
+    assert rewriter.target_ids == ["SQ1"]
+    assert len(policy.calls) == 9  # five initial tasks plus four targeted tasks
+    assert len(output.trace.rounds[0].rewrites) == 4
+    assert output.trace.retry_count == 1
+
+
 def test_unattributed_aspects_do_not_add_evidence() -> None:
     """An aspect without a sub-question id (legacy shape) must not invent an entry."""
     missing = MissingAspect("CODE", "缺少证据")
@@ -529,3 +587,168 @@ def test_empty_query_is_rejected() -> None:
 
     with pytest.raises(ValueError):
         subject.run("   ", 5)
+
+
+class FakeExplainGenerator:
+    def __init__(self) -> None:
+        self.calls = 0
+        self.client = type("ClientStats", (), {
+            "model": "answer-model",
+            "reasoning_effort": "high",
+            "last_usage": {"prompt_tokens": 11, "completion_tokens": 7},
+        })()
+
+    def generate_explained_draft(self, query, bundle, answer_plan):
+        self.calls += 1
+        return GroundedDraft("先直接回答。 [C1]", ("C1",), ())
+
+    @staticmethod
+    def finalize_draft(draft: GroundedDraft) -> AnswerResult:
+        return AnswerResult(
+            draft.text_with_citations.replace(" [C1]", ""),
+            list(draft.used_citations),
+        )
+
+
+class FakeAnswerPlanner:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def plan(self, query, question_plan, bundle, gaps):
+        self.calls += 1
+        return AnswerPlan(
+            "当前实现有明确主线。",
+            ("C1",),
+            "flow",
+            (
+                AnswerSection("主流程", "解释顺序", ("当前实现",), ("C1",), 800),
+                AnswerSection("边界", "解释边界", ("保证范围",), ("C1",), 700),
+                AnswerSection("失败场景", "解释失败", ("失败行为",), ("C1",), 700),
+            ),
+            (),
+            (),
+        )
+
+
+class FakeReviewer:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def review(self, query, question_plan, answer_plan, draft, bundle):
+        self.calls += 1
+        return ReviewResult(True, (), "审稿后的回答。 [C1]")
+
+
+def test_explain_mode_plans_drafts_and_reviews_detailed_answers() -> None:
+    planned = plan(sq("入口在哪里"))
+    policy = FakePolicy({"入口在哪里": [result(1, "CODE")]})
+    generator = FakeExplainGenerator()
+    answer_planner = FakeAnswerPlanner()
+    reviewer = FakeReviewer()
+    subject = PlannedRetrievalWorkflow(
+        planner=FakePlanner(planned),
+        retrieval_policy=policy,
+        context_builder=ContextBuilder(),
+        sufficiency_checker=FakeSufficiency([enough()]),
+        query_rewriter=FakeRewriter(QueryRewriteError("unused")),
+        legacy_workflow=FakeLegacy(),
+        answer_generator_factory=lambda: generator,  # type: ignore[arg-type]
+        answer_planner=answer_planner,  # type: ignore[arg-type]
+        answer_reviewer=reviewer,  # type: ignore[arg-type]
+        answer_mode="explain",
+    )
+
+    output = subject.run(QUERY, 5)
+
+    assert generator.calls == 1
+    assert answer_planner.calls == 1
+    assert reviewer.calls == 1
+    assert output.answer_result.answer == "审稿后的回答。"
+    assert output.trace.answer_plan is not None
+    assert output.trace.review is not None
+    assert output.trace.rounds[0].selected_chunks[0].source_role == "IMPLEMENTATION"
+    assert output.trace.rounds[0].selected_chunks[0].temporal_status == "CURRENT"
+    assert {item.stage for item in output.trace.stage_usage} >= {
+        "investigation_planning", "evidence_retrieval", "sufficiency",
+        "answer_planning", "grounded_draft", "answer_review",
+    }
+    draft_usage = next(
+        item for item in output.trace.stage_usage if item.stage == "grounded_draft"
+    )
+    assert draft_usage.model == "answer-model"
+    assert draft_usage.input_tokens == 11
+    assert draft_usage.output_tokens == 7
+
+
+def test_brief_explain_mode_skips_answer_planner_and_reviewer() -> None:
+    planned = plan(sq("入口在哪里"))
+    planned = QuestionPlan(
+        planned.original_query,
+        planned.intent_summary,
+        planned.sub_questions,
+        "brief",
+        answer_goal="定位入口",
+    )
+    policy = FakePolicy({"入口在哪里": [result(1, "CODE")]})
+    generator = FakeExplainGenerator()
+    answer_planner = FakeAnswerPlanner()
+    reviewer = FakeReviewer()
+    subject = PlannedRetrievalWorkflow(
+        planner=FakePlanner(planned), retrieval_policy=policy,
+        context_builder=ContextBuilder(),
+        sufficiency_checker=FakeSufficiency([enough()]),
+        query_rewriter=FakeRewriter(QueryRewriteError("unused")),
+        legacy_workflow=FakeLegacy(),
+        answer_generator_factory=lambda: generator,  # type: ignore[arg-type]
+        answer_planner=answer_planner,  # type: ignore[arg-type]
+        answer_reviewer=reviewer,  # type: ignore[arg-type]
+        answer_mode="explain",
+    )
+
+    subject.run(QUERY, 5)
+
+    assert answer_planner.calls == 0
+    assert reviewer.calls == 0
+
+
+def test_depth_override_replaces_the_planner_choice_and_budget() -> None:
+    subject, _, _, _, _, _ = workflow(
+        plan(sq("入口在哪里", "CODE"), sq("设计依据是什么", "DOCUMENT")),
+        {
+            "入口在哪里": [result(1, "CODE")],
+            "设计依据是什么": [result(2, "DOCUMENT")],
+        },
+        [enough()],
+        depth_override="brief",
+    )
+
+    output = subject.run(QUERY, 5)
+
+    # The plan was authored as detailed; the override wins and drives the budget.
+    assert output.trace.plan is not None
+    assert output.trace.plan["answer_depth"] == "brief"
+    assert output.context_bundle.max_chars == 8000
+
+
+def test_depth_override_keeps_the_planner_choice_when_absent() -> None:
+    subject, _, _, _, _, _ = workflow(
+        plan(sq("入口在哪里", "CODE")),
+        {"入口在哪里": [result(1, "CODE")]},
+        [enough()],
+    )
+
+    output = subject.run(QUERY, 5)
+
+    assert output.trace.plan is not None
+    assert output.trace.plan["answer_depth"] == "detailed"
+    assert output.context_bundle.max_chars == 28000
+
+
+def test_invalid_depth_override_is_rejected() -> None:
+    with pytest.raises(ValueError, match="depth_override"):
+        workflow(
+            plan(sq("入口在哪里", "CODE")),
+            {"入口在哪里": [result(1, "CODE")]},
+            [enough()],
+            depth_override="verbose",
+        )

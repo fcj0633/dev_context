@@ -84,6 +84,16 @@ def recall_at(results: Sequence[SearchResult], relevant: list[dict[str, Any]], k
     return hits / len(relevant)
 
 
+def full_case_success_at(
+    results: Sequence[SearchResult], relevant: list[dict[str, Any]], k: int
+) -> bool:
+    """Return whether every logical evidence group is present in Top-K."""
+    return bool(relevant) and all(
+        any(_matches_group(result, group) for result in results[:k])
+        for group in relevant
+    )
+
+
 def reciprocal_rank(results: Sequence[SearchResult], relevant: list[dict[str, Any]]) -> float:
     for rank, result in enumerate(results, start=1):
         if any(_matches_group(result, group) for group in relevant):
@@ -351,6 +361,10 @@ def _case_detail(
         "recall_at_5": recall_at_5,
         "recall_at_10": recall_at(results, relevant, 10),
         "recall_at_20": recall_at(results, relevant, 20),
+        "full_case_success_at_3": full_case_success_at(results, relevant, 3),
+        "full_case_success_at_5": full_case_success_at(results, relevant, 5),
+        "full_case_success_at_10": full_case_success_at(results, relevant, 10),
+        "full_case_success_at_20": full_case_success_at(results, relevant, 20),
         "reciprocal_rank": reciprocal_rank(results, relevant),
         "code_hit_at_3": _source_hit(results, relevant, "CODE", 3),
         "code_hit_at_5": code_hit_at_5,
@@ -402,6 +416,10 @@ def _summary(details: list[dict[str, Any]]) -> dict[str, Any]:
             "recall_at_5": 0.0,
             "recall_at_10": 0.0,
             "recall_at_20": 0.0,
+            "full_case_success_at_3": 0.0,
+            "full_case_success_at_5": 0.0,
+            "full_case_success_at_10": 0.0,
+            "full_case_success_at_20": 0.0,
             "mrr": 0.0,
         }
     return {
@@ -410,6 +428,18 @@ def _summary(details: list[dict[str, Any]]) -> dict[str, Any]:
         "recall_at_5": _mean(item["recall_at_5"] for item in details),
         "recall_at_10": _mean(item["recall_at_10"] for item in details),
         "recall_at_20": _mean(item["recall_at_20"] for item in details),
+        "full_case_success_at_3": _mean(
+            float(item["full_case_success_at_3"]) for item in details
+        ),
+        "full_case_success_at_5": _mean(
+            float(item["full_case_success_at_5"]) for item in details
+        ),
+        "full_case_success_at_10": _mean(
+            float(item["full_case_success_at_10"]) for item in details
+        ),
+        "full_case_success_at_20": _mean(
+            float(item["full_case_success_at_20"]) for item in details
+        ),
         "mrr": _mean(item["reciprocal_rank"] for item in details),
     }
 
@@ -783,6 +813,8 @@ def evaluate(
     }
     report: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION, "generated_at": generated_at,
+        "benchmark_level": "L1",
+        "benchmark_purpose": "fixed_query_retrieval_regression",
         "git_commit": _git_commit(), "benchmark": str(benchmark),
         "benchmark_sha256": benchmark_hash, "baseline": str(baseline),
         "case_count": len(cases), "case_distribution": distribution,
