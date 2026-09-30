@@ -12,7 +12,7 @@ from devcontext.context.budget import (
     TokenBudgetPolicy,
 )
 from devcontext.context.estimator import HeuristicTokenEstimator, TokenEstimator
-from devcontext.context.views import context_item_from_ref
+from devcontext.context.views import build_context_view
 from devcontext.explanation.budget import OutputBudget, budget_for
 from devcontext.explanation.composer import SectionComposer
 from devcontext.explanation.grounding import GroundingIssue, grounding_issues
@@ -202,6 +202,31 @@ class TeachingExplanationWorkflow:
             review=review,
         )
 
+    def _view(
+        self,
+        query: str,
+        evidence_package: EvidencePackage,
+        labels: tuple[str, ...],
+    ) -> ContextBundle:
+        workspace = evidence_package.evidence_workspace
+        if workspace is None:
+            # No workspace means this predates it; fall back to whatever the
+            # labels resolve to in the retrieval context.
+            wanted = set(labels)
+            refs = tuple(
+                _ref_from_item(item)
+                for item in evidence_package.context_bundle.items
+                if item.citation.label in wanted
+            )
+            return _bundle(query, refs, self._current_view_budget())
+        view = build_context_view(
+            workspace,
+            evidence_labels=labels,
+            max_chars=self._current_view_budget(),
+            query=query,
+        )
+        return view.to_bundle()
+
     def _current_view_budget(self) -> int:
         return getattr(self, "_view_max_chars", self.max_chars)
 
@@ -308,8 +333,7 @@ class TeachingExplanationWorkflow:
         evidence_package: EvidencePackage,
         plan: ExplanationPlan,
     ) -> ContextBundle:
-        refs = _bound_refs(evidence_package, plan.evidence_labels)
-        return _bundle(query, refs, self._current_view_budget())
+        return self._view(query, evidence_package, plan.evidence_labels)
 
     def _section_bundle(
         self,
@@ -317,8 +341,7 @@ class TeachingExplanationWorkflow:
         evidence_package: EvidencePackage,
         section: ExplanationSection,
     ) -> ContextBundle:
-        refs = _bound_refs(evidence_package, section.evidence_labels)
-        return _bundle(query, refs, self._current_view_budget())
+        return self._view(query, evidence_package, section.evidence_labels)
 
 
 def _trace_block(

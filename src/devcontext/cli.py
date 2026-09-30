@@ -34,6 +34,7 @@ from devcontext.context import ContextBuilder
 from devcontext.embedding.client import BailianEmbeddingClient
 from devcontext.evidence import SourcePolicy, default_source_policy_path
 from devcontext.evaluation.answer_quality_runner import (
+    PairwiseEvaluationConfig,
     run_answer_quality_evaluation,
 )
 from devcontext.evaluation.runner import evaluate
@@ -187,6 +188,14 @@ def _parser() -> argparse.ArgumentParser:
     answers.add_argument("--limit", type=int)
     answers.add_argument("--resume", action="store_true", help="Reuse the per-case journal if it exists")
     answers.add_argument("--judge-model", help="Override the model used by the blind judge")
+    answers.add_argument(
+        "--baseline-mode", choices=ANSWER_MODES, default="legacy",
+        help="The arm to compare against",
+    )
+    answers.add_argument(
+        "--candidate-mode", choices=ANSWER_MODES, default="explain",
+        help="The arm under evaluation; the release gate runs teach against explain",
+    )
     answers.add_argument("--output", type=Path, help="Where to write the JSON report")
     return parser
 
@@ -778,6 +787,9 @@ def main(argv: list[str] | None = None) -> int:
                 workflow_factory=workflow_factory,
                 judge_client_factory=_answer_judge_factory(settings, args.judge_model),
                 pedagogy_judge_factory=_answer_judge_factory(settings, args.judge_model),
+                config=PairwiseEvaluationConfig(
+                    args.baseline_mode, args.candidate_mode
+                ),
                 only=[item for item in args.only.split(",") if item] if args.only else None,
                 limit=args.limit,
                 journal_path=journal,

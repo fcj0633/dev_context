@@ -8,7 +8,7 @@ from devcontext.context.budget import TokenBudgetPolicy
 from devcontext.context.builder import ContextBuilder
 from devcontext.context.estimator import TokenEstimator
 from devcontext.context.workspace import EvidenceRef, EvidenceWorkspace
-from devcontext.models import ContextItem
+from devcontext.models import ContextBundle, ContextItem
 
 DEFAULT_VIEW_MAX_CHARS = 28_000
 
@@ -71,6 +71,18 @@ class PromptContextView:
     omitted_evidence_ids: tuple[str, ...] = ()
     truncated_evidence_ids: tuple[str, ...] = ()
     evidence_ids: tuple[str, ...] = ()
+    query: str = ""
+
+    def to_bundle(self) -> "ContextBundle":
+        """The same view in the shape the answer writers already consume."""
+        return ContextBundle(
+            query=self.query,
+            items=list(self.items),
+            rendered_text=self.rendered_text,
+            total_chars=len(self.rendered_text),
+            max_chars=self.max_chars,
+            truncated=bool(self.omitted_evidence_ids or self.truncated_evidence_ids),
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -87,8 +99,10 @@ class PromptContextView:
 
 def build_context_view(
     workspace: EvidenceWorkspace,
-    requirement_ids: Iterable[str],
+    requirement_ids: Iterable[str] = (),
     *,
+    evidence_labels: Iterable[str] = (),
+    query: str = "",
     max_chars: int | None = None,
     policy: TokenBudgetPolicy | None = None,
     estimator: TokenEstimator | None = None,
@@ -106,8 +120,26 @@ def build_context_view(
     that is tied to something real about the model; the character path remains
     for callers that have no model to ask.
     """
-    refs = workspace.for_requirements(requirement_ids)
+    refs = (
+        workspace.by_citation(evidence_labels)
+        if evidence_labels
+        else workspace.for_requirements(requirement_ids)
+    )
     items = [context_item_from_ref(ref) for ref in refs]
+
+    if max_chars is not None and max_chars < 1:
+        # A window too small to hold anything is a legal outcome of budgeting,
+        # not an error: it means this model cannot carry this prompt.
+        return PromptContextView(
+            items=(),
+            rendered_text="",
+            estimated_tokens=0,
+            budget_tokens=0,
+            max_chars=0,
+            omitted_evidence_ids=tuple(ref.evidence_id for ref in refs),
+            evidence_ids=(),
+            query=query,
+        )
 
     if policy is not None:
         if estimator is None:
@@ -128,6 +160,7 @@ def build_context_view(
                 max_chars=0,
                 omitted_evidence_ids=tuple(ref.evidence_id for ref in refs),
                 evidence_ids=(),
+                query=query,
             )
         max_chars = policy.context_chars_for(decision, estimator)
     else:
@@ -152,4 +185,5 @@ def build_context_view(
             ref.evidence_id for ref in refs if ref.chunk_id in truncated_ids
         ),
         evidence_ids=tuple(item.citation.label for item in kept),
+        query=query,
     )
