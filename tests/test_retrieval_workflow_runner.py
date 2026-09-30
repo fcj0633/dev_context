@@ -92,7 +92,7 @@ def _package(case: dict, final_context, *, state: str, second_round: bool):
 
 
 def test_checked_in_workflow_datasets_validate() -> None:
-    assert len(load_workflow_cases(ROOT / "benchmark" / "l1.5-retrieval.jsonl")) == 18
+    assert len(load_workflow_cases(ROOT / "benchmark" / "l1.5-retrieval.jsonl")) == 19
     assert len(load_workflow_cases(
         ROOT / "benchmark" / "regression" / "regression-v1.jsonl",
         regression=True,

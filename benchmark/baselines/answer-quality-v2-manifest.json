@@ -1,0 +1,222 @@
+{
+  "schema_version": 1,
+  "name": "answer-quality-v2-baseline",
+  "captured_at": "2026-09-30T11:15:24.513111+00:00",
+  "git_commit": "e6cd55a975c50aade7abfb7881c43b7abf268774",
+  "git_dirty": true,
+  "why": "Phase 0 freeze before Answer Quality V3. The token-bucket answer below is the verbatim baseline the teaching path must be compared against.",
+  "environment": {
+    "no_env_file": true,
+    "api_keys_from": "Windows environment (DEEPSEEK_API_KEY, DASHSCOPE_API_KEY)",
+    "no_proxy_required": "localhost,127.0.0.1,::1,.local,.aliyuncs.com",
+    "no_proxy_reason": "The machine proxy breaks the TLS handshake to dashscope.aliyuncs.com; without the bypass every embedding call fails and retrieval silently returns empty.",
+    "postgres": "docker container devcontext-postgres (pgvector 0.8.6 / pg18) on 127.0.0.1:5432"
+  },
+  "corpus": {
+    "repository": "my12306",
+    "total_chunks": 3112,
+    "with_embedding": 3112,
+    "by_kind": {
+      "CODE/CLASS": 165,
+      "CODE/CONSTRUCTOR": 19,
+      "CODE/INTERFACE": 38,
+      "CODE/METHOD": 316,
+      "DOCUMENT/DOCUMENT_SECTION": 2574
+    },
+    "lua_chunks": 0,
+    "lua_note": "Lua scripts are not ingested, so take_token_from_bucket.lua / return_token_to_bucket.lua can never appear as evidence."
+  },
+  "l1": {
+    "benchmark_sha256": "b4275a82b8e4d4c6f01d32453adcf141e2bd9a53947964b978880b227702a23b",
+    "baseline_comparison": "comparable",
+    "quality_passed": false,
+    "policy_improvement_passed": true,
+    "acceptance": [
+      {
+        "name": "case_count",
+        "passed": true,
+        "current": 36,
+        "target": 36
+      },
+      {
+        "name": "balanced_case_distribution",
+        "passed": true,
+        "current": {
+          "CODE": 12,
+          "DOC": 12,
+          "MIXED": 12
+        },
+        "target": {
+          "CODE": 12,
+          "DOC": 12,
+          "MIXED": 12
+        }
+      },
+      {
+        "name": "legacy_case_count",
+        "passed": true,
+        "current": 12,
+        "target": 12
+      },
+      {
+        "name": "legacy_hybrid_recall_at_5",
+        "passed": false,
+        "current": 0.5833333333333334,
+        "target": 1.0
+      },
+      {
+        "name": "mixed_hybrid_both_sources_hit_at_5",
+        "passed": false,
+        "current": 0.0,
+        "target": 0.8
+      },
+      {
+        "name": "hybrid_recall_at_5_vs_baseline",
+        "passed": true,
+        "current": 0.4722222222222222,
+        "target": 0.4722222222222222
+      }
+    ],
+    "noise_floor_note": "MRR deltas of up to ~0.015 against the committed baseline are run-to-run noise; L1 is not bit-reproducible."
+  },
+  "l15_frozen": {
+    "suite": "l1.5+regression",
+    "case_count": 24,
+    "full_case_success_rate": 0.7916666666666666,
+    "core_requirement_coverage": 0.9230769230769231,
+    "expected_state_accuracy": 0.8333333333333334,
+    "context_survival_rate": 0.9302325581395349,
+    "false_ready_count": 0,
+    "regression_vs_retrieval_workflow_v1": "the 23 pre-existing cases reproduce the committed baseline exactly (READY 16/18 = 0.8889 all_core_satisfied, READY state_accuracy 0.8333, PARTIAL acc 1.0, EMPTY acc 0.0)",
+    "new_case": {
+      "id": "teach-token-bucket-01",
+      "actual_state": "READY",
+      "full_case_success": true,
+      "core_requirement_coverage": 1.0,
+      "false_ready": false
+    }
+  },
+  "token_bucket_explain_baseline": {
+    "raw_file": "artifacts/answer-quality-v2-baseline/token-bucket.explain.txt",
+    "command": "devcontext ask \"详细解释项目的余票桶是如何设计的\" --answer-mode explain --depth detailed --debug",
+    "answer_sha256": "d288f02b7499120837fd4c1bb00e6b5730be5d6ce4c62e43b52363faac65fa82",
+    "answer_chars": 3805,
+    "section_count": 5,
+    "used_citations": [],
+    "reported_sufficiency": "insufficient",
+    "retry_count": 0,
+    "retrieval_state": "PARTIAL",
+    "search_action_errors": 0,
+    "coverage": [
+      {
+        "requirement_id": "ER1",
+        "state": "UNVERIFIED",
+        "check_error": "CoverageCheckError",
+        "reason": "已有候选证据，但语义覆盖检查未能完成"
+      },
+      {
+        "requirement_id": "ER2",
+        "state": "UNVERIFIED",
+        "check_error": "CoverageCheckError",
+        "reason": "已有候选证据，但语义覆盖检查未能完成"
+      },
+      {
+        "requirement_id": "ER3",
+        "state": "UNVERIFIED",
+        "check_error": "CoverageCheckError",
+        "reason": "已有候选证据，但语义覆盖检查未能完成"
+      },
+      {
+        "requirement_id": "ER4",
+        "state": "UNVERIFIED",
+        "check_error": "CoverageCheckError",
+        "reason": "已有候选证据，但语义覆盖检查未能完成"
+      },
+      {
+        "requirement_id": "ER5",
+        "state": "UNVERIFIED",
+        "check_error": "CoverageCheckError",
+        "reason": "已有候选证据，但语义覆盖检查未能完成"
+      },
+      {
+        "requirement_id": "ER6",
+        "state": "UNVERIFIED",
+        "check_error": "CoverageCheckError",
+        "reason": "已有候选证据，但语义覆盖检查未能完成"
+      }
+    ],
+    "review": {
+      "accepted": false,
+      "issue_types": [
+        "UNSUPPORTED_CLAIM",
+        "OVERCLAIM"
+      ],
+      "decision_source": "llm"
+    },
+    "stage_usage": [
+      {
+        "stage": "evidence_planning",
+        "latency_ms": 12462,
+        "model": "deepseek-flash",
+        "input_tokens": 476,
+        "output_tokens": 3039
+      },
+      {
+        "stage": "search_action_planning",
+        "latency_ms": 24249,
+        "model": "deepseek-flash",
+        "input_tokens": 860,
+        "output_tokens": 1367
+      },
+      {
+        "stage": "evidence_retrieval",
+        "latency_ms": 4097,
+        "model": null,
+        "input_tokens": null,
+        "output_tokens": null
+      },
+      {
+        "stage": "coverage_check",
+        "latency_ms": 23407,
+        "model": "deepseek-flash",
+        "input_tokens": 11288,
+        "output_tokens": 3337
+      },
+      {
+        "stage": "answer_planning",
+        "latency_ms": 35714,
+        "model": "deepseek-flash",
+        "input_tokens": 7174,
+        "output_tokens": 8193
+      },
+      {
+        "stage": "grounded_draft",
+        "latency_ms": 30602,
+        "model": "deepseek-flash",
+        "input_tokens": 6041,
+        "output_tokens": 6334
+      },
+      {
+        "stage": "answer_review",
+        "latency_ms": 45058,
+        "model": "deepseek-flash",
+        "input_tokens": 9615,
+        "output_tokens": 11775
+      }
+    ],
+    "totals": {
+      "llm_calls": 6,
+      "input_tokens": 35454,
+      "output_tokens": 34045,
+      "latency_ms": 175589
+    }
+  },
+  "known_defects_visible_in_this_baseline": [
+    "CoverageChecker: the semantic check LLM call succeeds (11288 in / 3337 out) but its output is rejected by the strict parser, so all six requirements become UNVERIFIED with check_error=CoverageCheckError. That is reported to the user as 'insufficient' and, per requirement, 'missing' - a parse failure presented as missing evidence.",
+    "CLI _print_requirement_statuses collapses PARTIAL/MISSING/UNVERIFIED into one word, 'missing'.",
+    "retrieval_state EMPTY cannot distinguish 'nothing found' from 'retrieval failed'. Demonstrated by the preserved proxy-failure run, where all ten search actions errored and the tool reported that insufficient project context had been retrieved."
+  ],
+  "reviewer_working_as_intended": [
+    "The reviewer rejected the grounded draft and removed the unsupported 'Lua 原子取还' claims (the final answer contains zero occurrences of the character pair), precisely because the Lua script bodies are not in the index. Any change to reviewer gating must not lose this behaviour."
+  ]
+}

@@ -59,5 +59,6 @@ def test_l15_corpus_reuses_all_l2_case_ids() -> None:
     l15 = load_workflow_cases(PROJECT_ROOT / "benchmark" / "l1.5-retrieval.jsonl")
     l2 = _load_jsonl(PROJECT_ROOT / "benchmark" / "l2-answer-quality.jsonl")
 
-    assert len(l15) == 18
+    # The two suites stay id-aligned, so adding an L2 case requires an L1.5 twin.
+    assert len(l15) == 19
     assert [case["id"] for case in l15] == [case["id"] for case in l2]
