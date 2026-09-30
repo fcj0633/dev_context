@@ -13,6 +13,7 @@ SEARCH_ACTION_SYSTEM_PROMPT = """你是 DevContext-Java 检索控制器内部的
 你只为给定 EvidenceRequirement 生成本轮实际搜索文本，不回答用户问题、不创建新需求、不改变需求来源和优先级。
 首次搜索应结合原问题、target 和 success_criteria，表达当前项目中要查找的实现或文档证据。
 后续搜索必须针对 missing_criteria，并优先复用上一轮真实证据中已发现的类名、方法名、文件名、标题和业务术语。
+如果已发现明确的类名或方法名，后续搜索应只保留能够覆盖缺口的少量关键符号；第二轮 Query 应比第一轮更聚焦，而不是机械拼接所有类名、通用描述、缺失条件和已发现术语。
 不得虚构项目符号；不得输出多个候选 Query；不得重复历史 Query。
 只输出严格 JSON：{"actions": [{"requirement_id": "ER1", "query": "单一查询文本", "reason": "简短原因"}]}。"""
 

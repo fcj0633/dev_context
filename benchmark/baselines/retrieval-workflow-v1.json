@@ -1,41 +1,42 @@
 {
   "schema_version": 1,
   "name": "retrieval-workflow-v1",
-  "generated_at": "2026-09-29T08:25:11.619856+00:00",
-  "git_commit": "2f83f2a75b04c4e1f4e8276ff09d773a16bf9126",
-  "dataset_sha256": "dfa3518cdaef0ceabc492061dfededb557d82bf3a008fa2cadc726272a04bf21",
+  "generated_at": "2026-09-30T06:28:00.947351+00:00",
+  "git_commit": "3da34c392b5f0a927f2105ec95a09e17d1b050d2",
+  "dataset_sha256": "59678752d10a2cf47f4f24b22d39e091606a2144b2f1d3ce54157178034d3726",
   "source_policy_sha256": "ba44795776c46868923befc76c778f422b51b0df00955ebfedfdac31b6627628",
   "summary": {
     "frozen": {
       "case_run_count": 23,
       "successful_run_count": 23,
       "execution_error_count": 0,
-      "full_case_success_count": 16,
-      "full_case_success_rate": 0.6956521739130435,
+      "full_case_success_count": 18,
+      "full_case_success_rate": 0.782608695652174,
       "core_requirement_total": 24,
-      "core_requirement_satisfied": 20,
-      "core_requirement_coverage": 0.8333333333333334,
-      "all_core_satisfied_case_count": 14,
-      "all_core_satisfied_case_rate": 0.7777777777777778,
-      "predicted_ready_count": 13,
+      "core_requirement_satisfied": 22,
+      "core_requirement_coverage": 0.9166666666666666,
+      "all_core_satisfied_case_count": 16,
+      "all_core_satisfied_case_rate": 0.8888888888888888,
+      "predicted_ready_count": 15,
       "false_ready_count": 0,
       "false_ready_rate": 0.0,
       "false_ready_case_ids": [],
-      "ready_recall": 0.7222222222222222,
-      "expected_state_accuracy": 0.7391304347826086,
-      "candidate_found_group_count": 36,
-      "survived_group_count": 34,
-      "context_survival_rate": 0.9444444444444444,
-      "second_round_eligible_count": 15,
+      "ready_recall": 0.8333333333333334,
+      "expected_state_accuracy": 0.8260869565217391,
+      "candidate_found_group_count": 39,
+      "survived_group_count": 36,
+      "context_survival_rate": 0.9230769230769231,
+      "second_round_eligible_count": 8,
       "second_round_rescued_count": 6,
-      "second_round_rescue_rate": 0.4,
-      "second_round_no_gain_count": 9,
+      "second_round_rescue_rate": 0.75,
+      "second_round_no_gain_count": 2,
       "second_round_partial_gain_count": 0,
-      "average_search_action_count": 2.4347826086956523,
+      "unanswerable_second_round_attempt_count": 5,
+      "average_search_action_count": 2.347826086956522,
       "by_tag": {
         "flow": {
           "case_run_count": 7,
-          "full_case_success_rate": 0.7142857142857143
+          "full_case_success_rate": 0.8571428571428571
         },
         "why": {
           "case_run_count": 7,
@@ -43,7 +44,7 @@
         },
         "edge": {
           "case_run_count": 4,
-          "full_case_success_rate": 0.25
+          "full_case_success_rate": 0.5
         },
         "negative": {
           "case_run_count": 4,
@@ -57,8 +58,8 @@
       "by_expected_state": {
         "READY": {
           "case_run_count": 18,
-          "state_accuracy": 0.7222222222222222,
-          "full_case_success_rate": 0.7222222222222222
+          "state_accuracy": 0.8333333333333334,
+          "full_case_success_rate": 0.8333333333333334
         },
         "PARTIAL": {
           "case_run_count": 4,

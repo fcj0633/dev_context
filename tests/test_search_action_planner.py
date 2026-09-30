@@ -100,7 +100,8 @@ def test_followup_llm_action_must_use_a_discovered_project_term() -> None:
         "ER1", "PARTIAL", (1,), ("尚缺影响行数检查",), "部分满足", "llm"
     )
 
-    action = SearchActionPlanner(lambda: FakeClient(response)).plan_actions(
+    client = FakeClient(response)
+    action = SearchActionPlanner(lambda: client).plan_actions(
         "如何保证占座一致性？",
         [requirement()],
         round_index=1,
@@ -111,3 +112,5 @@ def test_followup_llm_action_must_use_a_discovered_project_term() -> None:
 
     assert action.decision_source == "llm"
     assert "lockSeat" in action.query
+    assert "少量关键符号" in client.messages[0].content
+    assert "更聚焦" in client.messages[0].content

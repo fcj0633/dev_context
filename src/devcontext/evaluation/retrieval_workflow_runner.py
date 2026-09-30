@@ -578,15 +578,20 @@ def _second_round_rescue(
     round_zero = observer.round_contexts.get(0, ContextBundle("", [], "", 0, 1, False))
     second_actions = [item for item in package.search_history if item.round_index == 1]
     details = []
+    unanswerable_attempt_count = 0
     for spec in case["requirements"]:
-        if spec["priority"] != "CORE" or not second_actions:
+        if spec["priority"] != "CORE":
             continue
         source = spec["source_requirement"]
         compatible = [
             item for item in second_actions
-            if _scope_compatible(item.source_scope, source)
+            if item.requirement_id == spec["id"]
+            and _scope_compatible(item.source_scope, source)
         ]
         if not compatible:
+            continue
+        if not spec["expected_satisfied"]:
+            unanswerable_attempt_count += 1
             continue
         before = _gold_requirement_satisfied(spec, round_zero)
         if before:
@@ -600,6 +605,7 @@ def _second_round_rescue(
                 "round_0_queries": [
                     item.query for item in package.search_history
                     if item.round_index == 0
+                    and item.requirement_id == spec["id"]
                 ],
                 "round_1_queries": [item.query for item in compatible],
                 "round_0_matched_groups": before_groups,
@@ -619,6 +625,7 @@ def _second_round_rescue(
         "rescue_rate": rescued / eligible if eligible else None,
         "no_gain_count": no_gain,
         "partial_gain_count": eligible - rescued - no_gain,
+        "unanswerable_second_round_attempt_count": unanswerable_attempt_count,
         "details": details,
     }
 
@@ -681,6 +688,10 @@ def _summarize(records: Sequence[dict[str, Any]]) -> dict[str, Any]:
         ),
         "second_round_partial_gain_count": sum(
             item["second_round_rescue"]["partial_gain_count"] for item in valid
+        ),
+        "unanswerable_second_round_attempt_count": sum(
+            item["second_round_rescue"]["unanswerable_second_round_attempt_count"]
+            for item in valid
         ),
         "average_search_action_count": (
             mean(len(item["search_actions"]) for item in valid) if valid else None
