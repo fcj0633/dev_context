@@ -98,10 +98,14 @@ DevContext 的检索侧已经闭环：Evidence Planner → SearchAction → 两�
 
 ### 2.3 本项目有两处比 ChatGPT 更准，必须保住
 
-1. **`loadBucket` 的触发判据。** ChatGPT 说"Lua HGET 发现 bucket 不存在"；本项目说"第一步是字段级缺失判定（`hMultiGet` 任一场空即重装），因为 Key 存在不代表字段完整"。真实代码里正确的一侧是本项目。
-2. **整桶补齐的口径。** ChatGPT 说"缺失席别补 0"；本项目说"按 `VehicleTypeEnum.findSeatTypesByCode` 取车型支持的**全部**席别补齐"，并点出这是避免售完席别永久触发重装的刻意取舍。
+**已对 my12306 真实源码独立核对**：`services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/handler/ticket/tokenbucket/TicketAvailabilityTokenBucket.java`
 
-**结论：本轮所有教学化改动都不得削弱这条可追溯性。** Release Gate 里有一条硬门槛专门守它。
+1. **`loadBucket` 的触发判据。** ChatGPT 说"Lua HGET 发现 bucket 不存在"；本项目说"第一步是字段级缺失判定，因为 Key 存在不代表字段完整"。**本项目正确**——该文件 `:133-137` 的注释原文即"Key 存在不代表字段完整；只要本次请求涉及的任一席别缺失，就重新装载完整桶"，实现是 `hMultiGet` + `allNonNull`。
+2. **整桶补齐的口径。** ChatGPT 说"缺失席别补 0"；本项目说"按车型支持的**全部**席别补齐"。**本项目正确**——该文件 `:161-169` 取 `VehicleTypeEnum.findSeatTypesByCode(train.getTrainType())` 遍历全部席别，注释原文"按车型支持的全部席别补 0，避免售完席别永久触发'field 缺失'重装"。
+
+顺带核实的第三处：`normalize(Map<Integer,Integer>)`（`:190-198`）用 `TreeMap` 合并重复席别、过滤 `count <= 0`——这条被 DevContext 答案列为"证据缺口"，实际代码里是明确可读的。
+
+**结论：本轮所有教学化改动都不得削弱这条可追溯性。** Release Gate 里有一条硬门槛专门守它，判据已写进 `benchmark/l2-answer-quality.jsonl` 的 `teach-token-bucket-01.must_not_claim`（含上述行号）。
 
 ---
 
@@ -295,6 +299,70 @@ manifest 记录：`git_sha / case_id / mode / depth / model / timestamp / config
 
 **验收**：manifest 已在 `git ls-files` 中；raw 目录含余票桶全文；`pytest` 全绿；L2 基准 19 例。
 
+### 5.1 执行 Phase 0 时发现的三条约束（修订三补充）
+
+**(a) L1.5 与 L2 的 id 必须一一对应。** `tests/test_benchmark_frozen.py:58-63` 断言 `[case["id"] for case in l15] == [case["id"] for case in l2]` 且两者长度相等。因此往 L2 加 `teach-token-bucket-01` 就**必须**同时加一个 L1.5 孪生条目，否则冻结守卫失败。另有两处会连带失败，且都值得顺手修：
+
+- `tests/test_answer_quality.py:15` 硬编码 `len(cases) == 18` 与各前缀计数 —— 需更新为 19 并加上 `teach-` 一条。
+- `tests/test_answer_quality.py:31` 用 `[-1]` 取**最后一个**案例，并断言 `checks.in_target_range is True`。它隐含依赖"最后一个案例是 `brief`"（原先的 `locate-02`，150–500 区间）。**这是脆弱写法**，应改为按 id 取，否则任何追加都会静默改变它的语义。
+
+**(b) L1.5 条目的字段是强约束的、且 `expected_retrieval_state` 是派生的**（`evaluation/retrieval_workflow_runner.py`）：
+
+| 约束 | 位置 |
+|---|---|
+| `expected_retrieval_state` 必须等于 `_derived_expected_state(requirements)`，不可自由填写 | `:223-227` |
+| 至少一条 CORE requirement | `:222` |
+| `expected_satisfied == true` 时 `relevant` 不能为空 | `:253` |
+| `relevant` 的 source 必须与 `source_requirement` 匹配 | `:263-264` |
+| CORE 必须同时有 `round_0` 与 `round_1`；SUPPORTING 只有 `round_0` | `:265-271` |
+
+因此孪生条目**必须从实测的最终 Context 反推**，不能凭猜——猜错会让该案例永久失败，并被误读为检索回退。
+
+**(c) L1.5 的 oracle 用最终 `context_bundle` 判定，且排除 `truncated` 项**（`:453` 与 `:143`）。这说明 **L1.5 自身也受 §3.5 的截断影响**。它同时给了 Phase 1A 一条更硬的验收：explain 路径下 L1.5 的结果必须逐案不变。
+
+**(d) `.lua` 文件根本不在索引里。** 已验证：`SELECT count(*) FROM knowledge_chunk WHERE file_path LIKE '%.lua'` → **0**。摄取只覆盖 Java（JavaParser）与 Markdown。这解释了为什么 DevContext 答案把"两个 Lua 脚本的脚本体"列为证据缺口——**不是模型没找到，而是它从未被摄取**。
+
+> 这条值得单独记住：`take_token_from_bucket.lua` 与 `return_token_to_bucket.lua` 里正是"余额不足时整单失败还是部分扣减""是否刷新 TTL"这类问题的答案所在，而 §2.2 的 G4 又恰好要求允许讲"证据里没有的东西"。两者叠加会出现一个危险组合：**读者最想要的那部分，恰好是索引覆盖不到的那部分**。因此 teach 路径的条件推演（§11）在这类主题上必须格外明确地标注"缺少脚本本体证据"，而不能因为"通用原理可以讲"就滑向断言项目实现。
+
+**(e) 检索失败会被静默误报为"证据不足"——这是一条产品级缺陷，不只是环境问题。**
+
+执行 Phase 0 时遇到过真实案例：本机 `HTTPS_PROXY` 指向本地代理，导致 `curl` 对 `dashscope.aliyuncs.com` 的 TLS 握手失败，**所有 embedding 调用失败**。此时 keyword 检索仍可用，但 vector 与 hybrid 全废。而系统对用户说出来的话是：
+
+```
+Sufficiency: insufficient
+Requirements: ER1 missing, ER2 missing, ER3 missing, ER4 missing, ER5 missing, ER6 missing
+Answer: 当前没有检索到足够的项目上下文，无法可靠回答该问题。
+Sources: (none)
+```
+
+**读起来是"知识库没有这份证据"，真相是"检索接口不可达"。** 信号其实在 trace 里——10 个 search action 全部带着 `err=RuntimeError`，`stop_reason: empty`——只是从未浮现到人类可见的输出上。原因是 `retrieval_controller.py:241` 只把异常**类名**记进 action，消息被丢弃。
+
+这意味着 `retrieval_state = "EMPTY"` 目前把两种完全不同的情况混成一个值：
+
+| 真实情况 | 应有状态 | 现在都变成 |
+|---|---|---|
+| 检索跑了，确实没有相关证据 | `EMPTY` | `EMPTY` |
+| 检索根本没跑成（网络/依赖失败） | 需要独立状态，如 `RETRIEVAL_FAILED` | `EMPTY` |
+
+**裁决：并入 §7.3 的 `RetrievalState` 迁移一起做。** 当全部 search action 都带 error 时，不得输出 `EMPTY` + "证据不足"的结论，而应显式区分。这一条同时是对 G5 的加强——「系统自称的确定性与它的实际证据状态不一致」还有一个更极端的版本：**系统自称"没有证据"，而它其实连检索都没成功。**
+
+失败输出已留档：`artifacts/answer-quality-v2-baseline/PROXY-FAILURE-token-bucket.explain.txt`。
+
+**(f) 孪生条目落地后的回归证据（已实测）。**
+
+新增 `teach-token-bucket-01` 后跑全量 frozen（19 L1.5 + 5 regression = 24 例），与已提交的 `benchmark/baselines/retrieval-workflow-v1.json`（23 例）逐桶比对：
+
+| 桶 | 基线 | 本次（截取同一批 23 例） | 结论 |
+|---|---|---|---|
+| READY（18 例）| `all_core_satisfied` 16/18 = 0.8889，`state_accuracy` 0.8333 | 16/18 = 0.8889，0.8333 | **逐位相同** |
+| PARTIAL（4 例）| `state_accuracy` 1.0 | 1.0 | 相同 |
+| EMPTY（1 例）| `state_accuracy` 0.0 | 0.0 | 相同 |
+| `false_ready_count` | 0 | 0 | 相同 |
+
+新案例本身：`actual_state = READY`、`full_case_success = True`、`core_requirement_coverage = 1.0`、`false_ready = False`。加入后 READY 桶升为 17/19 = 0.8947。
+
+> 附带确认了一条口径：`all_core_satisfied_case_rate` 的分母是**该类期望状态的案例数**（16/18），不是全集。跨版本比对这个指标时不要用全集做分母，否则会误判成回退。
+
 ---
 
 ## 6. Phase 1A — EvidenceWorkspace 与 CitationRegistry
@@ -384,6 +452,16 @@ CITATION_PATTERN = re.compile(r"\[(C\d+)\]")     # answer/generator.py:14
    - **teach 路径的 evidence existence 一律以 Workspace 为准。** `package_state` 增加一个接受 evidence count 的重载/参数，由调用方决定是数 `context_bundle.items`（legacy / explain）还是数 Workspace（teach）。
    - **`_answer()` 的提前退出条件同步修改**：`EMPTY_CONTEXT_ANSWER` 只在 Workspace 真的没有任何证据时触发，不再因为 `context_bundle` 为空而触发。
    - `evidence_items` 与 `to_dict()` 保持读 `context_bundle`（兼容既有 trace / 评测消费方），但 teach 路径的 `context_bundle` 在 `_answer()` 阶段尚未被 `final_cited_bundle` 覆盖，因此**不可**在该阶段用它做存在性判断。
+
+   - **新增 `RETRIEVAL_FAILED` 状态，把"没找到"与"没跑成"分开（见 §5.1(e)）。** 当本轮全部 search action 都带 `error` 时，`retrieval_state` 不得落回 `EMPTY`——那会把网络/依赖故障谎报成"知识库没有这份证据"。**注意这条的波及面比看起来大**，必须成组修改：
+
+     | 受影响处 | 位置 |
+     |---|---|
+     | 状态枚举本身 | `agentic/evidence_models.py:12`（`RETRIEVAL_STATES`，被 `EvidencePackage.__post_init__` 校验）|
+     | 状态计算 | `agentic/evidence_models.py:150-161`（`package_state`）|
+     | legacy 充分性映射 | `:141-147`（`to_legacy_sufficiency` 的 `enough = retrieval_state == "READY"`）|
+     | 原因文案 | `:218-223`（`_coverage_reason` 的字典缺 key 会 `KeyError`）|
+     | trace 的 `stop_reason` | `agentic/evidence_workflow.py:101`（`package.retrieval_state.lower()`）|
 
    > 这条如果漏掉，会出现一个很难查的症状：teach 路径下 `ContextBuilder` 预算恰好一个 chunk 都没装进去时（`ContextBuilder.build` 在 `available` 装不下第一个 block 时会 `break` 且 `items` 为空），系统会错误地输出 `EMPTY_CONTEXT_ANSWER`——而 Workspace 里明明有几十条证据。
 
