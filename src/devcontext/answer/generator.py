@@ -11,7 +11,13 @@ from devcontext.models import AnswerResult, Citation, ContextBundle
 
 
 EMPTY_CONTEXT_ANSWER = "当前没有检索到足够的项目上下文，无法可靠回答该问题。"
+# Legacy ContextBuilder labels, assigned by position inside one bundle.
 CITATION_PATTERN = re.compile(r"\[(C\d+)\]")
+# Workspace labels, assigned once per run by CitationRegistry and stable across
+# views. Kept as its own pattern rather than widening CITATION_PATTERN: an
+# unrecognised [E3] in legacy output is ignored today, and folding both into one
+# pattern would make it a "used citation" and then raise KeyError in _print_sources.
+EVIDENCE_CITATION_PATTERN = re.compile(r"\[(E\d+)\]")
 
 ANSWER_MAX_TOKENS = 8192
 EXPLAIN_ANSWER_MAX_TOKENS = 32768
@@ -218,19 +224,22 @@ Context:
         ]
 
 
-def strip_citations(answer: str) -> tuple[str, list[str]]:
+def strip_citations(
+    answer: str,
+    pattern: re.Pattern[str] = CITATION_PATTERN,
+) -> tuple[str, list[str]]:
     """Remove [C1] markers for display, returning the labels that were present.
 
     A line that holds nothing but citation markers is dropped entirely, so the
     per-section evidence line disappears without leaving a dangling label.
     """
-    labels = extract_citations(answer)
+    labels = extract_citations(answer, pattern)
     kept: list[str] = []
     for line in answer.splitlines():
-        without_markers = CITATION_PATTERN.sub("", line).strip()
+        without_markers = pattern.sub("", line).strip()
         if line.strip() and not without_markers:
             continue
-        kept.append(CITATION_PATTERN.sub("", line))
+        kept.append(pattern.sub("", line))
     text = "\n".join(kept)
     text = re.sub(r"[ \t]+([，。；：、！？,.;:!?）)])", r"\1", text)
     text = re.sub(r"(?m)^[ \t]+", "", text)
@@ -259,10 +268,13 @@ def describe_sections(answer: str) -> dict[str, Any]:
     }
 
 
-def extract_citations(answer: str) -> list[str]:
+def extract_citations(
+    answer: str,
+    pattern: re.Pattern[str] = CITATION_PATTERN,
+) -> list[str]:
     citations: list[str] = []
     seen: set[str] = set()
-    for match in CITATION_PATTERN.finditer(answer):
+    for match in pattern.finditer(answer):
         label = match.group(1)
         if label in seen:
             continue

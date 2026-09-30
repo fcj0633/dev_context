@@ -14,7 +14,7 @@ from devcontext.agentic.evidence_models import (
 )
 from devcontext.agentic.models import StageUsage
 from devcontext.agentic.search_actions import SearchActionPlanner
-from devcontext.context import ContextBuilder
+from devcontext.context import ContextBuilder, EvidenceWorkspace
 from devcontext.evidence import EvidencePool, SourcePolicy
 from devcontext.models import ContextBundle, SearchExecution
 from devcontext.planning import EvidencePlan, EvidencePlanner, EvidenceRequirement
@@ -89,6 +89,9 @@ class RetrievalController:
         )
 
         pool = EvidencePool()
+        # Held for the whole lifecycle: evidence ids are assigned once and never
+        # renumbered, so a chunk means the same thing in every later view.
+        workspace = EvidenceWorkspace(request.original_query)
         history: list[SearchAction] = []
         coverage_rounds: list[CoverageRound] = []
 
@@ -114,7 +117,7 @@ class RetrievalController:
             )
         )
         retrieval_started = time.perf_counter()
-        history.extend(self._execute(first_actions, plan, pool))
+        history.extend(self._execute(first_actions, plan, pool, workspace, 0))
         stages.append(
             StageUsage(
                 "evidence_retrieval",
@@ -168,7 +171,7 @@ class RetrievalController:
                 )
             )
             retrieval_started = time.perf_counter()
-            history.extend(self._execute(followup_actions, plan, pool))
+            history.extend(self._execute(followup_actions, plan, pool, workspace, 1))
             stages.append(
                 StageUsage(
                     "evidence_retrieval",
@@ -205,6 +208,7 @@ class RetrievalController:
             state,
             tuple(history),
             tuple(coverage_rounds),
+            workspace.freeze(),
         )
         return RetrievalOutcome(package, tuple(stages))
 
@@ -213,6 +217,8 @@ class RetrievalController:
         actions: tuple[SearchAction, ...],
         plan: EvidencePlan,
         pool: EvidencePool,
+        workspace: EvidenceWorkspace,
+        round_index: int,
     ) -> tuple[SearchAction, ...]:
         by_id = {item.id: item for item in plan.requirements}
         executed: list[SearchAction] = []
@@ -229,10 +235,14 @@ class RetrievalController:
                     action.source_scope,
                     per_action_top_k,
                 )
-                pool.add_many(
+                annotated = [
                     self.source_policy.classify(result, requirement.id)
                     for result in execution.results
-                )
+                ]
+                pool.add_many(annotated)
+                # Register + ingest per round, so a round's snapshot reflects only
+                # what that round found rather than everything found so far.
+                workspace.ingest(annotated, round_index)
                 if self.observer is not None:
                     self.observer.on_action_completed(action, execution)
                 executed.append(action)

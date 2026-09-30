@@ -137,6 +137,33 @@ def test_controller_only_retries_unsatisfied_core_and_freezes_package() -> None:
         outcome.package.search_history = ()  # type: ignore[misc]
 
 
+def test_controller_freezes_a_catalog_covering_every_retrieved_chunk() -> None:
+    subject, _, policy, _ = controller()
+    outcome = subject.retrieve(
+        UserRequest("解释占座一致性", AnswerOptions("brief", "explain")), 10
+    )
+
+    catalog = outcome.package.evidence_catalog
+    assert catalog is not None
+    # FakePolicy mints a fresh chunk id per search call, so all three survive.
+    assert len(catalog) == len(policy.calls) == 3
+    assert catalog.label_for(1) == "E1"
+    assert catalog.label_for(3) == "E3"
+
+
+def test_catalog_ids_survive_the_round_that_re_finds_them() -> None:
+    subject, _, _, _ = controller()
+    outcome = subject.retrieve(
+        UserRequest("解释占座一致性", AnswerOptions("brief", "explain")), 10
+    )
+
+    catalog = outcome.package.evidence_catalog
+    assert catalog is not None
+    # One chunk, one label: the bundle's positional C-labels are a separate space.
+    assert len(set(catalog.by_chunk_id.values())) == len(catalog.by_chunk_id)
+    assert all(label.startswith("E") for label in catalog.labels())
+
+
 def test_answer_depth_does_not_change_retrieval_plan_actions_or_budget() -> None:
     first, _, _, _ = controller()
     second, _, _, _ = controller()

@@ -4,6 +4,7 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 from devcontext.agentic.models import EvidenceStatus, MissingAspect, SufficiencyResult
+from devcontext.context.registry import EvidenceCatalog
 from devcontext.models import ContextBundle
 from devcontext.planning import EvidencePlan, EvidenceRequirement
 
@@ -94,6 +95,10 @@ class EvidencePackage:
     retrieval_state: str
     search_history: tuple[SearchAction, ...]
     coverage_rounds: tuple[CoverageRound, ...] = ()
+    # Every piece of evidence retrieval found, with stable ids. Deliberately not
+    # part of to_dict(): this package is a plumbing change, and adding a trace key
+    # would break byte-for-byte comparison against the frozen baseline.
+    evidence_catalog: EvidenceCatalog | None = None
 
     def __post_init__(self) -> None:
         if self.retrieval_state not in RETRIEVAL_STATES:
