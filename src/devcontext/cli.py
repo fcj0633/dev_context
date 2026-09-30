@@ -245,6 +245,7 @@ def _print_agentic_answer(
     print("\nAnswer:")
     print(result.answer_result.answer)
     if debug:
+        _print_teaching_summary(trace.teaching)
         _print_sources(result)
         print("\nTrace:")
         print(json.dumps(trace.to_dict(), ensure_ascii=False, indent=2))
@@ -264,6 +265,32 @@ def _print_requirement_statuses(sufficiency: SufficiencyResult) -> None:
         for status in sufficiency.statuses
     )
     print(f"Requirements: {summary}")
+
+
+def _print_teaching_summary(teaching: dict | None) -> None:
+    """The teach path's shape at a glance, instead of reading the whole trace."""
+    if not teaching:
+        return
+    strategies = " + ".join(
+        [teaching.get("primary_strategy") or ""]
+        + list(teaching.get("secondary_strategies") or [])
+    ).strip(" +")
+    print(f"\nExplanation Strategy:\n{strategies}")
+    print(f"\nMental Model:\n{teaching.get('core_mental_model') or '(none)'}")
+    views = teaching.get("context_views") or {}
+    print("\nContext:")
+    print(f"  Workspace evidence: {views.get('workspace_evidence')}")
+    print(f"  Bound evidence: {views.get('bound_evidence')}")
+    for section_id, size in (views.get("per_section") or {}).items():
+        print(f"  {section_id} view: {size}")
+    drafts = teaching.get("section_drafts") or []
+    revision = teaching.get("revision_trace") or {}
+    issues = len(revision.get("global_issues") or []) + len(revision.get("section_issues") or [])
+    print("\nGeneration:")
+    print(f"  {len(drafts)} sections")
+    print(f"  {len(revision.get('revision_required') or [])} targeted revision")
+    if issues:
+        print(f"  {issues} review issues")
 
 
 def _print_sources(result: AgenticAnswerResult) -> None:

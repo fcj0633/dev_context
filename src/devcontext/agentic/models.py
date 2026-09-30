@@ -199,6 +199,10 @@ class AgenticTrace:
     # Only the teach path fills this. Omitted from the dict when absent so the
     # legacy and explain traces stay byte-for-byte what they were.
     explanation_plan: dict[str, Any] | None = None
+    # The teaching path's intermediate state: the plan, the per-view evidence
+    # counts, the section drafts, their citations and confidence, and what the
+    # reviewer asked to redo. Absent from the dict unless the teach path ran.
+    teaching: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         value = {
@@ -231,6 +235,8 @@ class AgenticTrace:
             )
         if self.explanation_plan is not None:
             value["explanation_plan"] = self.explanation_plan
+        if self.teaching is not None:
+            value["teaching"] = self.teaching
         return value
 
 

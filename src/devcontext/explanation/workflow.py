@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from devcontext.context import ContextBuilder, EvidenceRef, EvidenceWorkspace
-from devcontext.context.budget import FALLBACK_CAPABILITIES, ModelCapabilities
+from devcontext.context.budget import (
+    FALLBACK_CAPABILITIES,
+    ModelCapabilities,
+    TokenBudgetPolicy,
+)
+from devcontext.context.estimator import HeuristicTokenEstimator, TokenEstimator
 from devcontext.context.views import context_item_from_ref
 from devcontext.explanation.budget import OutputBudget, budget_for
 from devcontext.explanation.composer import SectionComposer
@@ -34,7 +40,11 @@ if TYPE_CHECKING:
     from devcontext.agentic.models import StageUsage
 
 
+# Fallback only. The real ceiling comes from the model's window via
+# TokenBudgetPolicy; this is what a caller with no model configured gets.
 DEFAULT_TEACHING_MAX_CHARS = 200_000
+# Prompt scaffolding that is not evidence: instructions, the plan, the question.
+FIXED_PROMPT_TOKENS = 4_000
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,13 +80,18 @@ class TeachingExplanationWorkflow:
         *,
         max_chars: int = DEFAULT_TEACHING_MAX_CHARS,
         capabilities: ModelCapabilities | None = None,
+        estimator: TokenEstimator | None = None,
     ) -> None:
         self.planner = planner
         self.writer = writer
         self.composer = composer
         self.reviewer = reviewer
-        self.max_chars = max_chars
         self.capabilities = capabilities or FALLBACK_CAPABILITIES
+        self.estimator = estimator or HeuristicTokenEstimator()
+        # The stage sizes each view from the model's window rather than from a
+        # character ceiling; model_capabilities alone made that possible.
+        self.policy = TokenBudgetPolicy(self.capabilities)
+        self.max_chars = max_chars
 
     def run(
         self,
@@ -96,6 +111,9 @@ class TeachingExplanationWorkflow:
         )
 
         budget = budget_for(plan, self.capabilities)
+        self._view_max_chars = self._view_char_budget(
+            request.original_query, plan, budget
+        )
         bound = self._bound_bundle(request.original_query, evidence_package, plan)
 
         draft: TeachingDraft | None
@@ -105,9 +123,10 @@ class TeachingExplanationWorkflow:
         error: str | None = None
 
         started = time.perf_counter()
+        view_sizes: dict[str, int] = {}
         if budget.allow_multi_pass and self.composer is not None and bound.items:
             draft, drafts, issues, error = self._write_in_sections(
-                request.original_query, evidence_package, plan
+                request.original_query, evidence_package, plan, view_sizes
             )
         elif bound.items:
             try:
@@ -171,13 +190,20 @@ class TeachingExplanationWorkflow:
                 "review": review.to_dict() if review else None,
                 "invalid_citation_count": invalid,
                 "output_budget": budget.to_dict(),
+                "view_max_chars": self._view_max_chars,
                 "draft_error": error,
+                "trace": _trace_block(
+                    plan, drafts, review, bound, evidence_package, view_sizes, budget
+                ),
             },
             section_drafts=drafts,
             grounding_issues=issues,
             budget=budget,
             review=review,
         )
+
+    def _current_view_budget(self) -> int:
+        return getattr(self, "_view_max_chars", self.max_chars)
 
     def _revise(
         self,
@@ -228,11 +254,13 @@ class TeachingExplanationWorkflow:
         query: str,
         evidence_package: EvidencePackage,
         plan: ExplanationPlan,
+        view_sizes: dict[str, int],
     ) -> tuple[TeachingDraft | None, tuple[DraftSection, ...], tuple[GroundingIssue, ...], str | None]:
         drafts: list[DraftSection] = []
         issues: list[GroundingIssue] = []
         for section in plan.sections:
             context = self._section_bundle(query, evidence_package, section)
+            view_sizes[section.id] = len(context.items)
             if not context.items:
                 # Nothing bound to this section, so there is nothing to write from.
                 issues.append(GroundingIssue(
@@ -255,6 +283,25 @@ class TeachingExplanationWorkflow:
         composed = self.composer.compose(query, plan, drafts)
         return composed, tuple(drafts), tuple(issues), None
 
+    def _view_char_budget(
+        self,
+        query: str,
+        plan: ExplanationPlan,
+        budget: OutputBudget,
+    ) -> int:
+        """Turn the model's window into a size for one view, in tokens."""
+        fixed = (
+            FIXED_PROMPT_TOKENS
+            + self.estimator.estimate(query)
+            + self.estimator.estimate(json.dumps(plan.to_dict(), ensure_ascii=False))
+        )
+        decision = self.policy.decide(
+            fixed_tokens=fixed, requested_output_tokens=budget.max_output_tokens
+        )
+        if not decision.allowed or decision.context_budget_tokens < 1:
+            return 0
+        return self.policy.context_chars_for(decision, self.estimator)
+
     def _bound_bundle(
         self,
         query: str,
@@ -262,7 +309,7 @@ class TeachingExplanationWorkflow:
         plan: ExplanationPlan,
     ) -> ContextBundle:
         refs = _bound_refs(evidence_package, plan.evidence_labels)
-        return _bundle(query, refs, self.max_chars)
+        return _bundle(query, refs, self._current_view_budget())
 
     def _section_bundle(
         self,
@@ -271,7 +318,53 @@ class TeachingExplanationWorkflow:
         section: ExplanationSection,
     ) -> ContextBundle:
         refs = _bound_refs(evidence_package, section.evidence_labels)
-        return _bundle(query, refs, self.max_chars)
+        return _bundle(query, refs, self._current_view_budget())
+
+
+def _trace_block(
+    plan: ExplanationPlan,
+    drafts: tuple[DraftSection, ...],
+    review: TeachingReviewResult | None,
+    bound: ContextBundle,
+    evidence_package: EvidencePackage,
+    view_sizes: dict[str, int],
+    budget: OutputBudget,
+) -> dict[str, Any]:
+    """The teach path's intermediate state, shaped for --debug and for interviews."""
+    workspace = evidence_package.evidence_workspace
+    return {
+        "primary_strategy": plan.primary_strategy,
+        "secondary_strategies": list(plan.secondary_strategies),
+        "core_mental_model": plan.core_mental_model,
+        "context_views": {
+            "workspace_evidence": len(workspace) if workspace is not None else None,
+            "bound_evidence": len(bound.items),
+            "per_section": dict(view_sizes),
+        },
+        "section_drafts": [
+            {
+                "id": draft.section_id,
+                "title": draft.title,
+                "evidence_state": draft.evidence_state,
+                "used_citations": list(draft.used_citations),
+                "invalid_citations": list(draft.invalid_citations),
+                "chars": len(draft.text_with_citations),
+            }
+            for draft in drafts
+        ],
+        "section_citations": {
+            draft.section_id: list(draft.used_citations) for draft in drafts
+        },
+        "section_confidence": {
+            draft.section_id: draft.evidence_state for draft in drafts
+        },
+        # No compression happens yet: nothing in this round drops evidence from a
+        # view, so the list is empty rather than absent - a reader should be able
+        # to tell "none happened" from "not recorded".
+        "compression_events": [],
+        "revision_trace": review.to_dict() if review is not None else None,
+        "output_budget": budget.to_dict(),
+    }
 
 
 def _bound_refs(
@@ -292,6 +385,11 @@ def _bound_refs(
 
 
 def _bundle(query: str, refs: tuple[EvidenceRef, ...], max_chars: int) -> ContextBundle:
+    if max_chars < 1:
+        # A window too small to hold anything is a legal outcome of the budget
+        # policy, not an error: it means this model cannot carry this prompt.
+        return ContextBundle(query=query, items=[], rendered_text="", total_chars=0,
+                             max_chars=0, truncated=bool(refs))
     items = [context_item_from_ref(ref) for ref in refs]
     rendered, kept, truncated = ContextBuilder(max_chars=max_chars).render_items(items)
     return ContextBundle(

@@ -160,6 +160,7 @@ class EvidenceDrivenWorkflow:
                 if outcome.explanation_plan is not None
                 else None
             ),
+            teaching=(outcome.workspace_stats or {}).get("trace"),
         )
         return AgenticAnswerResult(
             answer_result,

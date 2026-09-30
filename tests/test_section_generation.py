@@ -334,3 +334,67 @@ class TestMultiPassWorkflow:
             "E1", "E2", "E3", "E4"
         }
         assert result.budget is not None
+
+
+class TestViewBudget:
+    def _run(self, capabilities: ModelCapabilities):
+        package = make_package()
+        plan = make_plan([section(1)], depth="brief")
+        client = ScriptedClient(["一 [E1]。"])
+        workflow = TeachingExplanationWorkflow(
+            FixedPlanner(plan),
+            TeachingWriter(lambda: client),
+            capabilities=capabilities,
+        )
+        return workflow.run(request_for(depth="brief"), package)
+
+    def test_the_view_is_sized_from_the_model_window(self) -> None:
+        small = self._run(ModelCapabilities(32_768, 4_096))
+        large = self._run(ModelCapabilities(131_072, 32_768))
+
+        assert small.stats["view_max_chars"] < large.stats["view_max_chars"]
+        assert small.stats["view_max_chars"] > 0
+
+    def test_a_window_that_cannot_fit_anything_yields_no_view(self) -> None:
+        result = self._run(ModelCapabilities(4_096, 1_024))
+
+        assert result.stats["view_max_chars"] == 0
+
+
+class TestTeachingTrace:
+    def test_the_stats_carry_a_trace_shaped_block(self) -> None:
+        package = make_package()
+        plan = make_plan([section(1), section(2), section(3), section(4)])
+        client = ScriptedClient([
+            "一 [E1]。", "二 [E2]。", "三 [E3]。", "四 [E4]。", "合成 [E1][E2][E3][E4]。",
+        ])
+        workflow = TeachingExplanationWorkflow(
+            FixedPlanner(plan), TeachingWriter(lambda: client), SectionComposer(lambda: client)
+        )
+
+        block = workflow.run(request_for(), package).stats["trace"]
+
+        assert block["primary_strategy"] == "PROBLEM_SOLUTION"
+        assert block["core_mental_model"]
+        assert block["context_views"]["per_section"] == {"S1": 1, "S2": 1, "S3": 1, "S4": 1}
+        assert [item["id"] for item in block["section_drafts"]] == ["S1", "S2", "S3", "S4"]
+        assert block["section_citations"]["S1"] == ["E1"]
+        assert block["section_confidence"]["S1"] == "CONFIRMED"
+        # Empty, not absent: a reader must be able to tell "none" from "not recorded".
+        assert block["compression_events"] == []
+
+    def test_the_trace_dict_omits_teaching_when_the_path_did_not_run(self) -> None:
+        from devcontext.agentic.models import AgenticTrace
+        from devcontext.routing import DecisionSource, QueryType, RouteDecision
+        from devcontext.agentic.models import SufficiencyResult
+
+        trace = AgenticTrace(
+            route=RouteDecision(QueryType.CODE, DecisionSource.RULES, "x"),
+            rounds=[],
+            retry_count=0,
+            final_sufficiency=SufficiencyResult(True, (), "ok", "llm"),
+            stop_reason="ready",
+        )
+
+        assert "teaching" not in trace.to_dict()
+        assert "explanation_plan" not in trace.to_dict()
