@@ -24,6 +24,12 @@ from devcontext.explanation.planner import (
     parse_explanation_plan,
 )
 from devcontext.explanation.prompts import EXPLANATION_PLANNER_SYSTEM_PROMPT
+from devcontext.explanation.reviewer import (
+    SectionIssue,
+    TeachingReviewResult,
+    TeachingReviewer,
+    needs_llm_review,
+)
 from devcontext.explanation.workflow import (
     TeachingAnswerResult,
     TeachingExplanationWorkflow,
@@ -34,6 +40,10 @@ __all__ = [
     "GroundingIssue",
     "OutputBudget",
     "SectionComposer",
+    "SectionIssue",
+    "TeachingReviewResult",
+    "TeachingReviewer",
+    "needs_llm_review",
     "budget_for",
     "grounding_issues",
     "TeachingAnswerResult",

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -141,6 +141,7 @@ class TeachingWriter:
         core_mental_model: str,
         section: ExplanationSection,
         context: ContextBundle,
+        revision_notes: Sequence[str] = (),
     ) -> DraftSection:
         """Write one section against only the evidence the plan bound to it.
 
@@ -174,6 +175,8 @@ class TeachingWriter:
             "available_citations": sorted(permitted),
             "context": context.rendered_text,
         }
+        if revision_notes:
+            payload["revision_notes"] = list(revision_notes)
         self.last_client = self.llm_client_factory()
         response = self.last_client.generate([
             LLMMessage("system", SECTION_WRITER_SYSTEM_PROMPT),

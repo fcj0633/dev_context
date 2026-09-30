@@ -54,8 +54,10 @@ from devcontext.explanation import (
     ExplanationPlanner,
     SectionComposer,
     TeachingExplanationWorkflow,
+    TeachingReviewer,
 )
 from devcontext.explanation.composer import COMPOSER_MAX_TOKENS
+from devcontext.explanation.reviewer import REVIEWER_MAX_TOKENS as TEACHING_REVIEWER_MAX_TOKENS
 from devcontext.explanation.writer import TEACHING_ANSWER_MAX_TOKENS, TeachingWriter
 from devcontext.planning import EvidencePlan, EvidencePlanner, QuestionPlan, QuestionPlanner
 from devcontext.request import ANSWER_MODES, TEACH_DEPTHS
@@ -392,6 +394,17 @@ def _teaching_writer_factory(settings: Settings) -> Callable[[], LLMClient]:
     )
 
 
+def _teaching_reviewer_factory(settings: Settings) -> Callable[[], LLMClient]:
+    return lambda: DeepSeekLLMClient(
+        api_key=settings.deepseek_key(),
+        base_url=settings.deepseek_base_url,
+        model=settings.deepseek_reviewer_model or settings.deepseek_model,
+        reasoning_effort="high",
+        max_tokens=TEACHING_REVIEWER_MAX_TOKENS,
+        json_mode=True,
+    )
+
+
 def _composer_factory(settings: Settings) -> Callable[[], LLMClient]:
     return lambda: DeepSeekLLMClient(
         api_key=settings.deepseek_key(),
@@ -461,6 +474,7 @@ def _planned_workflow(
             ExplanationPlanner(_explanation_planner_factory(settings)),
             TeachingWriter(_teaching_writer_factory(settings)),
             SectionComposer(_composer_factory(settings)),
+            TeachingReviewer(_teaching_reviewer_factory(settings)),
             capabilities=settings.model_capabilities(),
         )
     return EvidenceDrivenWorkflow(

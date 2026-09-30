@@ -17,6 +17,21 @@ REVIEW_ISSUE_TYPES = (
     "LENGTH_VIOLATION",
 )
 
+# The teaching dimensions. LENGTH_VIOLATION loses its fixed window here: what is
+# too long is now "repeats itself" or "does not fit the output budget", not
+# "exceeds 5000 characters".
+TEACHING_ISSUE_TYPES = (
+    "MISSING_MENTAL_MODEL",
+    "MISSING_WHY",
+    "POOR_SCAFFOLDING",
+    "MISLABELED_EXAMPLE",
+    "FACT_INFERENCE_CONFUSION",
+    "GENERAL_KNOWLEDGE_AS_PROJECT_FACT",
+    "SECTION_EVIDENCE_MISMATCH",
+    "UNHELPFUL_DETAIL",
+    "ABRUPT_TRANSITION",
+)
+
 
 @dataclass(frozen=True, slots=True)
 class AnswerSection:

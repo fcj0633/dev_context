@@ -19,6 +19,12 @@ from devcontext.explanation.planner import (
     ExplanationPlanner,
     fallback_explanation_plan,
 )
+from devcontext.explanation.reviewer import (
+    MAX_REVISION_ROUNDS,
+    TeachingReviewResult,
+    TeachingReviewer,
+    needs_llm_review,
+)
 from devcontext.explanation.writer import TeachingDraft, TeachingWriter
 from devcontext.models import AnswerResult, ContextBundle
 from devcontext.request import UserRequest
@@ -43,6 +49,7 @@ class TeachingAnswerResult:
     section_drafts: tuple[DraftSection, ...] = ()
     grounding_issues: tuple[GroundingIssue, ...] = ()
     budget: OutputBudget | None = None
+    review: TeachingReviewResult | None = None
 
 
 class TeachingExplanationWorkflow:
@@ -59,6 +66,7 @@ class TeachingExplanationWorkflow:
         planner: ExplanationPlanner,
         writer: TeachingWriter,
         composer: SectionComposer | None = None,
+        reviewer: TeachingReviewer | None = None,
         *,
         max_chars: int = DEFAULT_TEACHING_MAX_CHARS,
         capabilities: ModelCapabilities | None = None,
@@ -66,6 +74,7 @@ class TeachingExplanationWorkflow:
         self.planner = planner
         self.writer = writer
         self.composer = composer
+        self.reviewer = reviewer
         self.max_chars = max_chars
         self.capabilities = capabilities or FALLBACK_CAPABILITIES
 
@@ -92,6 +101,7 @@ class TeachingExplanationWorkflow:
         draft: TeachingDraft | None
         drafts: tuple[DraftSection, ...] = ()
         issues: tuple[GroundingIssue, ...] = ()
+        review: TeachingReviewResult | None = None
         error: str | None = None
 
         started = time.perf_counter()
@@ -116,6 +126,27 @@ class TeachingExplanationWorkflow:
             )
         )
 
+        # Review runs on the section-level path, where naming a bad section is
+        # actionable. A one-shot answer has no sections to target.
+        if drafts and self.reviewer is not None and needs_llm_review(plan, issues):
+            started_review = time.perf_counter()
+            review = self.reviewer.review(request.original_query, plan, drafts)
+            stages.append(
+                _stage("teaching_review", started_review, review.decision_source,
+                       getattr(self.reviewer, "last_client", None), "high")
+            )
+            if review.revision_required and MAX_REVISION_ROUNDS >= 1:
+                started_revision = time.perf_counter()
+                drafts, revised = self._revise(
+                    request.original_query, evidence_package, plan, drafts, review
+                )
+                issues = issues + revised
+                draft = self.composer.compose(request.original_query, plan, drafts)
+                stages.append(
+                    _stage("teaching_revision", started_revision, "llm",
+                           getattr(self.writer, "last_client", None), "high")
+                )
+
         answer = AnswerResult(
             draft.text_with_citations if draft else _no_evidence_answer(),
             list(draft.used_citations) if draft else [],
@@ -137,6 +168,7 @@ class TeachingExplanationWorkflow:
                 "plan_section_count": len(plan.sections),
                 "plan_evidence_labels": list(plan.evidence_labels),
                 "grounding_issues": [item.to_dict() for item in issues],
+                "review": review.to_dict() if review else None,
                 "invalid_citation_count": invalid,
                 "output_budget": budget.to_dict(),
                 "draft_error": error,
@@ -144,7 +176,52 @@ class TeachingExplanationWorkflow:
             section_drafts=drafts,
             grounding_issues=issues,
             budget=budget,
+            review=review,
         )
+
+    def _revise(
+        self,
+        query: str,
+        evidence_package: EvidencePackage,
+        plan: ExplanationPlan,
+        drafts: tuple[DraftSection, ...],
+        review: TeachingReviewResult,
+    ) -> tuple[tuple[DraftSection, ...], tuple[GroundingIssue, ...]]:
+        """Regenerate only the sections the reviewer named."""
+        notes: dict[str, list[str]] = {}
+        for issue in review.section_issues:
+            notes.setdefault(issue.section_id, []).append(
+                f"{issue.issue_type}: {issue.description}"
+            )
+        by_id = {section.id: section for section in plan.sections}
+        revised: list[DraftSection] = []
+        new_issues: list[GroundingIssue] = []
+        for draft in drafts:
+            if draft.section_id not in review.revision_required:
+                revised.append(draft)
+                continue
+            section = by_id.get(draft.section_id)
+            context = (
+                self._section_bundle(query, evidence_package, section)
+                if section is not None
+                else None
+            )
+            if section is None or context is None or not context.items:
+                revised.append(draft)
+                continue
+            try:
+                replacement = self.writer.write_section(
+                    query, plan.core_mental_model, section, context,
+                    revision_notes=tuple(notes.get(draft.section_id, [])),
+                )
+            except Exception:
+                revised.append(draft)
+                continue
+            revised.append(replacement)
+            new_issues.extend(
+                grounding_issues(section, replacement.text_with_citations)
+            )
+        return tuple(revised), tuple(new_issues)
 
     def _write_in_sections(
         self,
