@@ -435,6 +435,32 @@ CITATION_PATTERN = re.compile(r"\[(C\d+)\]")     # answer/generator.py:14
 
 **验收**：上述测试全绿；余票桶在 `explain` 模式下的输出与 Phase 0 快照**逐字一致**（证明本 Phase 零行为变更）；`pytest` 全绿。
 
+### 6.7 执行 Phase 1A 时的三处修正
+
+**修正 1：「explain 输出逐字一致」这条验收判据不成立，必须换掉。**
+
+Phase 0 基线里的答案由 LLM 生成，**重跑必然不同**——判据本身不可验证。可确定性验证的是检索层。改用下面三条，全部已实测通过：
+
+| 验证 | 结果 |
+|---|---|
+| `pytest` | 329 passed, 1 skipped（1A 新增 20 个测试）|
+| frozen L1.5 + regression 全量（24 例）| **逐案零差异**，含 `final_context` 的逐项 `label` / `chunk_id` / `truncated` |
+| L1 `evaluate` | 验收集合完全一致、`comparable`、无超过 0.05 的 recall/MRR 变化 |
+
+frozen 模式是这里最有力的证据：它用固定 query 与 oracle 判定端到端跑真实的 `RetrievalController.retrieve()`，任何检索行为变化都会在 24 例里暴露。
+
+**修正 2：`for_round` 的语义是"累积到该轮"，不是"各轮互斥"。**
+
+初稿把每轮新召回的证据分开存，于是第 1 轮的视图看不到第 0 轮的证据。**这是错的**——legacy 控制器判第 1 轮覆盖率时用的是**整个 pool**，所以互斥视图本身就成了行为变更。正确语义：`for_round(n)` = 截至第 n 轮已知的全部证据。真正要保证的是**不向前泄漏**（第 0 轮不得看见第 1 轮才召回的），这一点有独立测试守住。
+
+相应地 `EvidenceRef.round_index` 改名为 `first_seen_round`——它记的是首次被哪一轮召回，后续轮次重复召回不该改动它。
+
+**修正 3：`CITATION_PATTERN` 不改成 `r"\[([CE]\d+)\]"`，而是新增独立的 `E` 命名空间正则。**
+
+§6.4 原写"把正则放宽为 `[CE]`"。实现时发现一个真实的回退风险：放宽后，legacy / explain 输出里的 `[E3]` 会从"被忽略"变成"被当成已用引用"，而 legacy bundle 里只有 `C` 标签，于是 `cli.py:251` 的 `citations[label]` 直接 `KeyError`。
+
+改为保留 `CITATION_PATTERN` 原样，新增 `EVIDENCE_CITATION_PATTERN`，并给 `strip_citations` / `extract_citations` 加一个默认值等于原值的 `pattern` 参数。这样 legacy / explain 路径**按构造成立地**零变更，同时 `E` 命名空间有明确归属——它不会与 `ContextBuilder` 按位置分配的 `C` 标签混淆。
+
 ---
 
 ## 7. Phase 1B — Coverage 解耦与 Token 预算
