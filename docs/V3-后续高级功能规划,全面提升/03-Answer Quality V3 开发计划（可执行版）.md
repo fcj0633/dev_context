@@ -363,6 +363,25 @@ Sources: (none)
 
 > 附带确认了一条口径：`all_core_satisfied_case_rate` 的分母是**该类期望状态的案例数**（16/18），不是全集。跨版本比对这个指标时不要用全集做分母，否则会误判成回退。
 
+**(g) 基线里同时暴露了第三处"报告压过事实"的缺陷：解析失败被呈现为证据缺失。**
+
+冻结基线的那次 `explain` 运行，六条 requirement **全部**是 `UNVERIFIED` + `decision_source: fallback`，`check_error = CoverageCheckError`。但 coverage 的 LLM 调用本身是**成功的**（`in=11288` / `out=3337` tokens，23.4 秒）。也就是说：**模型答了，是解析器把答案拒了**，然后 `_unverified()`（`agentic/coverage.py:219-232`）把"我没能验证"写成了 requirement 的最终状态。
+
+这一路走到用户面前变成：
+
+```
+Sufficiency: insufficient
+Requirements: ER1 missing, ER2 missing, ... ER6 missing
+```
+
+而 `UNVERIFIED` 的语义（"已有候选证据，但语义覆盖检查未能完成"，`:229`）和 "missing"（"没有找到直接证据"）**是两件相反的事**。塌成 one word 的是 `cli.py:231-239` 的 `_print_requirement_statuses`——它只判 `status.satisfied`，把 PARTIAL / MISSING / UNVERIFIED 全部打印为 `missing`。
+
+根因在严格解析器 `CoverageChecker._parse`（`:137-196`）：它要求 `set(raw) == {requirement_id, state, evidence_ids, missing_criteria, reason}` 精确相等、`state ∈ {SATISFIED, PARTIAL, MISSING}`、`evidence_ids ⊆ 该 requirement 的允许集合`、SATISFIED 必须有 evidence_ids、非 SATISFIED 必须有 missing_criteria。任一条不满足就整体抛错。`max_attempts=2` 两次都失败后，**六条一起降级为 UNVERIFIED**——注意这是**全有或全无**的降级：一次格式失误抹掉全部六条的判定。
+
+**裁决：与 §7.3 同一批修，理由相同。** 三处（`RETRIEVAL_FAILED`、CLI 状态塌缩、解析失败降级）是同一个反模式的三副面孔——**系统内部"不知道"的状态，在向外表达时被替换成了一个看起来确定的结论**。这正是 G5 在反向上的表现：不只是"证据不足却写得语气确定"，还有"系统明确表示未能验证，却被显示成已确认的缺失"。
+
+对 L1.5 的影响需要分清：**frozen 模式不受影响**（它用 `OracleCoverageChecker` 做确定性判定，`:127-165`）。**受影响的是 `--mode live`**——那里用的是真实 `CoverageChecker`，所以 live 模式下的 requirement 覆盖率目前被这条缺陷系统性压低。**在修好之前，不要把 live L1.5 的 requirement 覆盖率当回退信号。**
+
 ---
 
 ## 6. Phase 1A — EvidenceWorkspace 与 CitationRegistry
