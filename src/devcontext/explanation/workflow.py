@@ -5,8 +5,16 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from devcontext.context import ContextBuilder, EvidenceRef, EvidenceWorkspace
+from devcontext.context.budget import FALLBACK_CAPABILITIES, ModelCapabilities
 from devcontext.context.views import context_item_from_ref
-from devcontext.explanation.models import ExplanationPlan
+from devcontext.explanation.budget import OutputBudget, budget_for
+from devcontext.explanation.composer import SectionComposer
+from devcontext.explanation.grounding import GroundingIssue, grounding_issues
+from devcontext.explanation.models import (
+    DraftSection,
+    ExplanationPlan,
+    ExplanationSection,
+)
 from devcontext.explanation.planner import (
     ExplanationPlanner,
     fallback_explanation_plan,
@@ -27,41 +35,46 @@ DEFAULT_TEACHING_MAX_CHARS = 200_000
 class TeachingAnswerResult:
     answer: AnswerResult
     explanation_plan: ExplanationPlan | None
-    # Only the evidence the plan bound, under its workspace labels, and only the
-    # part of it that actually fits the writer's prompt.
+    # What the answer was written from, under workspace labels.
     context_bundle: ContextBundle
     draft: TeachingDraft | None
     stages: tuple[StageUsage, ...] = ()
     stats: dict[str, Any] = field(default_factory=dict)
+    section_drafts: tuple[DraftSection, ...] = ()
+    grounding_issues: tuple[GroundingIssue, ...] = ()
+    budget: OutputBudget | None = None
 
 
 class TeachingExplanationWorkflow:
     """Retrieval has already answered "what is true". This answers "how to teach it".
 
-    The evidence package carries the whole workspace, so this stage decides for
-    itself how much evidence to put in front of the writer instead of inheriting
-    a bundle that was already cut to fit one prompt.
+    Two paths. A short answer is written in one pass. A long one is written
+    section by section against section-scoped evidence and then composed, because
+    a single pass over eight sections stops holding the argument together - and
+    because per-section evidence is what makes a citation enforceable.
     """
 
     def __init__(
         self,
         planner: ExplanationPlanner,
         writer: TeachingWriter,
+        composer: SectionComposer | None = None,
         *,
         max_chars: int = DEFAULT_TEACHING_MAX_CHARS,
+        capabilities: ModelCapabilities | None = None,
     ) -> None:
         self.planner = planner
         self.writer = writer
+        self.composer = composer
         self.max_chars = max_chars
+        self.capabilities = capabilities or FALLBACK_CAPABILITIES
 
     def run(
         self,
         request: UserRequest,
         evidence_package: EvidencePackage,
     ) -> TeachingAnswerResult:
-        from devcontext.agentic.models import StageUsage, error_detail
-
-        stages: list[StageUsage] = []
+        stages: list[Any] = []
 
         started = time.perf_counter()
         try:
@@ -73,40 +86,97 @@ class TeachingExplanationWorkflow:
                    getattr(self.planner, "last_client", None), "high")
         )
 
-        bundle = self._bound_bundle(request.original_query, evidence_package, plan)
+        budget = budget_for(plan, self.capabilities)
+        bound = self._bound_bundle(request.original_query, evidence_package, plan)
+
+        draft: TeachingDraft | None
+        drafts: tuple[DraftSection, ...] = ()
+        issues: tuple[GroundingIssue, ...] = ()
+        error: str | None = None
 
         started = time.perf_counter()
-        draft: TeachingDraft | None = None
-        error: str | None = None
-        if bundle.items:
+        if budget.allow_multi_pass and self.composer is not None and bound.items:
+            draft, drafts, issues, error = self._write_in_sections(
+                request.original_query, evidence_package, plan
+            )
+        elif bound.items:
             try:
-                draft = self.writer.write(request.original_query, bundle, plan)
+                draft = self.writer.write(request.original_query, bound, plan)
             except Exception as exception:
+                from devcontext.agentic.models import error_detail
+
                 error = error_detail(exception)
+                draft = None
+        else:
+            draft = None
         stages.append(
-            _stage("teaching_draft", started, "fallback" if error else "llm",
-                   getattr(self.writer, "last_client", None), "high")
+            _stage(
+                "teaching_draft", started, "fallback" if error else "llm",
+                getattr(self.writer, "last_client", None), "high",
+            )
         )
 
         answer = AnswerResult(
-            draft.text_with_citations if draft else _no_evidence_answer(bundle),
+            draft.text_with_citations if draft else _no_evidence_answer(),
             list(draft.used_citations) if draft else [],
             list(draft.invalid_citations) if draft else [],
             zero_valid_citation=not (draft and draft.used_citations),
         )
+        invalid = sum(len(item.invalid_citations) for item in drafts) + len(
+            answer.invalid_citations
+        )
         return TeachingAnswerResult(
             answer=answer,
             explanation_plan=plan,
-            context_bundle=bundle,
+            context_bundle=bound,
             draft=draft,
             stages=tuple(stages),
             stats={
-                "bound_evidence_count": len(bundle.items),
+                "path": "multi_pass" if drafts else "fast",
+                "bound_evidence_count": len(bound.items),
                 "plan_section_count": len(plan.sections),
                 "plan_evidence_labels": list(plan.evidence_labels),
+                "grounding_issues": [item.to_dict() for item in issues],
+                "invalid_citation_count": invalid,
+                "output_budget": budget.to_dict(),
                 "draft_error": error,
             },
+            section_drafts=drafts,
+            grounding_issues=issues,
+            budget=budget,
         )
+
+    def _write_in_sections(
+        self,
+        query: str,
+        evidence_package: EvidencePackage,
+        plan: ExplanationPlan,
+    ) -> tuple[TeachingDraft | None, tuple[DraftSection, ...], tuple[GroundingIssue, ...], str | None]:
+        drafts: list[DraftSection] = []
+        issues: list[GroundingIssue] = []
+        for section in plan.sections:
+            context = self._section_bundle(query, evidence_package, section)
+            if not context.items:
+                # Nothing bound to this section, so there is nothing to write from.
+                issues.append(GroundingIssue(
+                    section.id, "SECTION_WITHOUT_EVIDENCE",
+                    "该章节没有绑定任何证据，无法生成",
+                ))
+                continue
+            try:
+                draft = self.writer.write_section(
+                    query, plan.core_mental_model, section, context
+                )
+            except Exception as exception:
+                from devcontext.agentic.models import error_detail
+
+                return None, tuple(drafts), tuple(issues), error_detail(exception)
+            drafts.append(draft)
+            issues.extend(grounding_issues(section, draft.text_with_citations))
+        if not drafts:
+            return None, (), tuple(issues), None
+        composed = self.composer.compose(query, plan, drafts)
+        return composed, tuple(drafts), tuple(issues), None
 
     def _bound_bundle(
         self,
@@ -114,37 +184,47 @@ class TeachingExplanationWorkflow:
         evidence_package: EvidencePackage,
         plan: ExplanationPlan,
     ) -> ContextBundle:
-        workspace = evidence_package.evidence_workspace
-        refs = self._bound_refs(workspace, evidence_package, plan)
-        items = [context_item_from_ref(ref) for ref in refs]
-        rendered, kept, truncated = ContextBuilder(
-            max_chars=self.max_chars
-        ).render_items(items)
-        return ContextBundle(
-            query=query,
-            items=kept,
-            rendered_text=rendered,
-            total_chars=len(rendered),
-            max_chars=self.max_chars,
-            truncated=truncated,
-        )
+        refs = _bound_refs(evidence_package, plan.evidence_labels)
+        return _bundle(query, refs, self.max_chars)
 
-    @staticmethod
-    def _bound_refs(
-        workspace: EvidenceWorkspace | None,
+    def _section_bundle(
+        self,
+        query: str,
         evidence_package: EvidencePackage,
-        plan: ExplanationPlan,
-    ) -> tuple[EvidenceRef, ...]:
-        if workspace is not None:
-            return workspace.by_citation(plan.evidence_labels)
-        # No workspace means this predates the workspace change; fall back to
-        # whatever the plan's labels resolve to in the retrieval context.
-        wanted = set(plan.evidence_labels)
-        return tuple(
-            _ref_from_item(item)
-            for item in evidence_package.context_bundle.items
-            if item.citation.label in wanted
-        )
+        section: ExplanationSection,
+    ) -> ContextBundle:
+        refs = _bound_refs(evidence_package, section.evidence_labels)
+        return _bundle(query, refs, self.max_chars)
+
+
+def _bound_refs(
+    evidence_package: EvidencePackage,
+    labels: tuple[str, ...],
+) -> tuple[EvidenceRef, ...]:
+    workspace = evidence_package.evidence_workspace
+    if workspace is not None:
+        return workspace.by_citation(labels)
+    # No workspace means this predates the workspace change; fall back to
+    # whatever the labels resolve to in the retrieval context.
+    wanted = set(labels)
+    return tuple(
+        _ref_from_item(item)
+        for item in evidence_package.context_bundle.items
+        if item.citation.label in wanted
+    )
+
+
+def _bundle(query: str, refs: tuple[EvidenceRef, ...], max_chars: int) -> ContextBundle:
+    items = [context_item_from_ref(ref) for ref in refs]
+    rendered, kept, truncated = ContextBuilder(max_chars=max_chars).render_items(items)
+    return ContextBundle(
+        query=query,
+        items=kept,
+        rendered_text=rendered,
+        total_chars=len(rendered),
+        max_chars=max_chars,
+        truncated=truncated,
+    )
 
 
 def _ref_from_item(item: Any) -> EvidenceRef:
@@ -164,7 +244,7 @@ def _ref_from_item(item: Any) -> EvidenceRef:
     )
 
 
-def _no_evidence_answer(bundle: ContextBundle) -> str:
+def _no_evidence_answer() -> str:
     from devcontext.answer.generator import EMPTY_CONTEXT_ANSWER
 
     return EMPTY_CONTEXT_ANSWER

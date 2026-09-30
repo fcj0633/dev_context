@@ -5,6 +5,8 @@ from pathlib import Path
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from devcontext.context.budget import ModelCapabilities
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -31,6 +33,19 @@ class Settings(BaseSettings):
     deepseek_reviewer_model: str | None = None
     source_policy_path: Path | None = None
     repository_name: str = "my12306"
+    # Effective ceilings for this pipeline, not the model's advertised limits.
+    # deepseek-flash documents a 1M window and 384K max output, but the writers
+    # here cap their own output well below that, so budgeting against 384K would
+    # promise room the pipeline cannot use. Raise these together with the writer
+    # token caps, not before them.
+    deepseek_context_window: int = 131_072
+    deepseek_max_output_tokens: int = 32_768
+
+    def model_capabilities(self) -> ModelCapabilities:
+        return ModelCapabilities(
+            context_window=self.deepseek_context_window,
+            max_output_tokens=self.deepseek_max_output_tokens,
+        )
 
     def validate_sources(self) -> None:
         missing = [

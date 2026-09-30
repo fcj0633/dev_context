@@ -13,6 +13,9 @@ from devcontext.explanation.models import (
     ExplanationSection,
     TeachingAnswerPlanBundle,
 )
+from devcontext.explanation.budget import OutputBudget, budget_for
+from devcontext.explanation.composer import SectionComposer
+from devcontext.explanation.grounding import GroundingIssue, grounding_issues
 from devcontext.explanation.planner import (
     EXPLANATION_PLANNER_MAX_TOKENS,
     ExplanationPlanError,
@@ -28,6 +31,11 @@ from devcontext.explanation.workflow import (
 
 __all__ = [
     "EXPLANATION_PLANNER_MAX_TOKENS",
+    "GroundingIssue",
+    "OutputBudget",
+    "SectionComposer",
+    "budget_for",
+    "grounding_issues",
     "TeachingAnswerResult",
     "TeachingExplanationWorkflow",
     "CLAIM_TYPES",

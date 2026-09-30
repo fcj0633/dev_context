@@ -680,6 +680,49 @@ class AgenticAnswerResult:
 
 **验收**：余票桶 `--answer-mode teach` 的 `ExplanationPlan` 含可贯穿全文的 `core_mental_model`；`sections` 与 Evidence Requirement **不是一一对应**；至少一个 `FAILURE_SCENARIO` 与一个 `TRADEOFF` 章节。
 
+### 8.8 执行 Phase 2 时的发现
+
+**(a) `EvidenceConflict` 上移到 `devcontext/models.py`。** 它原本定义在 `answer/models.py`。`explanation` 若从那里导入，就在 Phase 3（`answer/planner.py` 降级为 `explanation` 的适配器）形成环。上移后 `answer` 与 `explanation` 都从 `devcontext/models.py` 取，两侧都不再依赖对方。
+
+**(b) `EvidencePackage` 还需要 `evidence_workspace`，不能只有 `evidence_catalog`。** catalog 只有标签与元数据，**没有正文**。解释层要按需构造自己的视图，就必须拿到证据本身。若只给 catalog，planner 看到的是检索 bundle 的 `C` 标签、而校验用的是 `E` 标签，它提出的每一个 Citation 都会被判为未知。字段与 `evidence_catalog` 一样**不进 `to_dict()`**。此时 workspace 已 `freeze()`，放进 frozen package 不构成可变性。
+
+**(c) §7.3 的 `RetrievalState` 迁移在 Phase 2 就变成必需，不能推迟。** 计划原本把它列在 1B。实际上在 1B 它无处生效（teach 还不存在），而在 2 立刻致命：**teach 路径下检索 bundle 为空但 workspace 有证据时，`package_state` 与 `_answer()` 的提前退出都会判成 EMPTY，直接输出"当前没有检索到足够的项目上下文"**。是 planner 的测试先撞上了这个场景。
+
+裁决：新增 `AnswerOptions.evidence_source`（`EVIDENCE_SOURCE_BY_MODE`：`legacy`/`explain` → `bundle`，`teach` → `workspace`），`package_state` 与 `_answer()` 都按它选择"什么算有证据"。**这个 gating 是必须的**——若无条件改成以 workspace 为准，legacy / explain 的行为会变，冻结的 L1.5 期望（如 `flow-06` 的 `EMPTY`）会跟着变。
+
+**(d) 一处与计划措辞的偏离：`AgenticAnswerResult.context_bundle` 装的是"计划绑定的证据"，不是"最终被引用的证据"。** §8.6 原写 `final_cited_bundle`（只 materialize 被引用者）。实现后认为按语义应该是"答案**依据**什么写出来的"——写作者看到的是计划绑定集合，所以装绑定集合更诚实；被引用的子集由 `used_citations` 表达。CLI 的 Sources 与 `build_citation_trace` 两类消费方在两种口径下都能正确解析，所以这不影响兼容性。
+
+**(e) teach 路径本轮不跑 Reviewer。** 现有 `AnswerReviewer` 期望一个 `AnswerPlan`，用它去审 `ExplanationPlan` 是在量错东西。教学型 Reviewer 属于 Phase 4（§10），届时连同三档门控一起做。
+
+**(f) `deep` 的守卫有一条非显然的可达路径。** `AnswerOptions(depth_override="deep", answer_mode="explain")` 在**构造时**就抛，所以守卫看起来是死代码。但真正可达的是另一种情况：**调用方不指定 depth、把深度交给 planner 决定，而 planner 返回了 `deep`**——此时 mode 是 explain，而 `override is None` 跳过了覆盖检查。守卫拦的正是这条。测试按这个场景写。
+
+### 8.9 Phase 2 实测：余票桶 teach 路径的真实产出
+
+命令：`devcontext ask "详细解释项目的余票桶是如何设计的" --answer-mode teach --depth detailed --debug`（落档 `artifacts/answer-quality-v2-baseline/token-bucket.teach.txt`）。
+
+**计划本身（这才是本轮的核心产出）：**
+
+| 字段 | 实际值 |
+|---|---|
+| `core_mental_model` | "余票桶是购票准入用的近似令牌池，不是库存账本：它按'车次×区间'建桶、按'席别'放字段，宁可多发令牌让数据库条件更新兜底，也不因少发令牌造成有票买不到。" |
+| `primary_strategy` | `PROBLEM_SOLUTION`；secondary = `CONCEPT_BUILDUP` / `TRADEOFF` / `FAILURE_ANALYSIS` |
+| `likely_misconceptions` | 3 条，含"以为分桶维度是车厢、时间片或订单批次" |
+| 章节 | **10 节**：`DIRECT_ANSWER → MENTAL_MODEL → CONCEPT×2 → EXECUTION_FLOW → MECHANISM → DESIGN_REASON → FAILURE_SCENARIO → BOUNDARY → SUMMARY` |
+
+**逐条对照 §8 的验收：**
+
+| 判据 | 结果 |
+|---|---|
+| 含可贯穿全文的 `core_mental_model` | ✅ 一句话，且成了解释轴 |
+| `sections` 与 Evidence Requirement 不是一一对应 | ✅ **6 条 requirement → 10 节** |
+| 至少一个 `FAILURE_SCENARIO` 与一个 `TRADEOFF` | ✅ `FAILURE_SCENARIO` 独立成节；取舍体现在 `DESIGN_REASON` + secondary `TRADEOFF` |
+| 教学手段逐节不同而非套模板 | ✅ `TABLE` / `SMALL_FLOW_DIAGRAM` / `A_B_REQUEST_TRACE` / `PSEUDOCODE` / `COUNTER_EXAMPLE` 各异，有一节 `NONE` |
+| 章节级证据强度 | ✅ `evidence_state` 在 CONFIRMED / PARTIAL 之间区分 |
+
+篇幅 9319 字、13 个 Citation、10 节——**远超旧的 5000 字上限，且这是结构正确带来的自然结果，不是为凑长度**。
+
+> 对照 §2.2 的 G1–G5：G1（先立问题）由 `PROBLEM_SETUP`/`DIRECT_ANSWER` 顺序解决；G2（心智模型）由 `core_mental_model` 解决；G3（评测只量字数）由 §8.9 的结构判据取代；G4（证据外推演）由四层 `claim_type` + `assumptions` 解决；G5（自信与证据不符）由章节级 `evidence_state` 解决。
+
 ---
 
 ## 9. Phase 3 — Section-scoped 生成与 Composer
@@ -709,6 +752,35 @@ class AgenticAnswerResult:
 - `test_conditional_claim_rendered_with_assumptions`（修订二新增，见 §11）
 
 **验收**：`--answer-mode teach --depth deep` 在余票桶上不再受 5000 中文字符上限约束；`invalid_citations` 为 0；Composer 输出中不存在未在章节草稿里出现过的 Citation。
+
+### 9.8 执行 Phase 3 时的发现
+
+**(a) Phase 0 遗留的 coverage 之谜，在 Phase 2 的实测里被查清了——靠的正是 §7 里加的那条诊断。**
+
+Phase 0 记录 coverage 六条全部 `UNVERIFIED`、`check_error = CoverageCheckError`（一个**解析**错误）。Phase 2 的 teach 实测显示同一位置变成了：
+
+```
+ER1..ER6  UNVERIFIED | RuntimeError: DeepSeek generation did not complete normally: finish_reason=length
+```
+
+**不是解析问题，是输出被 token 上限截断。** 若 Phase 1B 没有保留异常消息（只记类名），这条永远查不出来——两次不同的失败在 trace 里长得一模一样。
+
+**修复**：`cli.py:SUB_QUESTION_SUFFICIENCY_MAX_TOKENS` 由 `4096` 提到 `32768`。该文件对其他阶段早有"reasoning tokens 会在 JSON 输出前耗尽预算，表现为 finish_reason=length"的注释，唯独 coverage 的上限没跟上。
+
+**一个附带的口径变化**：Phase 1B 让 coverage 改读 workspace（不再是被截断的 bundle），**payload 因此变大**，这类截断失败会更容易发生。两者是同一条问题的两面：payload 既太大（该送摘要而非全文）又太长（上限太小）。本 Phase 只修了上限；**payload 本身该送 excerpt 而不是整块正文，那是 `PromptContextView` + `EvidenceDigest` 的活，属 Phase 4。**
+
+**(b) 本轮**没有**改动 `answer/planner.py:DEPTH_LIMITS` 与 `evaluation/answer_quality.py:DEPTH_CHAR_RANGES`。**
+
+§9.4 原写"两者都要改为按 OutputBudget 判断"。实现时的判断是**分两步走**：
+
+- **teach 路径**：`ExplanationPlanner` 结构上就没有字符区间（只有 `MAX_SECTIONS` 与可选的 `target_tokens`），`ExplanationSection.target_tokens` 已落地，`OutputBudget`（`explanation/budget.py`）按"计划复杂度 + 模型能力"决定输出预算。**teach 路径的固定字数上限是真的废除了**，`test_a_deep_answer_is_not_bounded_by_the_old_5000_character_window` 守住这一点。
+- **explain 路径**：`DEPTH_LIMITS` 与 `DEPTH_CHAR_RANGES` **保留不动**。它们管的正是 Phase 4 要做 A/B 的那个基线——现在改掉，`teach vs explain` 的盲测就同时变了两个变量，赢率再也解释不清。
+
+因此这两处的修改被有意推到 Phase 4 与 L2 V3 一起做（§10）。
+
+**(c) 章节级接地校验（`explanation/grounding.py`）是 Reviewer 的种子，不是它的替代。** 它做的是**确定性**检查：计划断言了 `PROJECT_FACT` 却没有绑定证据、计划含条件推演而正文没写成条件句、计划含假设案例而正文没标明假设、`evidence_state = UNVERIFIED` 而正文没有说明。这些恰好是 §10 要新增的 issue 类型里可确定判定的那几条（`MISSING_WHY` / `MISLABELED_EXAMPLE` / `FACT_INFERENCE_CONFUSION` / `UNVERIFIED` 相关），**先以零成本的形式落地，Phase 4 的 LLM Reviewer 接在它后面**，两者互补：确定性检查不漏、LLM 检查能读懂语义。
+
+**(d) Composer 违反禁令时的处置是"丢弃"而非"修补"。** 若编排后的正文出现了草稿里没有的 Citation，输出**整体回退**为章节草稿的确定性拼接（`composer.py:_deterministic_join`），不做局部替换。理由：能凭空造出一个 Citation 的调用，它在同一段文本里的其他判断也都不可信；局部修补等于挑着信。`test_composer_does_not_introduce_new_citations` 守住这条。
 
 ---
 

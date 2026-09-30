@@ -6,7 +6,11 @@ from dataclasses import dataclass
 from typing import Any
 
 from devcontext.answer.generator import EVIDENCE_CITATION_PATTERN, extract_citations
-from devcontext.explanation.models import ExplanationPlan
+from devcontext.explanation.models import (
+    DraftSection,
+    ExplanationPlan,
+    ExplanationSection,
+)
 from devcontext.llm import LLMClient, LLMMessage
 from devcontext.models import ContextBundle
 
@@ -42,6 +46,13 @@ TEACHING_WRITER_PROMPT = """写作要求：
 1. 第一段直接回答用户真正的问题。
 2. 每个关键事实使用该章节绑定的 Citation；证据缺口集中说明，不要每节重复免责声明。
 3. 不要输出 Sources 列表，不要输出 JSON。"""
+
+
+SECTION_WRITER_SYSTEM_PROMPT = TEACHING_WRITER_SYSTEM_PROMPT + """
+
+这一轮你只写一个章节。你收到的 Context 只包含该章节绑定的证据——
+不要引用标记之外的证据，即使你认为别处有更好的材料。
+不要写小标题，只写这一节的正文。"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,4 +133,60 @@ class TeachingWriter:
             text_with_citations=response.strip(),
             used_citations=tuple(label for label in labels if label in allowed),
             invalid_citations=tuple(label for label in labels if label not in allowed),
+        )
+
+    def write_section(
+        self,
+        query: str,
+        core_mental_model: str,
+        section: ExplanationSection,
+        context: ContextBundle,
+    ) -> DraftSection:
+        """Write one section against only the evidence the plan bound to it.
+
+        The evidence label allowlist is the section's own, not the whole
+        workspace: a section citing something the planner did not give it is
+        exactly what section-scoped validation exists to catch.
+        """
+        permitted = set(section.evidence_labels)
+        payload = {
+            "question": query,
+            "core_mental_model": core_mental_model,
+            "section": {
+                "id": section.id,
+                "title": section.title,
+                "section_type": section.section_type,
+                "teaching_goal": section.teaching_goal,
+                "key_points": list(section.key_points),
+                "teaching_devices": list(section.teaching_devices),
+                "evidence_state": section.evidence_state,
+                "claims": [
+                    {
+                        "goal": claim.claim_goal,
+                        "type": claim.claim_type,
+                        "confidence": claim.confidence,
+                        "conditional": claim.conditional,
+                        "assumptions": list(claim.assumptions),
+                    }
+                    for claim in section.claim_plans
+                ],
+            },
+            "available_citations": sorted(permitted),
+            "context": context.rendered_text,
+        }
+        self.last_client = self.llm_client_factory()
+        response = self.last_client.generate([
+            LLMMessage("system", SECTION_WRITER_SYSTEM_PROMPT),
+            LLMMessage("user", json.dumps(payload, ensure_ascii=False)),
+        ])
+        labels = extract_citations(response, EVIDENCE_CITATION_PATTERN)
+        return DraftSection(
+            section_id=section.id,
+            title=section.title,
+            text_with_citations=response.strip(),
+            used_citations=tuple(label for label in labels if label in permitted),
+            invalid_citations=tuple(
+                label for label in labels if label not in permitted
+            ),
+            evidence_state=section.evidence_state,
         )

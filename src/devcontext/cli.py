@@ -52,8 +52,10 @@ from devcontext.models import SearchResult
 from devcontext.explanation import (
     EXPLANATION_PLANNER_MAX_TOKENS,
     ExplanationPlanner,
+    SectionComposer,
     TeachingExplanationWorkflow,
 )
+from devcontext.explanation.composer import COMPOSER_MAX_TOKENS
 from devcontext.explanation.writer import TEACHING_ANSWER_MAX_TOKENS, TeachingWriter
 from devcontext.planning import EvidencePlan, EvidencePlanner, QuestionPlan, QuestionPlanner
 from devcontext.request import ANSWER_MODES, TEACH_DEPTHS
@@ -71,9 +73,14 @@ PLANNED_MAX_CHARS = 10000
 # before the JSON is emitted, which surfaces as finish_reason=length.
 PLANNER_MAX_TOKENS = 8192
 
-# Coverage checking emits one status object per requirement, so it needs more room
-# than the single-object legacy check for the same reason.
-SUB_QUESTION_SUFFICIENCY_MAX_TOKENS = 4096
+# Coverage checking emits one status object per requirement, and its prompt
+# carries each requirement's evidence bodies. At 4096 the reasoning alone
+# exhausted the cap before the JSON was emitted, so every round came back
+# finish_reason=length and all requirements were reported UNVERIFIED - which
+# reaches the user as "insufficient evidence" on a question the pipeline had
+# already retrieved the evidence for. Measured 2026-09-30: 6 requirements over
+# the full token-bucket evidence set needs far more than 4096.
+SUB_QUESTION_SUFFICIENCY_MAX_TOKENS = 32768
 
 # The rewriter's prompt carries every missing aspect, and per-requirement judging
 # produces a much longer gap list than the old source-type check did.
@@ -385,6 +392,16 @@ def _teaching_writer_factory(settings: Settings) -> Callable[[], LLMClient]:
     )
 
 
+def _composer_factory(settings: Settings) -> Callable[[], LLMClient]:
+    return lambda: DeepSeekLLMClient(
+        api_key=settings.deepseek_key(),
+        base_url=settings.deepseek_base_url,
+        model=settings.deepseek_answer_model or settings.deepseek_model,
+        reasoning_effort="high",
+        max_tokens=COMPOSER_MAX_TOKENS,
+    )
+
+
 def _question_planner(settings: Settings) -> QuestionPlanner:
     return QuestionPlanner(_planner_llm_factory(settings))
 
@@ -443,6 +460,8 @@ def _planned_workflow(
         teaching_workflow = TeachingExplanationWorkflow(
             ExplanationPlanner(_explanation_planner_factory(settings)),
             TeachingWriter(_teaching_writer_factory(settings)),
+            SectionComposer(_composer_factory(settings)),
+            capabilities=settings.model_capabilities(),
         )
     return EvidenceDrivenWorkflow(
         controller,
