@@ -26,6 +26,11 @@ from devcontext.evaluation.answer_quality import (
     check_answer_shape,
     load_answer_quality_cases,
 )
+from devcontext.evaluation.pedagogy import (
+    PedagogyJudge,
+    PedagogyScore,
+    summarise_pedagogy,
+)
 from devcontext.llm import LLMClient
 
 
@@ -127,7 +132,8 @@ def _capture_arm(
             "has_valid_citation": checks.has_valid_citation,
             "passed": checks.passed,
         },
-        "target_range": list(DEPTH_CHAR_RANGES[case.answer_depth]),
+        # deep has no range, so there is nothing to report as one.
+        "target_range": list(DEPTH_CHAR_RANGES.get(case.answer_depth, ())),
         "route": trace.route.to_dict(),
         "retry_count": trace.retry_count,
         "stop_reason": trace.stop_reason,
@@ -238,6 +244,7 @@ def run_case(
     judge: PairwiseAnswerJudge | None = None,
     top_k: int = DEFAULT_TOP_K,
     config: PairwiseEvaluationConfig = DEFAULT_EVALUATION_CONFIG,
+    pedagogy_judge: PedagogyJudge | None = None,
 ) -> dict[str, Any]:
     arms: dict[str, dict[str, Any]] = {}
     for mode in config.modes:
@@ -257,6 +264,13 @@ def run_case(
         ),
     }
     record["review_worksheet"] = _review_worksheet(case, record, config.modes)
+    # Scored on the candidate only: it is the arm under evaluation.
+    candidate_arm = arms[config.candidate_mode]
+    record["pedagogy"] = (
+        pedagogy_judge.judge(case, candidate_arm["answer"]).to_dict()
+        if pedagogy_judge is not None and not candidate_arm["error"]
+        else None
+    )
     return record
 
 
@@ -410,6 +424,13 @@ def summarise(
         "arms": arms,
         "stages": {mode: _stage_metrics(records, mode) for mode in config.modes},
         "acceptance": _acceptance(records, arms, config),
+        "pedagogy": summarise_pedagogy([
+            PedagogyScore(scores=item["pedagogy"]["scores"], notes=tuple(item["pedagogy"]["notes"]),
+                          decision_source=item["pedagogy"]["decision_source"],
+                          error=item["pedagogy"]["error"])
+            for item in records
+            if item.get("pedagogy") is not None
+        ]),
         "human_review_queue": [
             {
                 "id": record["id"],
@@ -436,6 +457,7 @@ def run_answer_quality_evaluation(
     resume: bool = False,
     progress: Callable[[str], None] | None = None,
     config: PairwiseEvaluationConfig = DEFAULT_EVALUATION_CONFIG,
+    pedagogy_judge_factory: Callable[[], LLMClient] | None = None,
 ) -> dict[str, Any]:
     say = progress or (lambda message: None)
     cases = load_answer_quality_cases(cases_path)
@@ -471,6 +493,11 @@ def run_answer_quality_evaluation(
             judge_client_factory=judge_client_factory,
             top_k=top_k,
             config=config,
+            pedagogy_judge=(
+                PedagogyJudge(pedagogy_judge_factory)
+                if pedagogy_judge_factory is not None
+                else None
+            ),
         )
         winner = record["judge"]["winner"]
         if record["judge"]["error"]:

@@ -20,6 +20,7 @@ from devcontext.evaluation.answer_quality_runner import (
     run_case,
     summarise,
 )
+from devcontext.evaluation.pedagogy import DIMENSIONS, PedagogyScore
 from devcontext.models import AnswerResult, Citation, ContextBundle, ContextItem
 from devcontext.routing import DecisionSource, QueryType, RouteDecision
 
@@ -415,3 +416,53 @@ def test_the_judge_payload_carries_no_mode_identity() -> None:
         }
     # The two orders swap which answer sits in position A.
     assert payloads[0]["answer_a"] != payloads[1]["answer_a"]
+
+
+def test_pedagogy_is_scored_on_the_candidate_only() -> None:
+    scored: list[str] = []
+
+    class RecordingPedagogy:
+        def judge(self, case, answer):
+            scored.append(answer)
+            return PedagogyScore(scores={name: 4 for name in DIMENSIONS})
+
+    record = run_case(
+        case("locate-01"),
+        workflow_factory=_factory(
+            {
+                V1_MODE: "结论：位置如下。" + CHINESE_150,
+                V2_MODE: "入口在 UserController。" + MARKER + CHINESE_150,
+            },
+        ),
+        judge_client_factory=lambda: ContentJudgeClient(),
+        pedagogy_judge=RecordingPedagogy(),
+    )
+
+    assert len(scored) == 1
+    assert MARKER in scored[0], "the candidate arm is the one under evaluation"
+    assert record["pedagogy"]["overall"] == 4.0
+
+    summary = summarise([record])
+    assert summary["pedagogy"]["scored_cases"] == 1
+    assert summary["pedagogy"]["overall"] == 4.0
+
+
+def test_pedagogy_is_skipped_when_the_candidate_arm_failed() -> None:
+    class Boom:
+        def judge(self, case, answer):
+            raise AssertionError("must not be called")
+
+    def factory(mode: str, depth: str):
+        if mode == V2_MODE:
+            raise RuntimeError("arm failed")
+        return FakeWorkflow("结论：位置如下。" + CHINESE_150, depth)
+
+    record = run_case(
+        case("locate-01"),
+        workflow_factory=factory,
+        judge_client_factory=lambda: ContentJudgeClient(),
+        pedagogy_judge=Boom(),
+    )
+
+    assert record["pedagogy"] is None
+    assert summarise([record])["pedagogy"]["scored_cases"] == 0

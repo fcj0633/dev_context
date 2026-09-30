@@ -750,6 +750,7 @@ def main(argv: list[str] | None = None) -> int:
                 cases_path=cases_path,
                 workflow_factory=workflow_factory,
                 judge_client_factory=_answer_judge_factory(settings, args.judge_model),
+                pedagogy_judge_factory=_answer_judge_factory(settings, args.judge_model),
                 only=[item for item in args.only.split(",") if item] if args.only else None,
                 limit=args.limit,
                 journal_path=journal,
