@@ -5,7 +5,27 @@ from typing import Any
 
 
 ANSWER_DEPTHS = ("brief", "standard", "detailed")
-ANSWER_MODES = ("legacy", "explain")
+TEACH_DEPTHS = ("brief", "standard", "detailed", "deep")
+ANSWER_MODES = ("legacy", "explain", "teach")
+# The two paths that predate the teaching pipeline. They share its depth
+# vocabulary but not `deep`: a single-pass generator has no way to honour it, so
+# accepting it would silently produce an ordinary answer under a deep label.
+EXPLAIN_MODES = ("legacy", "explain")
+
+
+def depths_for(answer_mode: str) -> tuple[str, ...]:
+    return TEACH_DEPTHS if answer_mode == "teach" else ANSWER_DEPTHS
+
+
+# Which evidence set decides whether anything was retrieved at all. The teach
+# path builds its own views over the whole workspace, so for it an empty
+# retrieval bundle means the bundle was too small, not that nothing was found.
+# The older paths answer from that bundle, so for them it is still the measure.
+EVIDENCE_SOURCE_BY_MODE = {
+    "legacy": "bundle",
+    "explain": "bundle",
+    "teach": "workspace",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,10 +40,23 @@ class AnswerOptions:
     answer_mode: str = "legacy"
 
     def __post_init__(self) -> None:
-        if self.depth_override is not None and self.depth_override not in ANSWER_DEPTHS:
-            raise ValueError("depth_override must be brief, standard, or detailed")
         if self.answer_mode not in ANSWER_MODES:
-            raise ValueError("answer_mode must be legacy or explain")
+            raise ValueError(
+                "answer_mode must be one of " + ", ".join(ANSWER_MODES)
+            )
+        if self.depth_override is None:
+            return
+        allowed = depths_for(self.answer_mode)
+        if self.depth_override not in allowed:
+            raise ValueError(
+                f"depth {self.depth_override!r} is not available for "
+                f"answer_mode {self.answer_mode!r}; expected one of "
+                + ", ".join(allowed)
+            )
+
+    @property
+    def evidence_source(self) -> str:
+        return EVIDENCE_SOURCE_BY_MODE.get(self.answer_mode, "bundle")
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

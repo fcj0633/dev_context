@@ -4,12 +4,8 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 
-CONFLICT_RESOLUTIONS = (
-    "CURRENT_IMPLEMENTATION_WINS",
-    "CURRENT_VERIFICATION_WINS",
-    "DESIGN_INTENT_ONLY",
-    "UNRESOLVED",
-)
+from devcontext.models import CONFLICT_RESOLUTIONS, EvidenceConflict
+
 REVIEW_ISSUE_TYPES = (
     "UNSUPPORTED_CLAIM",
     "SOURCE_CONFLICT",

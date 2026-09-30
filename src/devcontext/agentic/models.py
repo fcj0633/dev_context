@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from devcontext.answer.generator import format_source
+from devcontext.context.registry import EvidenceCatalog
 from devcontext.models import AnswerResult, ContextBundle, ContextItem
 from devcontext.routing import QueryType, RouteDecision
 
@@ -194,6 +196,9 @@ class AgenticTrace:
     coverage_rounds: list[dict[str, Any]] = field(default_factory=list)
     final_coverage: list[dict[str, Any]] = field(default_factory=list)
     evidence_package_state: str | None = None
+    # Only the teach path fills this. Omitted from the dict when absent so the
+    # legacy and explain traces stay byte-for-byte what they were.
+    explanation_plan: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         value = {
@@ -224,6 +229,8 @@ class AgenticTrace:
                     "evidence_package_state": self.evidence_package_state,
                 }
             )
+        if self.explanation_plan is not None:
+            value["explanation_plan"] = self.explanation_plan
         return value
 
 
@@ -264,8 +271,14 @@ def error_detail(exception: BaseException, limit: int = MAX_ERROR_CHARS) -> str:
 @dataclass(slots=True)
 class AgenticAnswerResult:
     answer_result: AnswerResult
+    # What the answer was actually written from. On the teach path this is the
+    # evidence the explanation plan bound, not the whole retrieval context, so
+    # the CLI's Sources listing and the citation trace both resolve correctly.
     context_bundle: ContextBundle
     trace: AgenticTrace
+    # The full evidence set behind that bundle, with stable ids.
+    evidence_catalog: EvidenceCatalog | None = None
+    workspace_stats: Mapping[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {

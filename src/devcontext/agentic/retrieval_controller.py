@@ -206,7 +206,15 @@ class RetrievalController:
                 )
             )
 
-        state = package_state(plan, bundle, coverage, tuple(history))
+        state = package_state(
+            plan,
+            bundle,
+            coverage,
+            tuple(history),
+            len(workspace)
+            if request.answer_options.evidence_source == "workspace"
+            else None,
+        )
         unresolved = tuple(
             item.requirement_id for item in coverage if not item.satisfied
         )
@@ -220,6 +228,7 @@ class RetrievalController:
             tuple(history),
             tuple(coverage_rounds),
             workspace.freeze(),
+            workspace,
         )
         return RetrievalOutcome(package, tuple(stages))
 

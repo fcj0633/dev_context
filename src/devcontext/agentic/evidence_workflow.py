@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import re
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any
 
 from devcontext.agentic.evidence_models import (
     EvidencePackage,
@@ -34,6 +36,26 @@ from devcontext.models import AnswerResult
 from devcontext.request import AnswerOptions, UserRequest
 from devcontext.routing import DecisionSource, QueryType, RouteDecision
 
+if TYPE_CHECKING:
+    from devcontext.explanation.models import ExplanationPlan
+    from devcontext.explanation.workflow import TeachingExplanationWorkflow
+
+
+@dataclass(slots=True)
+class _AnswerOutcome:
+    """What the answer stage produced, without growing the return tuple."""
+
+    answer_result: AnswerResult
+    answer_plan: Any | None = None
+    review: Any | None = None
+    stages: list[StageUsage] = field(default_factory=list)
+    explanation_plan: "ExplanationPlan | None" = None
+    # Only the teach path replaces the retrieval bundle; everything else leaves
+    # this None and the retrieval context is used unchanged.
+    context_bundle: Any | None = None
+    evidence_catalog: Any | None = None
+    workspace_stats: Mapping[str, Any] | None = None
+
 
 class EvidenceDrivenWorkflow:
     """Orchestrate retrieval and answering across the EvidencePackage boundary."""
@@ -48,11 +70,13 @@ class EvidenceDrivenWorkflow:
         answer_mode: str = "legacy",
         depth_override: str | None = None,
         context_budget_override: int | None = None,
+        teaching_workflow: "TeachingExplanationWorkflow | None" = None,
     ) -> None:
         self.retrieval_controller = retrieval_controller
         self.answer_generator_factory = answer_generator_factory
         self.answer_planner = answer_planner
         self.answer_reviewer = answer_reviewer
+        self.teaching_workflow = teaching_workflow
         self.answer_options = AnswerOptions(depth_override, answer_mode)
         if context_budget_override is not None and context_budget_override < 1:
             raise ValueError("context_budget_override must be positive")
@@ -66,14 +90,17 @@ class EvidenceDrivenWorkflow:
         )
         retrieval = self.retrieval_controller.retrieve(request, top_k)
         package = retrieval.package
-        answer_result, answer_plan, review, answer_stages = self._answer(
-            request, package
-        )
+        outcome = self._answer(request, package)
+        answer_result = outcome.answer_result
+        answer_plan = outcome.answer_plan
+        review = outcome.review
+        answer_stages = outcome.stages
+        final_bundle = outcome.context_bundle or package.context_bundle
         sufficiency = package.to_legacy_sufficiency()
         route = _route_for_package(package)
         selected = [
             SelectedChunkTrace.from_context_item(item)
-            for item in package.context_bundle.items
+            for item in final_bundle.items
         ]
         rounds = []
         for round_value in package.coverage_rounds:
@@ -92,8 +119,19 @@ class EvidenceDrivenWorkflow:
                 )
             )
         requirement_traces = build_requirement_traces(package)
-        legacy_plan = _legacy_plan_alias(request, package, answer_plan)
+        # Only the teach path has no AnswerPlan to alias from; the legacy, explain
+        # and empty-evidence paths all keep generating it as before.
+        legacy_plan = (
+            None
+            if outcome.explanation_plan is not None
+            else _legacy_plan_alias(request, package, answer_plan)
+        )
         legacy_sub_question_traces = _legacy_requirement_trace_aliases(package)
+        conflicts = (
+            answer_plan.conflicts
+            if answer_plan is not None
+            else getattr(outcome.explanation_plan, "conflicts", ())
+        )
         trace = AgenticTrace(
             route=route,
             rounds=rounds,
@@ -103,13 +141,10 @@ class EvidenceDrivenWorkflow:
             # One-cycle aliases for existing debug/evaluation consumers.
             plan=legacy_plan,
             sub_question_traces=legacy_sub_question_traces,
-            citations=build_citation_trace(answer_result, package.context_bundle),
+            citations=build_citation_trace(answer_result, final_bundle),
             sections=describe_sections(answer_result.answer),
             answer_plan=answer_plan.to_dict() if answer_plan else None,
-            source_conflicts=(
-                [item.to_dict() for item in answer_plan.conflicts]
-                if answer_plan else []
-            ),
+            source_conflicts=[item.to_dict() for item in conflicts],
             review=review.to_dict() if review else None,
             stage_usage=[*retrieval.stage_usage, *answer_stages],
             evidence_plan=package.evidence_plan.to_dict(),
@@ -120,8 +155,19 @@ class EvidenceDrivenWorkflow:
                 item.to_dict() for item in package.requirement_coverage
             ],
             evidence_package_state=package.retrieval_state,
+            explanation_plan=(
+                outcome.explanation_plan.to_dict()
+                if outcome.explanation_plan is not None
+                else None
+            ),
         )
-        return AgenticAnswerResult(answer_result, package.context_bundle, trace)
+        return AgenticAnswerResult(
+            answer_result,
+            final_bundle,
+            trace,
+            outcome.evidence_catalog or package.evidence_catalog,
+            outcome.workspace_stats,
+        )
 
     def _answer(
         self,
@@ -135,13 +181,14 @@ class EvidenceDrivenWorkflow:
                 (item.error for item in package.search_history if item.error), None
             )
             suffix = f" 最后一次失败：{detail}。" if detail else ""
-            return (
-                AnswerResult(RETRIEVAL_FAILED_ANSWER + suffix, []),
-                None,
-                None,
-                [],
-            )
-        if package.retrieval_state == "EMPTY" or not package.context_bundle.items:
+            return _AnswerOutcome(AnswerResult(RETRIEVAL_FAILED_ANSWER + suffix, []))
+        workspace = package.evidence_workspace
+        has_evidence = (
+            bool(workspace) and len(workspace) > 0
+            if request.answer_options.evidence_source == "workspace"
+            else bool(package.context_bundle.items)
+        )
+        if package.retrieval_state == "EMPTY" or not has_evidence:
             unresolved_ids = set(package.unresolved_requirements)
             unresolved = "；".join(
                 item.target
@@ -149,14 +196,10 @@ class EvidenceDrivenWorkflow:
                 if item.id in unresolved_ids
             )
             suffix = f" 当前仍缺少：{unresolved}。" if unresolved else ""
-            return (
-                AnswerResult(EMPTY_CONTEXT_ANSWER + suffix, []),
-                None,
-                None,
-                [],
-            )
+            return _AnswerOutcome(AnswerResult(EMPTY_CONTEXT_ANSWER + suffix, []))
+        mode = request.answer_options.answer_mode
         generator = self.answer_generator_factory()
-        if request.answer_options.answer_mode == "legacy":
+        if mode == "legacy":
             started = time.perf_counter()
             sufficiency = package.to_legacy_sufficiency()
             if sufficiency.enough:
@@ -172,19 +215,24 @@ class EvidenceDrivenWorkflow:
                     package.context_bundle,
                     gaps,
                 )
-            return (
-                result,
-                None,
-                None,
-                [
+            return _AnswerOutcome(
+                answer_result=result,
+                stages=[
                     StageUsage(
                         "answer_generation",
                         (time.perf_counter() - started) * 1000,
                         "legacy",
                     )
                 ],
+                evidence_catalog=package.evidence_catalog,
             )
-        return self._answer_explain(request, package, generator)
+        if mode == "explain":
+            return self._answer_explain(request, package, generator)
+        if mode == "teach":
+            return self._answer_teach(request, package)
+        # An unrecognised mode must not fall through to explain: that would make
+        # the deep-depth contract unenforceable one layer up.
+        raise ValueError(f"unsupported answer_mode: {mode!r}")
 
     def _answer_explain(
         self,
@@ -268,7 +316,36 @@ class EvidenceDrivenWorkflow:
                     "high",
                 )
             )
-        return generator.finalize_draft(draft), answer_plan, review, stages
+        return _AnswerOutcome(
+            answer_result=generator.finalize_draft(draft),
+            answer_plan=answer_plan,
+            review=review,
+            stages=stages,
+            evidence_catalog=package.evidence_catalog,
+        )
+
+    def _answer_teach(
+        self,
+        request: UserRequest,
+        package: EvidencePackage,
+    ) -> _AnswerOutcome:
+        """Plan how to explain, then write from that plan.
+
+        Reviewing is not part of this stage: the teaching reviewer lands with the
+        rest of the answer-quality work, and a legacy reviewer expecting an
+        AnswerPlan would be measuring the wrong thing.
+        """
+        if self.teaching_workflow is None:
+            raise RuntimeError("teaching workflow is unavailable")
+        result = self.teaching_workflow.run(request, package)
+        return _AnswerOutcome(
+            answer_result=result.answer,
+            explanation_plan=result.explanation_plan,
+            stages=list(result.stages),
+            context_bundle=result.context_bundle,
+            evidence_catalog=package.evidence_catalog,
+            workspace_stats=result.stats,
+        )
 
 
 def _route_for_package(package: EvidencePackage) -> RouteDecision:

@@ -1,3 +1,4 @@
+from devcontext.models import EvidenceConflict
 from devcontext.answer.generator import (
     ANSWER_CHAIN_PROMPT,
     ANSWER_MAX_TOKENS,
@@ -16,7 +17,6 @@ from devcontext.answer.generator import (
 from devcontext.answer.models import (
     AnswerPlan,
     AnswerSection,
-    EvidenceConflict,
     GroundedDraft,
     ReviewIssue,
     ReviewResult,

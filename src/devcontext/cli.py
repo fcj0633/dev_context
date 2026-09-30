@@ -49,7 +49,14 @@ from devcontext.evaluation.retrieval_workflow_runner import (
 from devcontext.ingestion.pipeline import ingest
 from devcontext.llm import DeepSeekLLMClient, LLMClient
 from devcontext.models import SearchResult
+from devcontext.explanation import (
+    EXPLANATION_PLANNER_MAX_TOKENS,
+    ExplanationPlanner,
+    TeachingExplanationWorkflow,
+)
+from devcontext.explanation.writer import TEACHING_ANSWER_MAX_TOKENS, TeachingWriter
 from devcontext.planning import EvidencePlan, EvidencePlanner, QuestionPlan, QuestionPlanner
+from devcontext.request import ANSWER_MODES, TEACH_DEPTHS
 from devcontext.retrieval import RetrievalPolicy, RetrievalService
 from devcontext.routing import QueryRouter, RouteDecision
 from devcontext.storage import ChunkStore
@@ -123,15 +130,21 @@ def _parser() -> argparse.ArgumentParser:
     ask.add_argument("--debug", action="store_true")
     ask.add_argument(
         "--answer-mode",
-        choices=("legacy", "explain"),
+        choices=ANSWER_MODES,
         default="legacy",
-        help="Use the current template answer or the evidence-driven explanation path",
+        help=(
+            "legacy = template answer, explain = evidence-driven explanation, "
+            "teach = planned teaching explanation"
+        ),
     )
     ask.add_argument(
         "--depth",
-        choices=("brief", "standard", "detailed"),
+        choices=TEACH_DEPTHS,
         default=None,
-        help="Force presentation depth without changing evidence retrieval",
+        help=(
+            "Force presentation depth without changing evidence retrieval. "
+            "'deep' is only available with --answer-mode teach."
+        ),
     )
 
     evaluation = subparsers.add_parser("evaluate", help="Run the retrieval benchmark")
@@ -351,6 +364,27 @@ def _reviewer_factory(settings: Settings) -> Callable[[], LLMClient]:
     )
 
 
+def _explanation_planner_factory(settings: Settings) -> Callable[[], LLMClient]:
+    return lambda: DeepSeekLLMClient(
+        api_key=settings.deepseek_key(),
+        base_url=settings.deepseek_base_url,
+        model=settings.deepseek_answer_planner_model or settings.deepseek_model,
+        reasoning_effort="high",
+        max_tokens=EXPLANATION_PLANNER_MAX_TOKENS,
+        json_mode=True,
+    )
+
+
+def _teaching_writer_factory(settings: Settings) -> Callable[[], LLMClient]:
+    return lambda: DeepSeekLLMClient(
+        api_key=settings.deepseek_key(),
+        base_url=settings.deepseek_base_url,
+        model=settings.deepseek_answer_model or settings.deepseek_model,
+        reasoning_effort="high",
+        max_tokens=TEACHING_ANSWER_MAX_TOKENS,
+    )
+
+
 def _question_planner(settings: Settings) -> QuestionPlanner:
     return QuestionPlanner(_planner_llm_factory(settings))
 
@@ -401,6 +435,15 @@ def _planned_workflow(
     # caller explicitly supplies context_budget_override.
     _ = planned_builder, legacy_builder
     controller = _retrieval_controller(settings)
+    teaching_workflow = None
+    if answer_mode == "teach":
+        # The teach path keeps its own client policy: its planner and its writer
+        # do different work from the explain path's, so sharing budgets and
+        # effort settings between them would just constrain both.
+        teaching_workflow = TeachingExplanationWorkflow(
+            ExplanationPlanner(_explanation_planner_factory(settings)),
+            TeachingWriter(_teaching_writer_factory(settings)),
+        )
     return EvidenceDrivenWorkflow(
         controller,
         answer_generator_factory=lambda: AnswerGenerator(
@@ -411,6 +454,7 @@ def _planned_workflow(
         answer_mode=answer_mode,
         context_budget_override=context_budget_override,
         depth_override=depth_override,
+        teaching_workflow=teaching_workflow,
     )
 
 

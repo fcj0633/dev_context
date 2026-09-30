@@ -151,6 +151,34 @@ class ContextBundle:
         return asdict(self)
 
 
+CONFLICT_RESOLUTIONS = (
+    "CURRENT_IMPLEMENTATION_WINS",
+    "CURRENT_VERIFICATION_WINS",
+    "DESIGN_INTENT_ONLY",
+    "UNRESOLVED",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class EvidenceConflict:
+    """A disagreement between sources, and how it was settled.
+
+    Lives here rather than in ``answer.models`` because both the legacy answer
+    plan and the explanation plan need it, and the explanation package must not
+    depend on the package it is replacing.
+    """
+
+    topic: str
+    evidence_labels: tuple[str, ...]
+    resolution: str
+    explanation: str
+
+    def to_dict(self) -> dict[str, Any]:
+        value = asdict(self)
+        value["evidence_labels"] = list(self.evidence_labels)
+        return value
+
+
 @dataclass(slots=True)
 class AnswerResult:
     answer: str

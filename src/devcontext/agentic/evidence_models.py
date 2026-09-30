@@ -5,6 +5,7 @@ from typing import Any
 
 from devcontext.agentic.models import EvidenceStatus, MissingAspect, SufficiencyResult
 from devcontext.context.registry import EvidenceCatalog
+from devcontext.context.workspace import EvidenceWorkspace
 from devcontext.models import ContextBundle
 from devcontext.planning import EvidencePlan, EvidenceRequirement
 
@@ -103,6 +104,11 @@ class EvidencePackage:
     # part of to_dict(): this package is a plumbing change, and adding a trace key
     # would break byte-for-byte comparison against the frozen baseline.
     evidence_catalog: EvidenceCatalog | None = None
+    # The bodies, not just the metadata. The explanation layer builds its own
+    # views over these, so it needs the evidence itself and not a bundle that has
+    # already been cut to fit one prompt. Frozen by this point, so carrying it
+    # inside a frozen package does not make the package mutable.
+    evidence_workspace: EvidenceWorkspace | None = None
 
     def __post_init__(self) -> None:
         if self.retrieval_state not in RETRIEVAL_STATES:
@@ -162,10 +168,19 @@ def package_state(
     context: ContextBundle,
     coverage: tuple[RequirementCoverage, ...],
     search_history: tuple[SearchAction, ...] = (),
+    evidence_count: int | None = None,
 ) -> str:
+    """``evidence_count`` overrides what counts as "any evidence at all".
+
+    The teach path builds its own views over the workspace, so an empty
+    presentation bundle there means the bundle was too small rather than that
+    retrieval came back empty. Pass ``len(workspace)`` for that path and leave it
+    None for the paths that answer from the bundle.
+    """
     if search_history and all(action.error for action in search_history):
         return "RETRIEVAL_FAILED"
-    if not context.items:
+    has_evidence = bool(context.items) if evidence_count is None else evidence_count > 0
+    if not has_evidence:
         return "EMPTY"
     by_id = {item.requirement_id: item for item in coverage}
     core = [item for item in plan.requirements if item.priority == "CORE"]

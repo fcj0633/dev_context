@@ -8,8 +8,8 @@ from devcontext.answer.models import (
     CONFLICT_RESOLUTIONS,
     AnswerPlan,
     AnswerSection,
-    EvidenceConflict,
 )
+from devcontext.models import EvidenceConflict
 from devcontext.llm import LLMClient, LLMMessage
 from devcontext.models import ContextBundle
 from devcontext.planning import QuestionPlan
