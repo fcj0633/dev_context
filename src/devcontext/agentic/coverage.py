@@ -174,12 +174,17 @@ class CoverageChecker:
             if raw["state"] not in {"SATISFIED", "PARTIAL", "MISSING"}:
                 raise CoverageCheckError("coverage state is invalid")
             allowed_ids = {item.chunk_id for item in evidence_by_id[requirement.id]}
-            evidence_ids = raw["evidence_ids"]
-            if (
-                not isinstance(evidence_ids, list)
-                or any(not isinstance(item, int) or item not in allowed_ids for item in evidence_ids)
+            raw_ids = raw["evidence_ids"]
+            if not isinstance(raw_ids, list) or any(
+                not isinstance(item, int) for item in raw_ids
             ):
-                raise CoverageCheckError("coverage evidence ids are invalid")
+                raise CoverageCheckError("coverage evidence ids must be integers")
+            # An id that is not this requirement's evidence cannot support it, so
+            # it is dropped rather than failing the batch. Rejecting the batch
+            # over one bad id turned a single slip into six UNVERIFIED
+            # requirements, which reaches the user as six missing pieces of
+            # evidence - a much stronger claim than "the checker misfired here".
+            evidence_ids = [item for item in raw_ids if item in allowed_ids]
             raw_missing = raw["missing_criteria"]
             if not isinstance(raw_missing, list) or len(raw_missing) > MAX_MISSING_CRITERIA:
                 raise CoverageCheckError("missing criteria are invalid")

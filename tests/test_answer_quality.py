@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from pathlib import Path
 
 from devcontext.evaluation import (
@@ -7,6 +9,7 @@ from devcontext.evaluation import (
     check_answer_shape,
     load_answer_quality_cases,
 )
+from devcontext.evaluation.answer_quality import AnswerQualityCase
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -69,8 +72,82 @@ def test_pairwise_judge_swaps_candidate_order() -> None:
         PROJECT_ROOT / "benchmark" / "l2-answer-quality.jsonl"
     )[0]
 
-    result = PairwiseAnswerJudge(lambda: FakeClient()).judge(case, "V1", "V2")
+    # The judge speaks in BASELINE / CANDIDATE; the runner maps those onto the
+    # caller's mode names.
+    result = PairwiseAnswerJudge(lambda: FakeClient()).judge(case, "baseline", "candidate")
 
-    assert result.first_order_winner == "V1"
-    assert result.swapped_order_winner == "V1"
-    assert result.winner == "V1"
+    assert result.first_order_winner == "BASELINE"
+    assert result.swapped_order_winner == "BASELINE"
+    assert result.winner == "BASELINE"
+
+
+def test_every_checked_in_case_loads_after_the_schema_extension() -> None:
+    """Teaching fields were added after eighteen cases were already frozen."""
+    cases = load_answer_quality_cases(
+        PROJECT_ROOT / "benchmark" / "l2-answer-quality.jsonl"
+    )
+
+    assert len(cases) == 19
+    for case in cases:
+        assert isinstance(case.core_mental_model, tuple)
+        assert isinstance(case.must_explain_why, tuple)
+
+
+def test_cases_predating_the_teaching_fields_still_carry_the_originals() -> None:
+    cases = {
+        case.id: case
+        for case in load_answer_quality_cases(
+            PROJECT_ROOT / "benchmark" / "l2-answer-quality.jsonl"
+        )
+    }
+    flow = cases["flow-01"]
+
+    assert flow.core_mental_model == ()
+    assert flow.has_teaching_expectations is False
+    # The fields that were always there are untouched.
+    assert "MySQL 条件更新的最终正确性边界" in flow.must_cover
+
+
+def test_teaching_fields_load_when_present() -> None:
+    payload = {
+        "id": "x", "question": "q", "answer_depth": "detailed",
+        "must_cover": ["a"], "must_not_claim": ["b"], "required_evidence": ["c"],
+        "expected_explanation_shape": "d", "known_conflicts": [],
+        "core_mental_model": ["Redis 是准入层"],
+        "must_explain_why": ["为什么放在锁之前"],
+        "useful_scenarios": ["库存不足"],
+        "misconceptions": ["把桶当库存"],
+        "pedagogy_expectations": ["先立问题"],
+    }
+
+    case = AnswerQualityCase.from_dict(payload)
+
+    assert case.core_mental_model == ("Redis 是准入层",)
+    assert case.has_teaching_expectations is True
+
+
+def test_an_unknown_field_is_still_rejected() -> None:
+    """Relaxing the loader must not turn it into a free-for-all."""
+    payload = {
+        "id": "x", "question": "q", "answer_depth": "detailed",
+        "must_cover": ["a"], "must_not_claim": ["b"], "required_evidence": ["c"],
+        "expected_explanation_shape": "d", "known_conflicts": [],
+        "core_mental_model_typo": ["oops"],
+    }
+
+    with pytest.raises(ValueError, match="invalid fields"):
+        AnswerQualityCase.from_dict(payload)
+
+
+def test_a_deep_case_has_no_character_ceiling() -> None:
+    payload = {
+        "id": "x", "question": "q", "answer_depth": "deep",
+        "must_cover": ["a"], "must_not_claim": ["b"], "required_evidence": ["c"],
+        "expected_explanation_shape": "d", "known_conflicts": [],
+    }
+    case = AnswerQualityCase.from_dict(payload)
+
+    checks = check_answer_shape(case, "字" * 20_000, ["E1"])
+
+    assert checks.in_target_range is True, "deep must not be measured against a ceiling"
+    assert checks.chinese_chars == 20_000

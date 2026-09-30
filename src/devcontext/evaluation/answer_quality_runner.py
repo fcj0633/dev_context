@@ -11,12 +11,15 @@ from __future__ import annotations
 import json
 from collections import Counter
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from devcontext.agentic.models import AgenticAnswerResult
 from devcontext.evaluation.answer_quality import (
+    CANONICAL_BASELINE,
+    CANONICAL_CANDIDATE,
     DEPTH_CHAR_RANGES,
     AnswerQualityCase,
     PairwiseAnswerJudge,
@@ -26,13 +29,33 @@ from devcontext.evaluation.answer_quality import (
 from devcontext.llm import LLMClient
 
 
-V1_MODE = "legacy"
-V2_MODE = "explain"
-ANSWER_MODES = (V1_MODE, V2_MODE)
+DEFAULT_BASELINE_MODE = "legacy"
+DEFAULT_CANDIDATE_MODE = "explain"
 
-# The judge maps its positional answers back to these canonical labels.
-V1_WINNER = "V1"
-V2_WINNER = "V2"
+
+@dataclass(frozen=True, slots=True)
+class PairwiseEvaluationConfig:
+    """Which two modes to compare.
+
+    Named baseline / candidate rather than V1 / V2 so one runner covers
+    legacy vs explain, explain vs teach, and teach against a later teach,
+    without the judge ever needing to know a mode's name.
+    """
+
+    baseline_mode: str = DEFAULT_BASELINE_MODE
+    candidate_mode: str = DEFAULT_CANDIDATE_MODE
+
+    @property
+    def modes(self) -> tuple[str, str]:
+        return (self.baseline_mode, self.candidate_mode)
+
+
+DEFAULT_EVALUATION_CONFIG = PairwiseEvaluationConfig()
+
+# Kept as names for the default pair so existing imports keep working.
+V1_MODE = DEFAULT_BASELINE_MODE
+V2_MODE = DEFAULT_CANDIDATE_MODE
+ANSWER_MODES = DEFAULT_EVALUATION_CONFIG.modes
 
 DEFAULT_TOP_K = 12
 WIN_RATE_THRESHOLD = 0.70
@@ -147,11 +170,12 @@ def _failed_arm(mode: str, error: Exception) -> dict[str, Any]:
 
 def _judge_case(
     case: AnswerQualityCase,
-    legacy_arm: dict[str, Any],
-    explain_arm: dict[str, Any],
+    baseline_arm: dict[str, Any],
+    candidate_arm: dict[str, Any],
     judge: PairwiseAnswerJudge,
+    config: PairwiseEvaluationConfig,
 ) -> dict[str, Any]:
-    if legacy_arm["error"] or explain_arm["error"]:
+    if baseline_arm["error"] or candidate_arm["error"]:
         return {
             "winner": "ERROR",
             "first_order_winner": None,
@@ -160,7 +184,7 @@ def _judge_case(
             "error": "judge skipped because an arm failed",
         }
     try:
-        outcome = judge.judge(case, legacy_arm["answer"], explain_arm["answer"])
+        outcome = judge.judge(case, baseline_arm["answer"], candidate_arm["answer"])
     except Exception as exception:  # malformed judge JSON must not abort the batch
         return {
             "winner": "ERROR",
@@ -169,24 +193,31 @@ def _judge_case(
             "reasons": [],
             "error": f"{type(exception).__name__}: {exception}",
         }
+    # Report in the caller's mode names; the judge only knows BASELINE / CANDIDATE.
+    names = {
+        CANONICAL_BASELINE: config.baseline_mode,
+        CANONICAL_CANDIDATE: config.candidate_mode,
+    }
     return {
-        "winner": outcome.winner,
-        "first_order_winner": outcome.first_order_winner,
-        "swapped_order_winner": outcome.swapped_order_winner,
+        "winner": names.get(outcome.winner, outcome.winner),
+        "first_order_winner": names.get(outcome.first_order_winner, outcome.first_order_winner),
+        "swapped_order_winner": names.get(outcome.swapped_order_winner, outcome.swapped_order_winner),
         "reasons": list(outcome.reasons),
         "error": None,
     }
 
 
-def _review_worksheet(case: AnswerQualityCase, record: dict[str, Any]) -> dict[str, Any]:
+def _review_worksheet(
+    case: AnswerQualityCase, record: dict[str, Any], modes: tuple[str, str]
+) -> dict[str, Any]:
     """Everything a human needs to adjudicate history-vs-code conflicts by hand."""
     arms = record["arms"]
     conflicts = []
-    for mode in ANSWER_MODES:
+    for mode in modes:
         for conflict in arms[mode].get("source_conflicts") or []:
             conflicts.append({"mode": mode, **conflict})
     document_sources = []
-    for mode in ANSWER_MODES:
+    for mode in modes:
         for item in arms[mode].get("context") or []:
             if item["source_type"] == "DOCUMENT":
                 document_sources.append({"mode": mode, **item})
@@ -206,9 +237,10 @@ def run_case(
     judge_client_factory: Callable[[], LLMClient],
     judge: PairwiseAnswerJudge | None = None,
     top_k: int = DEFAULT_TOP_K,
+    config: PairwiseEvaluationConfig = DEFAULT_EVALUATION_CONFIG,
 ) -> dict[str, Any]:
     arms: dict[str, dict[str, Any]] = {}
-    for mode in ANSWER_MODES:
+    for mode in config.modes:
         try:
             workflow = workflow_factory(mode, case.answer_depth)
             arms[mode] = _capture_arm(case, mode, workflow.run(case.question, top_k))
@@ -220,9 +252,11 @@ def run_case(
         "question": case.question,
         "answer_depth": case.answer_depth,
         "arms": arms,
-        "judge": _judge_case(case, arms[V1_MODE], arms[V2_MODE], judge),
+        "judge": _judge_case(
+            case, arms[config.baseline_mode], arms[config.candidate_mode], judge, config
+        ),
     }
-    record["review_worksheet"] = _review_worksheet(case, record)
+    record["review_worksheet"] = _review_worksheet(case, record, config.modes)
     return record
 
 
@@ -293,18 +327,20 @@ def _stage_metrics(records: Sequence[dict[str, Any]], mode: str) -> list[dict[st
 
 
 def _acceptance(
-    records: Sequence[dict[str, Any]], arms: dict[str, Any]
+    records: Sequence[dict[str, Any]],
+    arms: dict[str, Any],
+    config: PairwiseEvaluationConfig,
 ) -> list[dict[str, Any]]:
     winners = Counter(record["judge"]["winner"] for record in records)
-    decisive = winners[V1_WINNER] + winners[V2_WINNER]
-    win_rate = winners[V2_WINNER] / decisive if decisive else None
+    decisive = winners[config.baseline_mode] + winners[config.candidate_mode]
+    win_rate = winners[config.candidate_mode] / decisive if decisive else None
 
     detailed = [record for record in records if record["answer_depth"] == "detailed"]
     detailed_in_range = sum(
         1
         for record in detailed
-        if record["arms"][V2_MODE]["checks"] is not None
-        and record["arms"][V2_MODE]["checks"]["in_target_range"]
+        if record["arms"][config.candidate_mode]["checks"] is not None
+        and record["arms"][config.candidate_mode]["checks"]["in_target_range"]
     )
     detailed_rate = detailed_in_range / len(detailed) if detailed else None
 
@@ -314,7 +350,7 @@ def _acceptance(
             "passed": None if win_rate is None else win_rate >= WIN_RATE_THRESHOLD,
             "current": win_rate,
             "target": WIN_RATE_THRESHOLD,
-            "detail": f"{winners[V2_WINNER]} wins / {decisive} decisive",
+            "detail": f"{winners[config.candidate_mode]} wins / {decisive} decisive",
         },
         {
             "name": "detailed_in_2200_5000_at_least_80pct",
@@ -325,8 +361,8 @@ def _acceptance(
         },
         {
             "name": "explain_avoids_repeated_conclusion_template",
-            "passed": arms[V2_MODE]["repeated_conclusion_prefix"] == 0,
-            "current": arms[V2_MODE]["repeated_conclusion_prefix"],
+            "passed": arms[config.candidate_mode]["repeated_conclusion_prefix"] == 0,
+            "current": arms[config.candidate_mode]["repeated_conclusion_prefix"],
             "target": 0,
             "detail": "cases where '结论：' appears more than once",
         },
@@ -350,8 +386,8 @@ def _acceptance(
             "name": "no_evaluation_errors",
             "passed": None,
             "current": (
-                arms[V1_MODE]["failed"]
-                + arms[V2_MODE]["failed"]
+                arms[config.baseline_mode]["failed"]
+                + arms[config.candidate_mode]["failed"]
                 + winners["ERROR"]
                 + winners["POSITION_BIASED"]
             ),
@@ -361,15 +397,19 @@ def _acceptance(
     ]
 
 
-def summarise(records: Sequence[dict[str, Any]]) -> dict[str, Any]:
+def summarise(
+    records: Sequence[dict[str, Any]],
+    config: PairwiseEvaluationConfig = DEFAULT_EVALUATION_CONFIG,
+) -> dict[str, Any]:
     winners = Counter(record["judge"]["winner"] for record in records)
-    arms = {mode: _arm_metrics(records, mode) for mode in ANSWER_MODES}
+    arms = {mode: _arm_metrics(records, mode) for mode in config.modes}
     return {
         "case_count": len(records),
+        "modes": {"baseline": config.baseline_mode, "candidate": config.candidate_mode},
         "judge_winners": dict(winners),
         "arms": arms,
-        "stages": {mode: _stage_metrics(records, mode) for mode in ANSWER_MODES},
-        "acceptance": _acceptance(records, arms),
+        "stages": {mode: _stage_metrics(records, mode) for mode in config.modes},
+        "acceptance": _acceptance(records, arms, config),
         "human_review_queue": [
             {
                 "id": record["id"],
@@ -395,6 +435,7 @@ def run_answer_quality_evaluation(
     journal_path: Path | None = None,
     resume: bool = False,
     progress: Callable[[str], None] | None = None,
+    config: PairwiseEvaluationConfig = DEFAULT_EVALUATION_CONFIG,
 ) -> dict[str, Any]:
     say = progress or (lambda message: None)
     cases = load_answer_quality_cases(cases_path)
@@ -429,6 +470,7 @@ def run_answer_quality_evaluation(
             workflow_factory=workflow_factory,
             judge_client_factory=judge_client_factory,
             top_k=top_k,
+            config=config,
         )
         winner = record["judge"]["winner"]
         if record["judge"]["error"]:
@@ -441,7 +483,7 @@ def run_answer_quality_evaluation(
                 handle.write(json.dumps(record, ensure_ascii=False) + "\n")
         records.append(record)
 
-    summary = summarise(records)
+    summary = summarise(records, config)
     summary["generated_at"] = _now()
     summary["cases_path"] = str(cases_path)
     summary["top_k"] = top_k

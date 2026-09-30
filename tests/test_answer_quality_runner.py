@@ -15,6 +15,7 @@ from devcontext.evaluation import load_answer_quality_cases
 from devcontext.evaluation.answer_quality_runner import (
     V1_MODE,
     V2_MODE,
+    PairwiseEvaluationConfig,
     run_answer_quality_evaluation,
     run_case,
     summarise,
@@ -143,9 +144,9 @@ def test_run_case_records_both_arms_and_a_v2_verdict() -> None:
 
     # the depth is forced to the case's declared depth for both arms
     assert seen == [(V1_MODE, "brief"), (V2_MODE, "brief")]
-    assert record["judge"]["winner"] == "V2"
-    assert record["judge"]["first_order_winner"] == "V2"
-    assert record["judge"]["swapped_order_winner"] == "V2"
+    assert record["judge"]["winner"] == V2_MODE
+    assert record["judge"]["first_order_winner"] == V2_MODE
+    assert record["judge"]["swapped_order_winner"] == V2_MODE
     assert record["arms"][V2_MODE]["error"] is None
     assert record["arms"][V2_MODE]["usage"]["llm_calls"] == 2
     assert record["arms"][V2_MODE]["usage"]["input_tokens"] == 110
@@ -231,7 +232,7 @@ def test_summary_computes_the_win_rate_over_decisive_cases() -> None:
 
     summary = summarise(records)
 
-    assert summary["judge_winners"] == {"V2": 1, "V1": 1}
+    assert summary["judge_winners"] == {V2_MODE: 1, V1_MODE: 1}
     gate = next(
         item
         for item in summary["acceptance"]
@@ -337,3 +338,80 @@ def test_journal_is_written_and_resumed(tmp_path: Path) -> None:
     )
     assert resumed["summary"]["case_count"] == 2
     assert calls == []  # both cases came back from the journal
+
+
+def test_runner_accepts_an_arbitrary_mode_pair() -> None:
+    """The runner must not be hard-wired to legacy vs explain."""
+    seen: list[tuple[str, str]] = []
+
+    record = run_case(
+        case("locate-01"),
+        workflow_factory=_factory(
+            {
+                "explain": "结论：位置如下。" + CHINESE_150,
+                "teach": "入口在 UserController。" + MARKER + CHINESE_150,
+            },
+            seen,
+        ),
+        judge_client_factory=lambda: ContentJudgeClient(),
+        config=PairwiseEvaluationConfig("explain", "teach"),
+    )
+
+    assert seen == [("explain", "brief"), ("teach", "brief")]
+    assert set(record["arms"]) == {"explain", "teach"}
+    assert record["judge"]["winner"] == "teach"
+    assert record["arms"]["teach"]["error"] is None
+
+
+def test_judge_winners_are_reported_in_the_callers_mode_names() -> None:
+    config = PairwiseEvaluationConfig("legacy", "explain")
+
+    record = run_case(
+        case("locate-01"),
+        workflow_factory=_factory(
+            {
+                V1_MODE: "结论：位置如下。" + CHINESE_150,
+                V2_MODE: "入口在 UserController。" + MARKER + CHINESE_150,
+            },
+        ),
+        judge_client_factory=lambda: ContentJudgeClient(),
+        config=config,
+    )
+    summary = summarise([record], config)
+
+    assert summary["modes"] == {"baseline": "legacy", "candidate": "explain"}
+    assert set(summary["arms"]) == {"legacy", "explain"}
+    assert summary["judge_winners"] == {"explain": 1}
+
+
+def test_the_judge_payload_carries_no_mode_identity() -> None:
+    """The comparison stays blind: two anonymous answers and the case's criteria."""
+    payloads: list[dict] = []
+
+    class RecordingJudge(ContentJudgeClient):
+        def generate(self, messages):
+            payloads.append(json.loads(messages[-1].content))
+            return super().generate(messages)
+
+    run_case(
+        case("locate-01"),
+        workflow_factory=_factory(
+            {
+                "explain": "结论：位置如下。" + CHINESE_150,
+                "teach": "入口在 UserController。" + MARKER + CHINESE_150,
+            },
+        ),
+        judge_client_factory=lambda: RecordingJudge(),
+        config=PairwiseEvaluationConfig("explain", "teach"),
+    )
+
+    assert len(payloads) == 2, "one call per order"
+    for payload in payloads:
+        assert set(payload) == {
+            "question", "must_cover", "must_not_claim", "required_evidence",
+            "expected_explanation_shape", "known_conflicts", "expected_mental_model",
+            "must_explain_why", "useful_scenarios", "misconceptions_to_correct",
+            "pedagogy_expectations", "answer_a", "answer_b",
+        }
+    # The two orders swap which answer sits in position A.
+    assert payloads[0]["answer_a"] != payloads[1]["answer_a"]
