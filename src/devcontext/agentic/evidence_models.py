@@ -10,7 +10,11 @@ from devcontext.planning import EvidencePlan, EvidenceRequirement
 
 
 COVERAGE_STATES = ("SATISFIED", "PARTIAL", "MISSING", "UNVERIFIED")
-RETRIEVAL_STATES = ("READY", "PARTIAL", "EMPTY")
+# RETRIEVAL_FAILED is kept separate from EMPTY on purpose: EMPTY means the search
+# ran and found nothing, RETRIEVAL_FAILED means the search never completed. Both
+# used to collapse into EMPTY, so an unreachable embedding endpoint was reported
+# to the user as "no project evidence was found".
+RETRIEVAL_STATES = ("READY", "PARTIAL", "EMPTY", "RETRIEVAL_FAILED")
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,6 +137,7 @@ class EvidencePackage:
                     coverage.requirement_id,
                     coverage.satisfied,
                     coverage.reason,
+                    coverage.state,
                 )
             )
             if coverage.satisfied:
@@ -156,7 +161,10 @@ def package_state(
     plan: EvidencePlan,
     context: ContextBundle,
     coverage: tuple[RequirementCoverage, ...],
+    search_history: tuple[SearchAction, ...] = (),
 ) -> str:
+    if search_history and all(action.error for action in search_history):
+        return "RETRIEVAL_FAILED"
     if not context.items:
         return "EMPTY"
     by_id = {item.requirement_id: item for item in coverage}
@@ -225,6 +233,7 @@ def _coverage_reason(state: str) -> str:
         "READY": "all CORE evidence requirements are satisfied",
         "PARTIAL": "some CORE evidence requirements remain unresolved",
         "EMPTY": "no direct project evidence reached the final context",
+        "RETRIEVAL_FAILED": "retrieval did not complete, so no evidence was assessed",
     }[state]
 
 

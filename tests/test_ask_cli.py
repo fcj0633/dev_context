@@ -555,7 +555,7 @@ def test_ask_cli_debug_prints_per_requirement_status(monkeypatch, capsys) -> Non
     captured = capsys.readouterr()
 
     assert exit_code == 0
-    assert "Requirements: ER1 ok, ER2 missing" in captured.out
+    assert "Requirements: ER1 SATISFIED, ER2 PARTIAL" in captured.out
     trace = json.loads(captured.out.split("Trace:\n", maxsplit=1)[1])
     assert [status["sub_question_id"] for status in trace["final_sufficiency"]["statuses"]] == [
         "ER1",

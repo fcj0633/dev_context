@@ -33,7 +33,17 @@ def requirement(source: str = "CODE") -> EvidenceRequirement:
     )
 
 
-def bundle(*results: SearchResult):
+class _View:
+    """Minimal CoverageView: the checker only ever needs items_for()."""
+
+    def __init__(self, items) -> None:
+        self._items = list(items)
+
+    def items_for(self, requirement_id: str):
+        return [item for item in self._items if requirement_id in item.sub_question_ids]
+
+
+def bundle(*results: SearchResult) -> _View:
     annotations = {
         item.id: EvidenceAnnotation(
             "IMPLEMENTATION" if item.source_type == "CODE" else "CURRENT_DESIGN",
@@ -41,7 +51,8 @@ def bundle(*results: SearchResult):
         )
         for item in results
     }
-    return ContextBuilder(max_chars=5000).build("问题", list(results), annotations)
+    built = ContextBuilder(max_chars=5000).build("问题", list(results), annotations)
+    return _View(built.items)
 
 
 class FakeClient:
@@ -99,9 +110,24 @@ def test_coverage_checker_reports_unverified_after_two_failures() -> None:
     )[0]
 
     assert status.state == "UNVERIFIED"
-    assert status.check_error == "RuntimeError"
+    # The diagnostic channel keeps the class and message; the human-facing reason
+    # stays generic. Recording only the class name made a transport failure
+    # indistinguishable from a genuine parse rejection.
+    assert status.check_error.startswith("RuntimeError")
+    assert "network secret" in status.check_error
     assert len(clients) == 2
     assert "secret" not in status.reason
+
+
+def test_coverage_checker_records_a_parse_rejection_distinctly() -> None:
+    """A batch the parser rejects must be diagnosable as a parse rejection."""
+    checker = CoverageChecker(lambda: FakeClient("not json at all"))
+
+    status = checker.check([requirement()], bundle(result(1)))[0]
+
+    assert status.state == "UNVERIFIED"
+    assert status.check_error.startswith("CoverageCheckError")
+    assert "valid JSON" in status.check_error
 
 
 def test_satisfied_coverage_must_reference_direct_evidence() -> None:
@@ -119,4 +145,5 @@ def test_satisfied_coverage_must_reference_direct_evidence() -> None:
     status = checker.check([requirement()], bundle(result(1)))[0]
 
     assert status.state == "UNVERIFIED"
-    assert status.check_error == "CoverageCheckError"
+    assert status.check_error.startswith("CoverageCheckError")
+    assert "evidence" in status.check_error

@@ -38,6 +38,10 @@ class EvidenceStatus:
     sub_question_id: str
     satisfied: bool
     reason: str
+    # The requirement's coverage state (SATISFIED / PARTIAL / MISSING /
+    # UNVERIFIED). Carried so callers stop reducing four states to a boolean:
+    # "could not verify" and "found nothing" are not the same claim.
+    state: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -240,6 +244,21 @@ def build_citation_trace(
             if label in citations
         ],
     }
+
+
+MAX_ERROR_CHARS = 200
+
+
+def error_detail(exception: BaseException, limit: int = MAX_ERROR_CHARS) -> str:
+    """Class name plus message, so a failure is diagnosable from the trace alone.
+
+    Stage code used to record only ``type(exception).__name__``, which made a
+    proxy outage indistinguishable from a genuine parse rejection: both showed up
+    as ``RuntimeError`` with nothing to tell them apart.
+    """
+    message = " ".join(str(exception).split())[:limit]
+    name = type(exception).__name__
+    return f"{name}: {message}" if message else name
 
 
 @dataclass(slots=True)

@@ -11,6 +11,9 @@ from devcontext.models import AnswerResult, Citation, ContextBundle
 
 
 EMPTY_CONTEXT_ANSWER = "当前没有检索到足够的项目上下文，无法可靠回答该问题。"
+RETRIEVAL_FAILED_ANSWER = (
+    "检索未能完成，因此无法判断项目是否包含相关证据。这不是“项目中没有该证据”的结论。"
+)
 # Legacy ContextBuilder labels, assigned by position inside one bundle.
 CITATION_PATTERN = re.compile(r"\[(C\d+)\]")
 # Workspace labels, assigned once per run by CitationRegistry and stable across

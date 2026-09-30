@@ -107,6 +107,20 @@ def test_schema_rejects_missing_core_round_two_query() -> None:
         validate_workflow_cases([case])
 
 
+class _BundleView:
+    """The oracle now takes a per-requirement view; this wraps a bundle for tests."""
+
+    def __init__(self, bundle) -> None:
+        self._bundle = bundle
+
+    def items_for(self, requirement_id: str):
+        return [
+            item
+            for item in self._bundle.items
+            if requirement_id in item.sub_question_ids
+        ]
+
+
 def test_frozen_components_use_case_data_without_llm() -> None:
     case = _case()
     planner = FrozenEvidencePlanner(case)
@@ -116,7 +130,7 @@ def test_frozen_components_use_case_data_without_llm() -> None:
     actions = action_planner.plan_actions(
         case["question"], plan.requirements, round_index=0
     )
-    coverage = checker.check(plan.requirements, _context(_result()))
+    coverage = checker.check(plan.requirements, _BundleView(_context(_result())))
 
     assert planner.last_client is None
     assert action_planner.last_client is None

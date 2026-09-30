@@ -164,6 +164,126 @@ def test_catalog_ids_survive_the_round_that_re_finds_them() -> None:
     assert all(label.startswith("E") for label in catalog.labels())
 
 
+class BulkPolicy:
+    """Returns several large chunks per action, so a small budget drops the tail."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def search_scope_with_trace(self, query: str, scope: str, top_k: int):
+        self.calls += 1
+        return SearchExecution(
+            [
+                SearchResult(
+                    1_000 + self.calls * 10 + index, "CODE", "METHOD", "Service.java",
+                    "x" * 4_000, 1, 2, "Service", f"seed{self.calls}-{index}",
+                    None, None, 1.0,
+                )
+                for index in range(3)
+            ],
+            SearchTimings(),
+        )
+
+
+class FailingPolicy:
+    def search_scope_with_trace(self, query: str, scope: str, top_k: int):
+        raise RuntimeError("embedding endpoint unreachable")
+
+
+class RecordingCoverage:
+    """Records how many items the checker was actually shown per requirement."""
+
+    last_client = None
+
+    def __init__(self, first_states: tuple[str, ...] = ("SATISFIED", "SATISFIED")) -> None:
+        self.calls = 0
+        self.seen: dict[str, int] = {}
+        self.first_states = first_states
+
+    def check(self, requirements, view):
+        self.calls += 1
+        self.seen = {item.id: len(view.items_for(item.id)) for item in requirements}
+        states = self.first_states if self.calls == 1 else tuple(
+            "SATISFIED" for _ in requirements
+        )
+        return tuple(
+            RequirementCoverage(item.id, state, (), (), "test", "rules")
+            for item, state in zip(requirements, states, strict=True)
+        )
+
+
+def test_coverage_is_judged_against_the_workspace_not_the_answer_bundle() -> None:
+    """Coverage used to read the answer's bundle, so a presentation budget that
+    dropped a requirement's evidence made that requirement look MISSING."""
+    policy = BulkPolicy()
+    coverage = RecordingCoverage()
+    subject = RetrievalController(
+        FakeEvidencePlanner(), FakeActionPlanner(), policy, coverage, SourcePolicy()
+    )
+    outcome = subject.retrieve(
+        UserRequest("解释占座一致性", AnswerOptions("brief", "explain"), 6_000), 10
+    )
+
+    kept = {item.chunk_id for item in outcome.package.context_bundle.items}
+    assert len(kept) < 6, "precondition: the bundle drops most of what was found"
+    assert coverage.seen["ER1"] == 3, "coverage must see the whole round, not the bundle"
+
+
+def test_second_round_seed_includes_evidence_the_budget_dropped() -> None:
+    policy = BulkPolicy()
+    coverage = RecordingCoverage(first_states=("PARTIAL", "SATISFIED"))
+    actions = FakeActionPlanner()
+    subject = RetrievalController(
+        FakeEvidencePlanner(), actions, policy, coverage, SourcePolicy()
+    )
+    subject.retrieve(
+        UserRequest("解释占座一致性", AnswerOptions("brief", "explain"), 6_000), 10
+    )
+
+    seeds = actions.calls[1]["discovered_terms"]["ER1"]
+    assert "seed1-0" in seeds
+    # seed1-2 was dropped from the answer bundle; the second round must still be
+    # able to use it as a search term.
+    assert "seed1-2" in seeds
+
+
+def test_coverage_round_sees_a_single_batch_call() -> None:
+    """Requirement-scoped views must not multiply the LLM calls."""
+    calls: list[int] = []
+
+    class CountingCoverage(RecordingCoverage):
+        def check(self, requirements, view):
+            calls.append(len(requirements))
+            return super().check(requirements, view)
+
+    subject = RetrievalController(
+        FakeEvidencePlanner(), FakeActionPlanner(), BulkPolicy(),
+        CountingCoverage(), SourcePolicy(),
+    )
+    subject.retrieve(UserRequest("解释占座一致性", AnswerOptions("brief", "explain")), 10)
+
+    # One call carrying both requirements, not one call per requirement.
+    assert calls == [2]
+
+
+def test_all_failed_actions_report_retrieval_failed_not_empty() -> None:
+    subject = RetrievalController(
+        FakeEvidencePlanner(), FakeActionPlanner(), FailingPolicy(),
+        RecordingCoverage(), SourcePolicy(),
+    )
+    package = subject.retrieve(
+        UserRequest("解释占座一致性", AnswerOptions("brief", "explain")), 10
+    ).package
+
+    assert package.retrieval_state == "RETRIEVAL_FAILED"
+    assert all(action.error for action in package.search_history)
+    # The message must name the cause, not just the exception class.
+    assert any("unreachable" in (action.error or "") for action in package.search_history)
+    sufficiency = package.to_legacy_sufficiency()
+    assert sufficiency.enough is False
+    assert "did not complete" in sufficiency.reason
+
+
 def test_answer_depth_does_not_change_retrieval_plan_actions_or_budget() -> None:
     first, _, _, _ = controller()
     second, _, _, _ = controller()

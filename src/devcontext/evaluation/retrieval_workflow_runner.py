@@ -17,6 +17,7 @@ from devcontext.agentic import (
     RetrievalObserver,
     SearchAction,
 )
+from devcontext.context.views import CoverageView
 from devcontext.models import ContextBundle, ContextItem, SearchExecution, SearchResult
 from devcontext.planning import EvidencePlan, EvidenceRequirement
 from devcontext.request import UserRequest
@@ -133,15 +134,14 @@ class OracleCoverageChecker:
     def check(
         self,
         requirements: Sequence[EvidenceRequirement],
-        context: ContextBundle,
+        view: CoverageView,
     ) -> tuple[RequirementCoverage, ...]:
         statuses = []
         for requirement in requirements:
             spec = self._specs[requirement.id]
             owned = [
-                item for item in context.items
-                if requirement.id in item.sub_question_ids and not item.truncated
-                and _temporal_eligible(item, spec["temporal_scope"])
+                item for item in view.items_for(requirement.id)
+                if _temporal_eligible(item, spec["temporal_scope"])
             ]
             matched = _matched_group_indexes(owned, spec["relevant"])
             if spec["expected_satisfied"] and len(matched) == len(spec["relevant"]):
@@ -462,8 +462,25 @@ def score_workflow_case(
     all_gold_core = all(
         item["satisfied"] for item in oracle if item["priority"] == "CORE"
     )
+    # A READY claim is a claim about what retrieval found, so it is checked
+    # against what retrieval found. Whether the answer's context went on to
+    # present that evidence is a different question and is reported separately -
+    # conflating the two made a correct READY look like an overclaim.
+    core_ids = {
+        item.id
+        for item in package.evidence_plan.requirements
+        if item.priority == "CORE"
+    }
+    all_retrieved_core = all(
+        item.satisfied
+        for item in package.requirement_coverage
+        if item.requirement_id in core_ids
+    )
     false_ready = package.retrieval_state == "READY" and (
-        not all_gold_core or case["expected_retrieval_state"] != "READY"
+        not all_retrieved_core or case["expected_retrieval_state"] != "READY"
+    )
+    ready_with_dropped_evidence = (
+        package.retrieval_state == "READY" and not all_gold_core
     )
     survival = _context_survival(case, observer, final_context)
     rescue = _second_round_rescue(case, package, observer, final_context)
@@ -496,6 +513,7 @@ def score_workflow_case(
             all(item["satisfied"] for item in core) if core else None
         ),
         "false_ready": false_ready,
+        "ready_with_dropped_evidence": ready_with_dropped_evidence,
         "context_survival": survival,
         "second_round_rescue": rescue,
         "stage_usage": stage_usage,
@@ -670,6 +688,15 @@ def _summarize(records: Sequence[dict[str, Any]]) -> dict[str, Any]:
         "false_ready_count": len(false_ready),
         "false_ready_rate": _rate(len(false_ready), len(predicted_ready)),
         "false_ready_case_ids": [item["case_id"] for item in false_ready],
+        # Reported, not gated in this phase: retrieval found the evidence but the
+        # answer's single context bundle did not carry it. Closing this gap is
+        # what the section-scoped views exist for.
+        "ready_with_dropped_evidence_count": sum(
+            bool(item["ready_with_dropped_evidence"]) for item in valid
+        ),
+        "ready_with_dropped_evidence_case_ids": [
+            item["case_id"] for item in valid if item["ready_with_dropped_evidence"]
+        ],
         "ready_recall": _rate(
             sum(item["actual_retrieval_state"] == "READY" for item in ready_gold),
             len(ready_gold),
@@ -883,6 +910,7 @@ def _error_record(
         "full_case_success": False, "core_requirement_total": 0,
         "core_requirement_satisfied": 0, "core_requirement_coverage": None,
         "all_core_satisfied": False, "false_ready": False,
+        "ready_with_dropped_evidence": False,
         "context_survival": None, "second_round_rescue": None,
         "stage_usage": [], "error": error,
     }

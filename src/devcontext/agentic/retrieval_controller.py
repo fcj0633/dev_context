@@ -12,9 +12,13 @@ from devcontext.agentic.evidence_models import (
     SearchAction,
     package_state,
 )
-from devcontext.agentic.models import StageUsage
+from devcontext.agentic.models import StageUsage, error_detail
 from devcontext.agentic.search_actions import SearchActionPlanner
-from devcontext.context import ContextBuilder, EvidenceWorkspace
+from devcontext.context import (
+    ContextBuilder,
+    EvidenceWorkspace,
+    WorkspaceCoverageView,
+)
 from devcontext.evidence import EvidencePool, SourcePolicy
 from devcontext.models import ContextBundle, SearchExecution
 from devcontext.planning import EvidencePlan, EvidencePlanner, EvidenceRequirement
@@ -130,7 +134,12 @@ class RetrievalController:
         if self.observer is not None:
             self.observer.on_context_built(0, bundle)
         check_started = time.perf_counter()
-        coverage = self.coverage_checker.check(plan.requirements, bundle)
+        # Judged against the workspace, not the answer bundle: judging against the
+        # bundle made a requirement look MISSING when the presentation budget had
+        # simply dropped its evidence.
+        coverage = self.coverage_checker.check(
+            plan.requirements, WorkspaceCoverageView(workspace, round_index=0)
+        )
         coverage_rounds.append(CoverageRound(0, coverage))
         stages.append(
             _stage_usage(
@@ -159,7 +168,7 @@ class RetrievalController:
                 round_index=1,
                 history=tuple(history),
                 coverage=coverage_by_id,
-                discovered_terms=_discovered_terms(bundle, followup_requirements),
+                discovered_terms=_discovered_terms(workspace, followup_requirements),
             )
             stages.append(
                 _stage_usage(
@@ -183,7 +192,9 @@ class RetrievalController:
             if self.observer is not None:
                 self.observer.on_context_built(1, bundle)
             check_started = time.perf_counter()
-            coverage = self.coverage_checker.check(plan.requirements, bundle)
+            coverage = self.coverage_checker.check(
+                plan.requirements, WorkspaceCoverageView(workspace, round_index=1)
+            )
             coverage_rounds.append(CoverageRound(1, coverage))
             stages.append(
                 _stage_usage(
@@ -195,7 +206,7 @@ class RetrievalController:
                 )
             )
 
-        state = package_state(plan, bundle, coverage)
+        state = package_state(plan, bundle, coverage, tuple(history))
         unresolved = tuple(
             item.requirement_id for item in coverage if not item.satisfied
         )
@@ -247,9 +258,7 @@ class RetrievalController:
                     self.observer.on_action_completed(action, execution)
                 executed.append(action)
             except Exception as exception:
-                executed.append(
-                    replace(action, error=type(exception).__name__)
-                )
+                executed.append(replace(action, error=error_detail(exception)))
         return tuple(executed)
 
     @staticmethod
@@ -287,24 +296,31 @@ def context_budget_for_plan(plan: EvidencePlan) -> int:
 
 
 def _discovered_terms(
-    bundle: ContextBundle,
+    workspace: EvidenceWorkspace,
     requirements: tuple[EvidenceRequirement, ...],
 ) -> Mapping[str, tuple[str, ...]]:
+    """Seed the second round from everything found so far, not from the bundle.
+
+    Reading the bundle meant an identifier that fell past the presentation budget
+    could never be used to look for more, so the budget quietly degraded the
+    second round as well as the answer.
+    """
     requested = {item.id for item in requirements}
     found: dict[str, list[str]] = {item: [] for item in requested}
-    for item in bundle.items:
+    for ref in workspace.for_requirements(sorted(requested)):
+        citation = ref.citation
         identities = tuple(
             value
             for value in (
-                item.citation.class_name,
-                item.citation.symbol_name,
-                item.citation.signature,
-                " > ".join(item.citation.heading_path),
-                item.citation.file_path,
+                citation.class_name,
+                citation.symbol_name,
+                citation.signature,
+                " > ".join(citation.heading_path),
+                citation.file_path,
             )
             if value
         )
-        for requirement_id in item.sub_question_ids:
+        for requirement_id in ref.requirement_ids:
             if requirement_id not in requested:
                 continue
             for identity in identities:

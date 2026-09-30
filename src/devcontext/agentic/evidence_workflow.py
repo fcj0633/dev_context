@@ -20,6 +20,7 @@ from devcontext.agentic.models import (
 from devcontext.agentic.retrieval_controller import RetrievalController
 from devcontext.answer import (
     EMPTY_CONTEXT_ANSWER,
+    RETRIEVAL_FAILED_ANSWER,
     AnswerGenerator,
     AnswerPlanner,
     AnswerReviewer,
@@ -127,6 +128,19 @@ class EvidenceDrivenWorkflow:
         request: UserRequest,
         package: EvidencePackage,
     ):
+        if package.retrieval_state == "RETRIEVAL_FAILED":
+            # Distinct from "no evidence found": the search never completed, so
+            # saying the project lacks this evidence would be a false statement.
+            detail = next(
+                (item.error for item in package.search_history if item.error), None
+            )
+            suffix = f" 最后一次失败：{detail}。" if detail else ""
+            return (
+                AnswerResult(RETRIEVAL_FAILED_ANSWER + suffix, []),
+                None,
+                None,
+                [],
+            )
         if package.retrieval_state == "EMPTY" or not package.context_bundle.items:
             unresolved_ids = set(package.unresolved_requirements)
             unresolved = "；".join(

@@ -322,8 +322,10 @@ def test_statuses_serialize_into_the_result_dict() -> None:
         bundle((1, "CODE"), (2, "DOCUMENT")),
     ).to_dict()
 
+    # The legacy sub-question path does not compute coverage states, so it leaves
+    # `state` empty rather than inventing one it never determined.
     assert payload["statuses"] == [
-        {"sub_question_id": "SQ1", "satisfied": True, "reason": "判断 1"},
-        {"sub_question_id": "SQ2", "satisfied": False, "reason": "判断 2"},
+        {"sub_question_id": "SQ1", "satisfied": True, "reason": "判断 1", "state": ""},
+        {"sub_question_id": "SQ2", "satisfied": False, "reason": "判断 2", "state": ""},
     ]
     assert payload["missing_aspects"][0]["sub_question_id"] == "SQ2"

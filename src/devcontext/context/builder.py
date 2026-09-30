@@ -46,15 +46,38 @@ class ContextBuilder:
             )
 
         prioritized = self._prioritize_sources(ranked_results)
-        items: list[ContextItem] = []
+        items = [
+            self._item_from_result(
+                ranked, f"C{index}", (annotations or {}).get(ranked.result.id)
+            )
+            for index, ranked in enumerate(prioritized, start=1)
+        ]
+        rendered_text, kept, budget_truncated = self.render_items(items)
+        return ContextBundle(
+            query=query,
+            items=kept,
+            rendered_text=rendered_text,
+            total_chars=len(rendered_text),
+            max_chars=self.max_chars,
+            truncated=budget_truncated,
+        )
+
+    def render_items(
+        self, items: Sequence[ContextItem]
+    ) -> tuple[str, list[ContextItem], bool]:
+        """Apply the character budget to already-built items, keeping their labels.
+
+        Shared with the workspace views so a view renders through the same header
+        format as this builder. Note the budget is a hard stop: the first item
+        that does not fit ends the render and everything after it is dropped.
+        Views over the workspace exist precisely because that is not an
+        acceptable way to choose what a coverage check gets to see.
+        """
+        kept: list[ContextItem] = []
         blocks: list[str] = []
         budget_truncated = False
 
-        for ranked in prioritized:
-            label = f"C{len(items) + 1}"
-            item = self._item_from_result(
-                ranked, label, (annotations or {}).get(ranked.result.id)
-            )
+        for item in items:
             header = self._render_header(item)
             full_block = self._render_block(header, item.content)
             separator_length = len(ITEM_SEPARATOR) if blocks else 0
@@ -62,7 +85,7 @@ class ContextBuilder:
             available = self.max_chars - current_length - separator_length
 
             if len(full_block) <= available:
-                items.append(item)
+                kept.append(item)
                 blocks.append(full_block)
                 continue
 
@@ -76,19 +99,11 @@ class ContextBuilder:
             if item.content and content_budget >= 1:
                 item.content = item.content[:content_budget] + TRUNCATION_MARKER
                 item.truncated = True
-                items.append(item)
+                kept.append(item)
                 blocks.append(self._render_block(header, item.content))
             break
 
-        rendered_text = ITEM_SEPARATOR.join(blocks)
-        return ContextBundle(
-            query=query,
-            items=items,
-            rendered_text=rendered_text,
-            total_chars=len(rendered_text),
-            max_chars=self.max_chars,
-            truncated=budget_truncated,
-        )
+        return ITEM_SEPARATOR.join(blocks), kept, budget_truncated
 
     @staticmethod
     def _deduplicate(results: Sequence[SearchResult]) -> list[_RankedResult]:

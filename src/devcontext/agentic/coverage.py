@@ -4,8 +4,10 @@ import json
 from collections.abc import Callable, Sequence
 
 from devcontext.agentic.evidence_models import RequirementCoverage
+from devcontext.agentic.models import error_detail as describe_error
+from devcontext.context.views import CoverageView
 from devcontext.llm import LLMClient, LLMMessage
-from devcontext.models import ContextBundle, ContextItem
+from devcontext.models import ContextItem
 from devcontext.planning import EvidenceRequirement
 
 
@@ -40,19 +42,27 @@ class CoverageChecker:
     def check(
         self,
         requirements: Sequence[EvidenceRequirement],
-        context: ContextBundle,
+        view: CoverageView,
     ) -> tuple[RequirementCoverage, ...]:
+        """Judge each requirement against its own evidence.
+
+        Takes a view rather than the answer's context bundle. Judging against the
+        bundle meant a requirement could be reported MISSING because the answer's
+        character budget had dropped its evidence, not because retrieval failed.
+        Truncated items are no longer filtered out either: a coverage view is
+        un-truncated by construction, so if one ever did truncate that is a bug
+        worth surfacing rather than silently hiding.
+
+        One batch LLM call still covers every requirement - only the view is
+        per-requirement, not the call.
+        """
         if not requirements:
             raise ValueError("coverage check requires at least one requirement")
         eligible: list[EvidenceRequirement] = []
         deterministic: dict[str, RequirementCoverage] = {}
         evidence_by_id: dict[str, list[ContextItem]] = {}
         for requirement in requirements:
-            items = [
-                item
-                for item in context.items
-                if requirement.id in item.sub_question_ids and not item.truncated
-            ]
+            items = list(view.items_for(requirement.id))
             evidence_by_id[requirement.id] = items
             source_gap = _missing_sources(requirement, items)
             if source_gap:
@@ -112,7 +122,7 @@ class CoverageChecker:
                 for requirement in requirements
             ]
         }
-        error_name = "CoverageCheckError"
+        error_detail = "CoverageCheckError"
         for _ in range(self.max_attempts):
             try:
                 client = self.llm_client_factory()  # type: ignore[misc]
@@ -127,10 +137,10 @@ class CoverageChecker:
                 self.last_error = None
                 return {item.requirement_id: item for item in parsed}
             except Exception as exception:
-                error_name = type(exception).__name__
-        self.last_error = error_name
+                error_detail = describe_error(exception)
+        self.last_error = error_detail
         return {
-            item.id: _unverified(item, evidence_by_id[item.id], error_name)
+            item.id: _unverified(item, evidence_by_id[item.id], error_detail)
             for item in requirements
         }
 

@@ -229,11 +229,16 @@ def _print_agentic_answer(
 
 
 def _print_requirement_statuses(sufficiency: SufficiencyResult) -> None:
-    """Only the per-sub-question path fills statuses; the legacy path prints nothing."""
+    """Only the per-sub-question path fills statuses; the legacy path prints nothing.
+
+    Prints the coverage state rather than a yes/no. Reducing PARTIAL, MISSING and
+    UNVERIFIED to one word used to report "could not verify" as "missing", which
+    is a different and much stronger claim.
+    """
     if not sufficiency.statuses:
         return
     summary = ", ".join(
-        f"{status.sub_question_id} {'ok' if status.satisfied else 'missing'}"
+        f"{status.sub_question_id} {status.state or ('SATISFIED' if status.satisfied else 'MISSING')}"
         for status in sufficiency.statuses
     )
     print(f"Requirements: {summary}")
