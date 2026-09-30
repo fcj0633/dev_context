@@ -547,6 +547,47 @@ error_ratio            = 3.9%
 
 **验收**：余票桶重跑，`Sufficiency` 与 `Retries` 的取值若发生变化，必须能解释（是假阴性被修掉，还是真的缺证据）。**这是本 Phase 最有价值的一条观测。**
 
+### 7.7 执行 Phase 1B 时的发现
+
+**(a) L1.5 的 oracle 也是基于 bundle 判定的，不只是生产代码。** `OracleCoverageChecker.check`（`evaluation/retrieval_workflow_runner.py:133`）原本遍历 `context.items`。改成 view 后，frozen 模式的判定口径随之变了——这正是本 Phase 的目的，但它意味着 **L1.5 的数字会变，而且是应该变**。
+
+**(b) 实测变化，全部可解释。**
+
+| 指标 | 改前 | 改后 | 解释 |
+|---|---|---|---|
+| `expected_state_accuracy` | 0.8333 | **0.875** | `edge-01` 从 PARTIAL 变为 READY，与它的期望一致——**之前是错的，现在对了** |
+| `false_ready_count` | 0 | 0 | 见 (c) |
+| `ready_with_dropped_evidence_count` | — | **1** | 新指标，见 (c) |
+| `full_case_success_rate` | 0.7917 | 0.7917 | 不变 |
+| `core_requirement_coverage` | 0.9231 | 0.9231 | 不变 |
+| `context_survival_rate` | 0.9302 | 0.9302 | 不变 |
+
+**(c) `false_ready` 原本把两个问题混在一起，已拆分。**
+
+`edge-01` 是本轮最好的例证：检索**找到了** ER1 的两条 ground-truth 证据组，但 8000 字符的答案 bundle（`context_survival`: 找到 2 组、存活 0 组）**把两条都丢了**。旧口径下 coverage 读 bundle，于是报 PARTIAL；现在 coverage 读 workspace，正确地报 READY。而 `false_ready` 的定义是
+
+```python
+false_ready = state == "READY" and (not all_gold_core or expected != "READY")
+```
+
+其中 `all_gold_core` 来自**基于 bundle 的** oracle——于是一个**正确的** READY 被判为"假 READY"，门禁变红。
+
+这说明 `false_ready` 同时在问两件事：
+
+| 问题 | 应该由什么回答 |
+|---|---|
+| 系统声称 READY，但它真的有证据吗？ | **workspace**（README 是关于"检索到了什么"的声明） |
+| 系统声称 READY，但答案实际拿到了这些证据吗？ | **bundle**（这是呈现层的缺陷） |
+
+裁决：拆成两个指标。
+
+- **`false_ready`（门禁）**：改为对照 retrieval 的真实结果，仍保留"案例期望非 READY 却报 READY"这条真实检查。**注意它在 frozen 模式下因此几乎恒为 0**——frozen 的 state 本身就来自 oracle，这是可接受的，因为 frozen 套件真正的门禁是 `full_case_success_rate` 与 `expected_state_accuracy`；而 **live 模式下 state 来自 LLM 判定、gold 来自确定性 spec，门禁依然有牙齿**。
+- **`ready_with_dropped_evidence`（只报不拦）**：即上面的第二个问题，当前命中 `edge-01`。**它才是 Phase 3 的验收目标**——section-scoped 生成与 token 预算正是为了关掉这个缺口。本轮只把它记录下来。
+
+**(d) `EvidenceDigest` 推迟到 Phase 2，不在此轮实现。** §6 的 `test_digest_preserves_original_evidence_reference` 因此移出 1B 测试清单。理由是它在 1B 没有任何消费方：摘要只在"视图已按 token 预算构建、需要压缩超长正文"时才有意义，而那个溢出路径属于 Phase 2/3。**现在写就是死代码。**
+
+**(e) 保留下来的旧语义**：`_gold_requirement_satisfied` 与 `_oracle_coverage` 继续基于 **final context**。它们回答的是"答案的证据里是否包含 ground truth 要求的全部内容"，那是一个真实且独立的问题，不能一并改成 workspace 口径——否则 (c) 里的呈现缺口就再也观测不到了。
+
 ---
 
 ## 8. Phase 2 — ExplanationPlan 与 `teach` 模式
