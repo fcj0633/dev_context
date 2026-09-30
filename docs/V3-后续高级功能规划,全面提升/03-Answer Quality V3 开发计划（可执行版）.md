@@ -863,6 +863,33 @@ if set(value) != required:
 
 **验收**：见 §11。
 
+### 10.4 执行 Phase 4 时的发现
+
+**(a) 计划的迁移顺序是对的，而且是必需的。** §10.2 要求"先升级 `AnswerQualityCase`、旧例继续可加载、再加字段"，理由是 `from_dict` 的 `set(value) != required` 严格校验。实测确认：19 个已有案例全部原样加载，教学字段为空元组，`has_teaching_expectations` 为 False；未知字段仍然被拒（放宽不等于放开）。**数据集与其 loader 不同时改形，这条守住了。**
+
+**(b) 教学 Reviewer 必须同时接受两套 issue 词表。** §44 说"新增 9 类、既有 8 类保留"。实现时确认这不只是措辞问题：**上一轮的 legacy Reviewer 恰好抓到过一处真实过度声称**（把 `.lua` 未索引说成"Lua 原子取还"）。一个说不出 `UNSUPPORTED_CLAIM` 的教学 Reviewer，会在它替代的那个 Reviewer 更强的地方更弱。因此 `ALL_ISSUE_TYPES = REVIEW_ISSUE_TYPES + TEACHING_ISSUE_TYPES`。
+
+**(c) 实测暴露了 coverage 的第二个、也是更本质的缺陷——§5.1(g) 说的"全有或全无降级"。**
+
+把 token 上限从 4096 提到 32768 之后，失败**变了但没消失**：
+
+```
+修改前：RuntimeError: ... finish_reason=length
+修改后：CoverageCheckError: coverage evidence ids are invalid
+```
+
+这条推进本身有价值——它**证实了 length 那个诊断是对的**（否则报错不会变），并把下一个原因精确点名。但更重要的是它暴露了：**模型返回了一个属于兄弟需求的 chunk_id，于是整个批次被拒，六条 requirement 一起变成 UNVERIFIED**。一个失误被放大成"六处证据缺失"。
+
+修复：不属于该需求的 id 本来就无法支撑它，因此**过滤而非拒绝**。`SATISFIED` 仍要求过滤后至少有一个有效 id。这把一个批次级的全有或全无，换成了逐条的正确解读。
+
+**仍然未解决、已知且有意的部分**：coverage 的 **payload 偏大**（每个需求都带着证据正文）。上限提高只是让它不再越界，**该送 excerpt 而不是整块正文仍是 Phase 5 的事**（`PromptContextView` + `EvidenceDigest`）。
+
+**(d) 教学 Reviewer 的三档门控采用"确定性与 LLM 互补"而非替代。** `explanation/grounding.py` 的确定性检查（零成本、不漏）负责可确定判定的那几条；LLM Reviewer 接在其后，负责需要读懂语义的部分（`MISSING_MENTAL_MODEL` / `MISSING_WHY` / `POOR_SCAFFOLDING`）。`brief` 与 `LOCATION_ONLY` **只跑确定性检查**——一两句话的答案，让一个能改写它的 Reviewer 介入，风险大于收益。
+
+**(e) Reviewer 失败不阻塞答案。** 审稿调用异常或 JSON 畸形时，`TeachingReviewResult` 返回 `accepted=True` + 记录 `error`。理由：让答案的可用性依赖于一个"职责就是可选"的组件，是把权衡放错了地方。
+
+**(f) 评测口径的一处新增：未评上分不能记成 0 分。** `PedagogyScore.overall` 在任一维度缺失时为 `None`，`summarise_pedagogy` 只对真正评到分的案例取均值并单列 `errors`。把"没评成"记成 0，读出来是"这份回答没有教学价值"——又是一个比真相强得多的结论。这与 §5.1 那三处是同一个反模式：**系统内部"不知道"的状态，不能向外表达成一个看起来确定的结论。**
+
 ---
 
 ## 11. Release Gate
