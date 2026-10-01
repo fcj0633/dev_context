@@ -20,7 +20,7 @@ from devcontext.agentic import (
 from devcontext.context.views import CoverageView
 from devcontext.models import ContextBundle, ContextItem, SearchExecution, SearchResult
 from devcontext.planning import EvidencePlan, EvidenceRequirement
-from devcontext.request import UserRequest
+from devcontext.request import AnswerOptions, UserRequest
 from devcontext.evaluation.runner import _matches_group
 
 
@@ -379,7 +379,15 @@ def run_retrieval_workflow_evaluation(
                 observer = RetrievalTraceRecorder()
                 try:
                     controller = controller_factory(case, mode, observer)
-                    outcome = controller.retrieve(UserRequest(case["question"]), top_k)
+                    # The mode is stated rather than defaulted: it decides
+                    # AnswerOptions.evidence_source, which decides whether an
+                    # empty retrieval bundle counts as "nothing found". Leaving
+                    # it implicit would let a future default change silently
+                    # rewrite what this suite measures.
+                    outcome = controller.retrieve(
+                        UserRequest(case["question"], AnswerOptions(None, "legacy")),
+                        top_k,
+                    )
                     records.append(
                         score_workflow_case(
                             case, suite, mode, run_index + 1,

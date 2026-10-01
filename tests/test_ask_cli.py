@@ -41,13 +41,14 @@ def document_result() -> SearchResult:
     )
 
 
-def test_answer_mode_defaults_to_legacy_and_accepts_explain() -> None:
+def test_teach_is_the_default_answer_mode_and_explain_is_still_reachable() -> None:
     parser = cli_module._parser()
 
-    assert parser.parse_args(["ask", "问题"]).answer_mode == "legacy"
-    assert parser.parse_args(
-        ["ask", "问题", "--answer-mode", "explain"]
-    ).answer_mode == "explain"
+    assert parser.parse_args(["ask", "问题"]).answer_mode == "teach"
+    for mode in ("explain", "legacy"):
+        assert parser.parse_args(
+            ["ask", "问题", "--answer-mode", mode]
+        ).answer_mode == mode
 
 
 def test_ask_cli_runs_grounded_pipeline_without_printing_sources(
@@ -564,7 +565,7 @@ def test_ask_cli_debug_prints_per_requirement_status(monkeypatch, capsys) -> Non
     assert trace["final_sufficiency"]["missing_aspects"][0]["sub_question_id"] == "ER2"
 
 
-def test_ask_cli_planned_path_asks_for_a_sectioned_answer(
+def test_ask_cli_legacy_generation_prompt_excludes_the_plan(
     monkeypatch, capsys
 ) -> None:
     prompts: list[str] = []
@@ -603,7 +604,12 @@ def test_ask_cli_planned_path_asks_for_a_sectioned_answer(
     monkeypatch.setattr(cli_module, "RetrievalService", FakeRetrievalService)
     monkeypatch.setattr(cli_module, "DeepSeekLLMClient", FakeDeepSeekClient)
 
-    exit_code = cli_module.main(["ask", "订单关闭是怎么实现的，为什么这样设计？"])
+    # Pinned to legacy, which is what this was always exercising: it passed
+    # before only because legacy happened to be the default. The assertions
+    # below are about the legacy generation prompt, not explain's.
+    exit_code = cli_module.main(
+        ["ask", "订单关闭是怎么实现的，为什么这样设计？", "--answer-mode", "legacy"]
+    )
     captured = capsys.readouterr()
 
     assert exit_code == 0

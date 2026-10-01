@@ -141,10 +141,11 @@ def _parser() -> argparse.ArgumentParser:
     ask.add_argument(
         "--answer-mode",
         choices=ANSWER_MODES,
-        default="legacy",
+        default="teach",
         help=(
-            "legacy = template answer, explain = evidence-driven explanation, "
-            "teach = planned teaching explanation"
+            "teach = planned teaching explanation (default), "
+            "explain = evidence-driven explanation, "
+            "legacy = template single-pass answer"
         ),
     )
     ask.add_argument(
