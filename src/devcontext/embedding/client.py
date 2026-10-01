@@ -11,6 +11,33 @@ from collections.abc import Callable
 
 from openai import APIConnectionError, OpenAI
 
+from devcontext.observability import record_embedding_call
+
+
+def _record_embedding(
+    client: "BailianEmbeddingClient",
+    query: str,
+    started: float,
+    *,
+    success: bool = True,
+    error: str | None = None,
+) -> None:
+    """Record one query embedding.
+
+    Only the query path is recorded. Ingestion embeds thousands of batches and
+    is not part of any answer's latency, so recording there would bury the signal.
+    """
+    record_embedding_call(
+        query=query,
+        latency_ms=(time.perf_counter() - started) * 1000,
+        batch_size=1,
+        model=client.model,
+        dimensions=client.dimensions,
+        transport=client.effective_transport,
+        success=success,
+        error=error,
+    )
+
 
 class BailianEmbeddingClient:
     def __init__(
@@ -89,7 +116,22 @@ class BailianEmbeddingClient:
     def embed_query(self, query: str) -> list[float]:
         if not query.strip():
             raise ValueError("Query must not be empty")
-        return self.embed_documents([query])[0]
+        started = time.perf_counter()
+        try:
+            vector = self.embed_documents([query])[0]
+        except Exception as exception:
+            from devcontext.agentic.models import error_detail
+
+            _record_embedding(self, query, started, success=False,
+                              error=error_detail(exception))
+            raise
+        _record_embedding(self, query, started)
+        return vector
+
+    @property
+    def effective_transport(self) -> str:
+        """What actually carried the request, after any fallback."""
+        return "curl" if self._curl_fallback else self.transport
 
     def _validate(self, vectors: Sequence[Sequence[float]], expected: int) -> None:
         if len(vectors) != expected:

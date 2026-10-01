@@ -19,6 +19,10 @@ class StageUsage:
     reasoning_effort: str | None = None
     input_tokens: int | None = None
     output_tokens: int | None = None
+    # Which retrieval round this stage belongs to. Without it the two
+    # search_action_planning / evidence_retrieval / coverage_check records in a
+    # round-1 request are indistinguishable except by position.
+    round_index: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

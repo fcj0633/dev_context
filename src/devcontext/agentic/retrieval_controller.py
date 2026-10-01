@@ -23,6 +23,7 @@ from devcontext.evidence import EvidencePool, SourcePolicy
 from devcontext.models import ContextBundle, SearchExecution
 from devcontext.planning import EvidencePlan, EvidencePlanner, EvidenceRequirement
 from devcontext.request import UserRequest
+from devcontext.observability import RetrievalActionTrace, record_retrieval_action
 from devcontext.retrieval import RetrievalPolicy
 
 
@@ -118,6 +119,7 @@ class RetrievalController:
                 _decision_source(first_actions),
                 self.action_planner.last_client,
                 "low",
+                round_index=0,
             )
         )
         retrieval_started = time.perf_counter()
@@ -127,6 +129,7 @@ class RetrievalController:
                 "evidence_retrieval",
                 (time.perf_counter() - retrieval_started) * 1000,
                 "policy",
+                round_index=0,
             )
         )
 
@@ -148,6 +151,7 @@ class RetrievalController:
                 _coverage_source(coverage),
                 self.coverage_checker.last_client,
                 "low",
+                round_index=0,
             )
         )
 
@@ -177,6 +181,7 @@ class RetrievalController:
                     _decision_source(followup_actions),
                     self.action_planner.last_client,
                     "low",
+                    round_index=1,
                 )
             )
             retrieval_started = time.perf_counter()
@@ -186,6 +191,7 @@ class RetrievalController:
                     "evidence_retrieval",
                     (time.perf_counter() - retrieval_started) * 1000,
                     "policy",
+                    round_index=1,
                 )
             )
             bundle = self._build_context(request, plan, pool, top_k)
@@ -203,6 +209,7 @@ class RetrievalController:
                     _coverage_source(coverage),
                     self.coverage_checker.last_client,
                     "low",
+                    round_index=1,
                 )
             )
 
@@ -255,6 +262,9 @@ class RetrievalController:
                     action.source_scope,
                     per_action_top_k,
                 )
+                record_retrieval_action(
+                    _action_trace(action, execution, round_index, per_action_top_k)
+                )
                 annotated = [
                     self.source_policy.classify(result, requirement.id)
                     for result in execution.results
@@ -267,7 +277,23 @@ class RetrievalController:
                     self.observer.on_action_completed(action, execution)
                 executed.append(action)
             except Exception as exception:
-                executed.append(replace(action, error=error_detail(exception)))
+                detail = error_detail(exception)
+                # A failed action is the one case where the retrieval split
+                # matters most: it says whether the embedding endpoint, the SQL,
+                # or the fusion is what did not answer.
+                record_retrieval_action(
+                    RetrievalActionTrace(
+                        action_id=action.action_id,
+                        requirement_id=action.requirement_id,
+                        round_index=round_index,
+                        query=action.query,
+                        source_scope=action.source_scope,
+                        top_k=per_action_top_k,
+                        total_ms=0.0,
+                        error=detail,
+                    )
+                )
+                executed.append(replace(action, error=detail))
         return tuple(executed)
 
     @staticmethod
@@ -356,6 +382,8 @@ def _stage_usage(
     decision_source: str,
     client: object | None,
     default_effort: str,
+    *,
+    round_index: int | None = None,
 ) -> StageUsage:
     usage = getattr(client, "last_usage", {}) if client is not None else {}
     if not isinstance(usage, dict):
@@ -368,4 +396,29 @@ def _stage_usage(
         getattr(client, "reasoning_effort", default_effort),
         usage.get("prompt_tokens", usage.get("input_tokens")),
         usage.get("completion_tokens", usage.get("output_tokens")),
+        round_index,
+    )
+
+
+def _action_trace(
+    action: SearchAction,
+    execution: SearchExecution,
+    round_index: int,
+    top_k: int,
+) -> RetrievalActionTrace:
+    """One search action's cost, split by pipeline part rather than left as a total."""
+    timings = execution.timings
+    return RetrievalActionTrace(
+        action_id=action.action_id,
+        requirement_id=action.requirement_id,
+        round_index=round_index,
+        query=action.query,
+        source_scope=action.source_scope,
+        top_k=top_k,
+        total_ms=timings.total_ms,
+        result_count=len(execution.results),
+        query_embedding_ms=timings.query_embedding_ms,
+        keyword_sql_ms=timings.keyword_sql_ms,
+        vector_sql_ms=timings.vector_sql_ms,
+        fusion_ms=timings.fusion_ms,
     )
