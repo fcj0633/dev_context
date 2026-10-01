@@ -101,9 +101,16 @@ class TeachingExplanationWorkflow:
         stages: list[Any] = []
 
         started = time.perf_counter()
+        planning_error: str | None = None
         try:
             plan = self.planner.plan(request, evidence_package)
-        except Exception:
+        except Exception as exception:
+            # Recording only "fallback" hid why: the planner runs for ~14s and
+            # emits thousands of tokens before validation rejects it, so the
+            # reason is the only thing that makes the fallback diagnosable.
+            from devcontext.agentic.models import error_detail
+
+            planning_error = error_detail(exception)
             plan = fallback_explanation_plan(request, evidence_package)
         stages.append(
             _stage("explanation_planning", started, plan.decision_source,
@@ -186,6 +193,7 @@ class TeachingExplanationWorkflow:
                 "bound_evidence_count": len(bound.items),
                 "plan_section_count": len(plan.sections),
                 "plan_evidence_labels": list(plan.evidence_labels),
+                "planning_error": planning_error,
                 "grounding_issues": [item.to_dict() for item in issues],
                 "review": review.to_dict() if review else None,
                 "invalid_citation_count": invalid,
@@ -193,7 +201,8 @@ class TeachingExplanationWorkflow:
                 "view_max_chars": self._view_max_chars,
                 "draft_error": error,
                 "trace": _trace_block(
-                    plan, drafts, review, bound, evidence_package, view_sizes, budget
+                    plan, drafts, review, bound, evidence_package, view_sizes, budget,
+                    planning_error,
                 ),
             },
             section_drafts=drafts,
@@ -352,10 +361,13 @@ def _trace_block(
     evidence_package: EvidencePackage,
     view_sizes: dict[str, int],
     budget: OutputBudget,
+    planning_error: str | None = None,
 ) -> dict[str, Any]:
     """The teach path's intermediate state, shaped for --debug and for interviews."""
     workspace = evidence_package.evidence_workspace
     return {
+        "decision_source": plan.decision_source,
+        "planning_error": planning_error,
         "primary_strategy": plan.primary_strategy,
         "secondary_strategies": list(plan.secondary_strategies),
         "core_mental_model": plan.core_mental_model,
