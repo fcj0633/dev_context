@@ -9,6 +9,7 @@ from devcontext.answer.models import REVIEW_ISSUE_TYPES, TEACHING_ISSUE_TYPES
 from devcontext.explanation.grounding import GroundingIssue
 from devcontext.explanation.models import DraftSection, ExplanationPlan
 from devcontext.llm import LLMClient, LLMMessage
+from devcontext.observability import llm_stage, mark_last_call_wasted
 
 
 # Both vocabularies: the eight that predate this path are still meaningful,
@@ -118,14 +119,20 @@ class TeachingReviewer:
         }
         self.last_client = self.llm_client_factory()
         try:
-            response = self.last_client.generate([
-                LLMMessage("system", REVIEW_SYSTEM_PROMPT),
-                LLMMessage("user", json.dumps(payload, ensure_ascii=False)),
-            ])
+            with llm_stage("teaching_review"):
+                response = self.last_client.generate([
+                    LLMMessage("system", REVIEW_SYSTEM_PROMPT),
+                    LLMMessage("user", json.dumps(payload, ensure_ascii=False)),
+                ])
             return _parse_review(response, known)
         except Exception as exception:
             from devcontext.agentic.models import error_detail
 
+            # A review that could not be parsed still cost a full call, and a
+            # review is the most expensive single stage after the writer.
+            mark_last_call_wasted(
+                "review reply unusable; accepted by default", stage="teaching_review"
+            )
             return TeachingReviewResult(
                 accepted=True,
                 decision_source="fallback",

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -33,6 +34,11 @@ from devcontext.explanation.reviewer import (
 )
 from devcontext.explanation.writer import TeachingDraft, TeachingWriter
 from devcontext.models import AnswerResult, ContextBundle
+from devcontext.observability import (
+    SectionExecutionTrace,
+    mark_last_call_wasted,
+    record_section_execution,
+)
 from devcontext.request import UserRequest
 
 if TYPE_CHECKING:
@@ -60,6 +66,9 @@ class TeachingAnswerResult:
     grounding_issues: tuple[GroundingIssue, ...] = ()
     budget: OutputBudget | None = None
     review: TeachingReviewResult | None = None
+    # Per-section costs. Child diagnostics of the teaching_draft stage, not a
+    # partition of the request: they are counted inside it, never beside it.
+    section_traces: tuple[SectionExecutionTrace, ...] = ()
 
 
 class TeachingExplanationWorkflow:
@@ -111,6 +120,9 @@ class TeachingExplanationWorkflow:
             from devcontext.agentic.models import error_detail
 
             planning_error = error_detail(exception)
+            mark_last_call_wasted(
+                "explanation plan rejected; fell back", stage="explanation_planning"
+            )
             plan = fallback_explanation_plan(request, evidence_package)
         stages.append(
             _stage("explanation_planning", started, plan.decision_source,
@@ -128,12 +140,14 @@ class TeachingExplanationWorkflow:
         issues: tuple[GroundingIssue, ...] = ()
         review: TeachingReviewResult | None = None
         error: str | None = None
+        section_traces: list[SectionExecutionTrace] = []
 
         started = time.perf_counter()
         view_sizes: dict[str, int] = {}
         if budget.allow_multi_pass and self.composer is not None and bound.items:
             draft, drafts, issues, error = self._write_in_sections(
-                request.original_query, evidence_package, plan, view_sizes
+                request.original_query, evidence_package, plan, view_sizes,
+                section_traces,
             )
         elif bound.items:
             try:
@@ -164,7 +178,8 @@ class TeachingExplanationWorkflow:
             if review.revision_required and MAX_REVISION_ROUNDS >= 1:
                 started_revision = time.perf_counter()
                 drafts, revised = self._revise(
-                    request.original_query, evidence_package, plan, drafts, review
+                    request.original_query, evidence_package, plan, drafts, review,
+                    section_traces,
                 )
                 issues = issues + revised
                 draft = self.composer.compose(request.original_query, plan, drafts)
@@ -202,13 +217,14 @@ class TeachingExplanationWorkflow:
                 "draft_error": error,
                 "trace": _trace_block(
                     plan, drafts, review, bound, evidence_package, view_sizes, budget,
-                    planning_error,
+                    planning_error, section_traces,
                 ),
             },
             section_drafts=drafts,
             grounding_issues=issues,
             budget=budget,
             review=review,
+            section_traces=tuple(section_traces),
         )
 
     def _view(
@@ -246,6 +262,7 @@ class TeachingExplanationWorkflow:
         plan: ExplanationPlan,
         drafts: tuple[DraftSection, ...],
         review: TeachingReviewResult,
+        section_traces: list[SectionExecutionTrace],
     ) -> tuple[tuple[DraftSection, ...], tuple[GroundingIssue, ...]]:
         """Regenerate only the sections the reviewer named."""
         notes: dict[str, list[str]] = {}
@@ -269,14 +286,27 @@ class TeachingExplanationWorkflow:
             if section is None or context is None or not context.items:
                 revised.append(draft)
                 continue
+            revision_notes = tuple(notes.get(draft.section_id, []))
+            started = time.perf_counter()
             try:
                 replacement = self.writer.write_section(
                     query, plan.core_mental_model, section, context,
-                    revision_notes=tuple(notes.get(draft.section_id, [])),
+                    revision_notes=revision_notes,
                 )
-            except Exception:
+            except Exception as exception:
+                from devcontext.agentic.models import error_detail
+
+                section_traces.append(record_section(
+                    section, context, started, self.writer.last_client,
+                    revision=True, revision_notes_count=len(revision_notes),
+                    success=False, error=error_detail(exception),
+                ))
                 revised.append(draft)
                 continue
+            section_traces.append(record_section(
+                section, context, started, self.writer.last_client,
+                revision=True, revision_notes_count=len(revision_notes),
+            ))
             revised.append(replacement)
             new_issues.extend(
                 grounding_issues(section, replacement.text_with_citations)
@@ -289,6 +319,7 @@ class TeachingExplanationWorkflow:
         evidence_package: EvidencePackage,
         plan: ExplanationPlan,
         view_sizes: dict[str, int],
+        section_traces: list[SectionExecutionTrace],
     ) -> tuple[TeachingDraft | None, tuple[DraftSection, ...], tuple[GroundingIssue, ...], str | None]:
         drafts: list[DraftSection] = []
         issues: list[GroundingIssue] = []
@@ -301,7 +332,12 @@ class TeachingExplanationWorkflow:
                     section.id, "SECTION_WITHOUT_EVIDENCE",
                     "该章节没有绑定任何证据，无法生成",
                 ))
+                section_traces.append(record_section(
+                    section, context, None, success=False,
+                    error="SECTION_WITHOUT_EVIDENCE",
+                ))
                 continue
+            started = time.perf_counter()
             try:
                 draft = self.writer.write_section(
                     query, plan.core_mental_model, section, context
@@ -309,7 +345,15 @@ class TeachingExplanationWorkflow:
             except Exception as exception:
                 from devcontext.agentic.models import error_detail
 
-                return None, tuple(drafts), tuple(issues), error_detail(exception)
+                detail = error_detail(exception)
+                section_traces.append(record_section(
+                    section, context, started, self.writer.last_client,
+                    success=False, error=detail,
+                ))
+                return None, tuple(drafts), tuple(issues), detail
+            section_traces.append(record_section(
+                section, context, started, self.writer.last_client,
+            ))
             drafts.append(draft)
             issues.extend(grounding_issues(section, draft.text_with_citations))
         if not drafts:
@@ -362,6 +406,7 @@ def _trace_block(
     view_sizes: dict[str, int],
     budget: OutputBudget,
     planning_error: str | None = None,
+    section_traces: Sequence[SectionExecutionTrace] = (),
 ) -> dict[str, Any]:
     """The teach path's intermediate state, shaped for --debug and for interviews."""
     workspace = evidence_package.evidence_workspace
@@ -390,6 +435,7 @@ def _trace_block(
         "section_citations": {
             draft.section_id: list(draft.used_citations) for draft in drafts
         },
+        "section_execution": [item.to_dict() for item in section_traces],
         "section_confidence": {
             draft.section_id: draft.evidence_state for draft in drafts
         },
@@ -458,6 +504,40 @@ def _no_evidence_answer() -> str:
     from devcontext.answer.generator import EMPTY_CONTEXT_ANSWER
 
     return EMPTY_CONTEXT_ANSWER
+
+
+def record_section(
+    section: ExplanationSection,
+    context: ContextBundle,
+    started: float | None,
+    client: object | None = None,
+    *,
+    revision: bool = False,
+    revision_notes_count: int = 0,
+    success: bool = True,
+    error: str | None = None,
+) -> SectionExecutionTrace:
+    """Build, record and return the cost of generating one section."""
+    usage = getattr(client, "last_usage", {}) if client is not None else {}
+    if not isinstance(usage, dict):
+        usage = {}
+    trace = SectionExecutionTrace(
+        section_id=section.id,
+        title=section.title,
+        section_type=section.section_type,
+        latency_ms=0.0 if started is None else (time.perf_counter() - started) * 1000,
+        evidence_count=len(context.items),
+        context_chars=context.total_chars,
+        target_tokens=section.target_tokens,
+        revision=revision,
+        revision_notes_count=revision_notes_count,
+        input_tokens=usage.get("prompt_tokens", usage.get("input_tokens")),
+        output_tokens=usage.get("completion_tokens", usage.get("output_tokens")),
+        success=success,
+        error=error,
+    )
+    record_section_execution(trace)
+    return trace
 
 
 def _stage(stage, started, decision_source, client, effort):

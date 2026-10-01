@@ -6,6 +6,7 @@ from collections.abc import Callable, Mapping, Sequence
 
 from devcontext.agentic.evidence_models import RequirementCoverage, SearchAction
 from devcontext.llm import LLMClient, LLMMessage
+from devcontext.observability import llm_stage, mark_last_call_wasted
 from devcontext.planning import EvidenceRequirement
 
 
@@ -83,12 +84,13 @@ class SearchActionPlanner:
         try:
             client = self.llm_client_factory()
             self.last_client = client
-            response = client.generate(
-                [
-                    LLMMessage("system", SEARCH_ACTION_SYSTEM_PROMPT),
-                    LLMMessage("user", json.dumps(payload, ensure_ascii=False)),
-                ]
-            )
+            with llm_stage("search_action_planning", f"round_{round_index}"):
+                response = client.generate(
+                    [
+                        LLMMessage("system", SEARCH_ACTION_SYSTEM_PROMPT),
+                        LLMMessage("user", json.dumps(payload, ensure_ascii=False)),
+                    ]
+                )
             return self._parse(
                 response,
                 requirements,
@@ -98,6 +100,10 @@ class SearchActionPlanner:
                 discovered_terms,
             )
         except Exception:
+            mark_last_call_wasted(
+                "search action plan rejected; fell back",
+                stage="search_action_planning",
+            )
             return _fallback_actions(
                 original_query,
                 requirements,

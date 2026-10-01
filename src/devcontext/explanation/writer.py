@@ -13,6 +13,7 @@ from devcontext.explanation.models import (
 )
 from devcontext.llm import LLMClient, LLMMessage
 from devcontext.models import ContextBundle
+from devcontext.observability import llm_stage
 
 
 TEACHING_ANSWER_MAX_TOKENS = 32_768
@@ -134,13 +135,14 @@ class TeachingWriter:
             ),
         }
         self.last_client = self.llm_client_factory()
-        response = self.last_client.generate([
-            LLMMessage("system", TEACHING_WRITER_SYSTEM_PROMPT),
-            LLMMessage(
-                "user",
-                json.dumps(payload, ensure_ascii=False) + "\n\n" + TEACHING_WRITER_PROMPT,
-            ),
-        ])
+        with llm_stage("teaching_draft", "single_pass"):
+            response = self.last_client.generate([
+                LLMMessage("system", TEACHING_WRITER_SYSTEM_PROMPT),
+                LLMMessage(
+                    "user",
+                    json.dumps(payload, ensure_ascii=False) + "\n\n" + TEACHING_WRITER_PROMPT,
+                ),
+            ])
         labels = extract_citations(response, EVIDENCE_CITATION_PATTERN)
         return TeachingDraft(
             text_with_citations=response.strip(),
@@ -191,10 +193,11 @@ class TeachingWriter:
         if revision_notes:
             payload["revision_notes"] = list(revision_notes)
         self.last_client = self.llm_client_factory()
-        response = self.last_client.generate([
-            LLMMessage("system", SECTION_WRITER_SYSTEM_PROMPT),
-            LLMMessage("user", json.dumps(payload, ensure_ascii=False)),
-        ])
+        with llm_stage("teaching_draft", section.id):
+            response = self.last_client.generate([
+                LLMMessage("system", SECTION_WRITER_SYSTEM_PROMPT),
+                LLMMessage("user", json.dumps(payload, ensure_ascii=False)),
+            ])
         labels = extract_citations(response, EVIDENCE_CITATION_PATTERN)
         return DraftSection(
             section_id=section.id,

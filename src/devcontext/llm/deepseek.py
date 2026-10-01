@@ -9,6 +9,7 @@ import time
 from collections.abc import Sequence
 
 from devcontext.llm.client import LLMMessage
+from devcontext.observability.recorder import record_llm_call
 
 
 class DeepSeekLLMClient:
@@ -43,8 +44,52 @@ class DeepSeekLLMClient:
         self.json_mode = json_mode
         self.last_usage: dict[str, int] = {}
         self.last_latency_ms: float = 0.0
+        # Kept rather than discarded: "length" is how a call silently burns its
+        # whole token allowance, and it is invisible if the value is only ever
+        # compared against "stop" and then dropped.
+        self.last_finish_reason: str | None = None
 
     def generate(self, messages: Sequence[LLMMessage]) -> str:
+        """Time and trace one call, then delegate.
+
+        The stage label is read from the ambient recorder context rather than
+        taken as an argument, so the ``LLMClient`` protocol - and every test
+        double that implements it - keeps its single-parameter shape.
+        """
+        started = time.perf_counter()
+        self.last_usage = {}
+        self.last_finish_reason = None
+        try:
+            content = self._generate(messages)
+        except Exception as exception:
+            from devcontext.agentic.models import error_detail
+
+            record_llm_call(
+                latency_ms=(time.perf_counter() - started) * 1000,
+                model=self.model,
+                reasoning_effort=self.reasoning_effort,
+                max_tokens=self.max_tokens,
+                json_mode=self.json_mode,
+                finish_reason=self.last_finish_reason,
+                success=False,
+                error=error_detail(exception),
+            )
+            raise
+        usage = self.last_usage
+        record_llm_call(
+            latency_ms=(time.perf_counter() - started) * 1000,
+            model=self.model,
+            reasoning_effort=self.reasoning_effort,
+            max_tokens=self.max_tokens,
+            json_mode=self.json_mode,
+            input_tokens=usage.get("prompt_tokens", usage.get("input_tokens")),
+            output_tokens=usage.get("completion_tokens", usage.get("output_tokens")),
+            finish_reason=self.last_finish_reason,
+            success=True,
+        )
+        return content
+
+    def _generate(self, messages: Sequence[LLMMessage]) -> str:
         if not messages:
             raise ValueError("messages must not be empty")
         executable = shutil.which("curl.exe") or shutil.which("curl")
@@ -123,6 +168,7 @@ class DeepSeekLLMClient:
             payload = json.loads(response_body)
             choice = payload["choices"][0]
             finish_reason = choice["finish_reason"]
+            self.last_finish_reason = finish_reason
             content = choice["message"]["content"]
             usage = payload.get("usage", {})
             if isinstance(usage, dict):

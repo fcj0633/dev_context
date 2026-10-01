@@ -7,6 +7,7 @@ from devcontext.answer.generator import EVIDENCE_CITATION_PATTERN, extract_citat
 from devcontext.explanation.models import DraftSection, ExplanationPlan
 from devcontext.explanation.writer import TeachingDraft
 from devcontext.llm import LLMClient, LLMMessage
+from devcontext.observability import llm_stage, mark_last_call_wasted
 
 
 COMPOSER_MAX_TOKENS = 16_384
@@ -37,6 +38,9 @@ class SectionComposer:
     def __init__(self, llm_client_factory: Callable[[], LLMClient]) -> None:
         self.llm_client_factory = llm_client_factory
         self.last_client: LLMClient | None = None
+        # Composing runs twice on the revision path, so the call number is what
+        # tells the two apart in the trace.
+        self.compose_count = 0
 
     def compose(
         self,
@@ -63,16 +67,19 @@ class SectionComposer:
                 for draft in drafts
             ],
         }
+        self.compose_count += 1
         self.last_client = self.llm_client_factory()
         try:
-            response = self.last_client.generate([
-                LLMMessage("system", COMPOSER_SYSTEM_PROMPT),
-                LLMMessage(
-                    "user",
-                    json.dumps(payload, ensure_ascii=False) + "\n\n" + COMPOSER_PROMPT,
-                ),
-            ]).strip()
+            with llm_stage("composer", f"call_{self.compose_count}"):
+                response = self.last_client.generate([
+                    LLMMessage("system", COMPOSER_SYSTEM_PROMPT),
+                    LLMMessage(
+                        "user",
+                        json.dumps(payload, ensure_ascii=False) + "\n\n" + COMPOSER_PROMPT,
+                    ),
+                ]).strip()
         except Exception:
+            mark_last_call_wasted("composer call failed; deterministic join", stage="composer")
             return _deterministic_join(drafts)
 
         labels = extract_citations(response, EVIDENCE_CITATION_PATTERN)
@@ -80,6 +87,9 @@ class SectionComposer:
         if introduced or not response:
             # A composer that invents evidence has broken the one rule it cannot
             # be trusted to keep, so its output is discarded rather than patched.
+            mark_last_call_wasted(
+                "composer output discarded; deterministic join", stage="composer"
+            )
             return _deterministic_join(drafts)
         return TeachingDraft(
             text_with_citations=response,

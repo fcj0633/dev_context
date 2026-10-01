@@ -4,6 +4,7 @@ import json
 from collections.abc import Callable
 
 from devcontext.llm import LLMClient, LLMMessage
+from devcontext.observability import llm_stage, mark_last_call_wasted
 from devcontext.planning.evidence_models import (
     EVIDENCE_PLAN_SCHEMA_VERSION,
     EVIDENCE_PRIORITIES,
@@ -72,9 +73,15 @@ class EvidencePlanner:
         try:
             client = self.llm_client_factory()
             self.last_client = client
-            response = client.generate(self._messages(query)).strip()
+            with llm_stage("evidence_planning"):
+                response = client.generate(self._messages(query)).strip()
             return self._parse(response, query)
         except Exception:
+            # A call can complete and still be thrown away here, by validation
+            # rather than by the API. That latency only shows up if it is marked.
+            mark_last_call_wasted(
+                "evidence plan rejected; fell back", stage="evidence_planning"
+            )
             return fallback_evidence_plan(query)
 
     @staticmethod

@@ -20,6 +20,7 @@ from devcontext.explanation.prompts import (
     allowed_values_block,
 )
 from devcontext.llm import LLMClient, LLMMessage
+from devcontext.observability import llm_stage
 from devcontext.models import CONFLICT_RESOLUTIONS, EvidenceConflict
 from devcontext.request import EXPLAIN_MODES, UserRequest
 
@@ -79,17 +80,18 @@ class ExplanationPlanner:
     ) -> ExplanationPlan:
         payload = _payload(request, evidence_package)
         self.last_client = self.llm_client_factory()
-        response = self.last_client.generate([
-            LLMMessage(
-                "system",
-                EXPLANATION_PLANNER_SYSTEM_PROMPT
-                + "\n\n"
-                + allowed_values_block()
-                + "\n\n"
-                "回答深度由本阶段决定：若 answer_options.depth_override 非空，answer_depth 必须使用该值。",
-            ),
-            LLMMessage("user", json.dumps(payload, ensure_ascii=False)),
-        ])
+        with llm_stage("explanation_planning"):
+            response = self.last_client.generate([
+                LLMMessage(
+                    "system",
+                    EXPLANATION_PLANNER_SYSTEM_PROMPT
+                    + "\n\n"
+                    + allowed_values_block()
+                    + "\n\n"
+                    "回答深度由本阶段决定：若 answer_options.depth_override 非空，answer_depth 必须使用该值。",
+                ),
+                LLMMessage("user", json.dumps(payload, ensure_ascii=False)),
+            ])
         return parse_explanation_plan(response, request, evidence_package)
 
 

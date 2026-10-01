@@ -8,6 +8,7 @@ from devcontext.agentic.models import error_detail as describe_error
 from devcontext.context.views import CoverageView
 from devcontext.llm import LLMClient, LLMMessage
 from devcontext.models import ContextItem
+from devcontext.observability import llm_stage, mark_last_call_wasted
 from devcontext.planning import EvidenceRequirement
 
 
@@ -86,7 +87,9 @@ class CoverageChecker:
                     for item in eligible
                 }
             else:
-                semantic = self._semantic_check(eligible, evidence_by_id)
+                semantic = self._semantic_check(
+                    eligible, evidence_by_id, getattr(view, "round_index", None)
+                )
         return tuple(
             deterministic.get(item.id) or semantic[item.id]
             for item in requirements
@@ -96,6 +99,7 @@ class CoverageChecker:
         self,
         requirements: Sequence[EvidenceRequirement],
         evidence_by_id: dict[str, list[ContextItem]],
+        round_index: int | None = None,
     ) -> dict[str, RequirementCoverage]:
         payload = {
             "requirements": [
@@ -123,20 +127,28 @@ class CoverageChecker:
             ]
         }
         error_detail = "CoverageCheckError"
+        substage = None if round_index is None else f"round_{round_index}"
         for _ in range(self.max_attempts):
             try:
                 client = self.llm_client_factory()  # type: ignore[misc]
                 self.last_client = client
-                response = client.generate(
-                    [
-                        LLMMessage("system", COVERAGE_SYSTEM_PROMPT),
-                        LLMMessage("user", json.dumps(payload, ensure_ascii=False)),
-                    ]
-                )
+                with llm_stage("coverage_check", substage):
+                    response = client.generate(
+                        [
+                            LLMMessage("system", COVERAGE_SYSTEM_PROMPT),
+                            LLMMessage("user", json.dumps(payload, ensure_ascii=False)),
+                        ]
+                    )
                 parsed = self._parse(response, requirements, evidence_by_id)
                 self.last_error = None
                 return {item.requirement_id: item for item in parsed}
             except Exception as exception:
+                # Retried attempts are pure discarded latency when the reply was
+                # unparseable rather than the request having failed.
+                mark_last_call_wasted(
+                    "coverage reply rejected; retried or marked unverified",
+                    stage="coverage_check",
+                )
                 error_detail = describe_error(exception)
         self.last_error = error_detail
         return {
