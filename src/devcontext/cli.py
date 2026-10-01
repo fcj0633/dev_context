@@ -3,9 +3,10 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from collections.abc import Callable
 from dataclasses import asdict
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from devcontext.agentic import (
@@ -50,6 +51,8 @@ from devcontext.evaluation.retrieval_workflow_runner import (
 from devcontext.ingestion.pipeline import ingest
 from devcontext.llm import DeepSeekLLMClient, LLMClient
 from devcontext.models import SearchResult
+from devcontext.observability import PerfRecorder, capture
+from devcontext.observability.report import build_perf_report, render_summary
 from devcontext.explanation import (
     EXPLANATION_PLANNER_MAX_TOKENS,
     ExplanationPlanner,
@@ -155,6 +158,27 @@ def _parser() -> argparse.ArgumentParser:
         help=(
             "Force presentation depth without changing evidence retrieval. "
             "'deep' is only available with --answer-mode teach."
+        ),
+    )
+    ask.add_argument(
+        "--perf",
+        action="store_true",
+        help="Print a stage-by-stage latency summary after answering",
+    )
+    ask.add_argument(
+        "--perf-json",
+        type=Path,
+        default=None,
+        help="Write the machine-readable performance report to this path",
+    )
+    ask.add_argument(
+        "--repeat",
+        type=int,
+        default=1,
+        help=(
+            "Run the question N times in this process. Repeat 1 is "
+            "'first_sample'; the rest are 'repeat_sample', because every "
+            "standalone ask starts its own interpreter and so has no warm state."
         ),
     )
 
@@ -573,6 +597,70 @@ def _routed_search(
     return decision, policy.search(query, decision, top_k)
 
 
+def _run_ask(
+    run_once: Callable[[], AgenticAnswerResult],
+    *,
+    args: argparse.Namespace,
+    top_k: int,
+    answer_mode: str,
+) -> tuple[AgenticAnswerResult, list[dict]]:
+    """Answer, optionally repeated, with a trace collected for each sample.
+
+    Repetitions share this interpreter, so later samples skip a fresh process
+    start. They are still ``repeat_sample`` and not "warm": a standalone ask
+    shares no client, connection or cache across processes either, so calling
+    the Nth run warm would overstate what changed.
+
+    With no performance flags and a single run, nothing is recorded at all and
+    the command behaves exactly as it did before tracing existed.
+    """
+    repeats = max(1, args.repeat)
+    profiling = bool(args.perf) or args.perf_json is not None or repeats > 1
+    if not profiling:
+        return run_once(), []
+
+    reports: list[dict] = []
+    result: AgenticAnswerResult | None = None
+    for index in range(repeats):
+        recorder = PerfRecorder()
+        started = time.perf_counter()
+        with capture(recorder):
+            result = run_once()
+        reports.append(
+            build_perf_report(
+                recorder=recorder,
+                result=result,
+                query=args.query,
+                answer_mode=answer_mode,
+                depth=args.depth,
+                top_k=top_k,
+                wall_clock_ms=(time.perf_counter() - started) * 1000,
+                sample_kind="first_sample" if index == 0 else "repeat_sample",
+                timestamp=datetime.now(timezone.utc).isoformat(),
+            )
+        )
+    assert result is not None
+    return result, reports
+
+
+def _emit_perf(args: argparse.Namespace, reports: list[dict]) -> None:
+    if not reports:
+        return
+    # Repeating without asking for a summary still prints one: N identical
+    # answers with no numbers would be useless.
+    if args.perf or len(reports) > 1:
+        for report in reports:
+            print()
+            print(render_summary(report))
+    if args.perf_json is not None:
+        payload: object = reports[0] if len(reports) == 1 else {"samples": reports}
+        args.perf_json.parent.mkdir(parents=True, exist_ok=True)
+        args.perf_json.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        print(f"Performance report written to {args.perf_json}")
+
+
 def main(argv: list[str] | None = None) -> int:
     if sys.platform == "win32":
         sys.stdout.reconfigure(encoding="utf-8")
@@ -618,25 +706,41 @@ def main(argv: list[str] | None = None) -> int:
                     _print_evidence_plan(_evidence_planner(settings).plan(args.query))
             elif args.no_plan:
                 top_k, max_chars = _budget(args, planned=False)
-                result = _agentic_workflow(
-                    settings, ContextBuilder(max_chars=max_chars)
-                ).run(args.query, top_k)
+
+                def run_legacy() -> AgenticAnswerResult:
+                    return _agentic_workflow(
+                        settings, ContextBuilder(max_chars=max_chars)
+                    ).run(args.query, top_k)
+
+                result, reports = _run_ask(
+                    run_legacy, args=args, top_k=top_k, answer_mode="legacy"
+                )
                 _print_agentic_answer(args.query, result, debug=args.debug)
+                _emit_perf(args, reports)
             else:
                 top_k, max_chars = _budget(args, planned=True)
                 legacy_top_k, legacy_max_chars = _budget(args, planned=False)
-                workflow = _planned_workflow(
-                    settings,
-                    ContextBuilder(max_chars=max_chars),
-                    ContextBuilder(max_chars=legacy_max_chars),
-                    args.answer_mode,
-                    args.max_chars,
-                    args.depth,
+
+                def run_planned() -> AgenticAnswerResult:
+                    # Rebuilt per repetition: samples share an interpreter, not
+                    # mutable workflow state.
+                    return _planned_workflow(
+                        settings,
+                        ContextBuilder(max_chars=max_chars),
+                        ContextBuilder(max_chars=legacy_max_chars),
+                        args.answer_mode,
+                        args.max_chars,
+                        args.depth,
+                    ).run(args.query, top_k)
+
+                result, reports = _run_ask(
+                    run_planned, args=args, top_k=top_k,
+                    answer_mode=args.answer_mode,
                 )
-                result = workflow.run(args.query, top_k)
                 _print_agentic_answer(
                     args.query, result, debug=args.debug, include_plan=True
                 )
+                _emit_perf(args, reports)
         elif args.command == "evaluate":
             report = evaluate(settings, benchmark=args.benchmark, baseline=args.baseline)
             summary = [
