@@ -70,15 +70,36 @@ class RetrievalPolicy:
         )
 
     def search_scope_with_trace(
-        self, query: str, source_scope: str, top_k: int
+        self,
+        query: str,
+        source_scope: str,
+        top_k: int,
+        *,
+        code_strategy: str | None = None,
     ) -> SearchExecution:
         """Execute an evidence-controller action using existing retrieval tools.
 
         The LLM never selects a raw strategy.  Source scope is part of the
         evidence contract and this deterministic policy maps it to the retrieval
         behavior already benchmarked by the project.
+
+        ``code_strategy`` narrows the CODE case only, and only when the caller
+        passes it: the evidence controller does, so that a round-0 action with no
+        real symbol behind it searches semantically while a round-1 action that
+        has one searches by exact term. Every other caller - the router-driven
+        path, the CLI, the tests - passes nothing and keeps the hybrid default.
         """
         if source_scope == "CODE":
+            if code_strategy is not None:
+                if code_strategy not in {"keyword", "vector"}:
+                    raise ValueError(
+                        "code_strategy must be keyword or vector, or None"
+                    )
+                execution = self.service.search_with_trace(
+                    code_strategy, query, top_k, source_type="CODE"
+                )
+                execution.source_candidates = {"CODE": execution.results}
+                return execution
             return self.search_with_trace(
                 query,
                 RouteDecision(

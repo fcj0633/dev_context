@@ -102,6 +102,14 @@ class SearchExecution:
     results: list[SearchResult]
     timings: SearchTimings
     source_candidates: dict[str, list[SearchResult]] = field(default_factory=dict)
+    # Which strategy actually ran. Added for the stage-aware retrieval
+    # experiment: the report must say, per action, whether it searched by
+    # keyword, vector or hybrid, and that was previously only knowable from the
+    # call site rather than from the result.
+    strategy: str | None = None
+    # The real project symbols (class / method / signature) that the workspace
+    # had already confirmed, and which justified an exact-match search.
+    symbols: tuple[str, ...] = ()
 
 
 @dataclass(slots=True)

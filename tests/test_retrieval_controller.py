@@ -62,9 +62,15 @@ class FakeActionPlanner:
 class FakePolicy:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str]] = []
+        # The controller now names the CODE strategy it wants; recorded so a
+        # test can assert the stage-aware choice without a real service.
+        self.strategies: list[str | None] = []
 
-    def search_scope_with_trace(self, query: str, scope: str, top_k: int):
+    def search_scope_with_trace(
+        self, query: str, scope: str, top_k: int, *, code_strategy: str | None = None
+    ):
         self.calls.append((query, scope))
+        self.strategies.append(code_strategy)
         identifier = len(self.calls)
         source = "DOCUMENT" if scope == "DOCUMENT" else "CODE"
         return SearchExecution([
@@ -170,7 +176,9 @@ class BulkPolicy:
     def __init__(self) -> None:
         self.calls = 0
 
-    def search_scope_with_trace(self, query: str, scope: str, top_k: int):
+    def search_scope_with_trace(
+        self, query: str, scope: str, top_k: int, *, code_strategy: str | None = None
+    ):
         self.calls += 1
         return SearchExecution(
             [
@@ -186,7 +194,9 @@ class BulkPolicy:
 
 
 class FailingPolicy:
-    def search_scope_with_trace(self, query: str, scope: str, top_k: int):
+    def search_scope_with_trace(
+        self, query: str, scope: str, top_k: int, *, code_strategy: str | None = None
+    ):
         raise RuntimeError("embedding endpoint unreachable")
 
 

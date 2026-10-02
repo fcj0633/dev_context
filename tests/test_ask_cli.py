@@ -513,7 +513,10 @@ def test_ask_cli_planned_path_fans_out_over_sub_questions(
     assert "ER1. 确认订单关闭的触发与入口实现 — CODE" in captured.out
     assert "ER2. 确认订单关闭时序的设计依据 — DOCUMENT" in captured.out
     assert "Route: MIXED (rules)" in captured.out
-    assert retrieval_calls == [("hybrid", "CODE"), ("vector", "DOCUMENT")]
+    # Round 0 CODE now searches semantically: neither this question nor anything
+    # retrieved yet names a real project symbol, so there is no exact term for a
+    # keyword half to match. DOCUMENT is untouched.
+    assert retrieval_calls == [("vector", "CODE"), ("vector", "DOCUMENT")]
     assert "订单关闭分为入口与设计两部分。" in captured.out
     assert "Sources:" not in captured.out
 

@@ -25,6 +25,7 @@ from devcontext.planning import EvidencePlan, EvidencePlanner, EvidenceRequireme
 from devcontext.request import UserRequest
 from devcontext.observability import RetrievalActionTrace, record_retrieval_action
 from devcontext.retrieval import RetrievalPolicy
+from devcontext.retrieval.symbols import code_strategy_for
 
 
 COMPACT_CONTEXT_BUDGET = 8_000
@@ -256,12 +257,27 @@ class RetrievalController:
             per_action_top_k = (
                 CORE_TOP_K if requirement.priority == "CORE" else SUPPORTING_TOP_K
             )
+            # Stage-aware CODE routing. Round 0 usually has nothing but business
+            # semantics to go on, so there is no exact term for a keyword half to
+            # match and hybrid only adds its ranking noise; round 1 usually has
+            # real class/method names discovered from round-0 evidence, which is
+            # exactly what keyword search is good at. The decision is driven by
+            # whether a real symbol exists, never by the round number as such.
+            code_strategy: str | None = None
+            symbols: tuple[str, ...] = ()
+            if action.source_scope == "CODE":
+                code_strategy, symbols = code_strategy_for(
+                    action.query, workspace, action.requirement_id
+                )
             try:
                 execution = self.retrieval_policy.search_scope_with_trace(
                     action.query,
                     action.source_scope,
                     per_action_top_k,
+                    code_strategy=code_strategy,
                 )
+                if code_strategy is not None:
+                    execution.symbols = symbols
                 record_retrieval_action(
                     _action_trace(action, execution, round_index, per_action_top_k)
                 )
