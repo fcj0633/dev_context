@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING, Any
 
@@ -19,6 +20,16 @@ from devcontext.explanation.prompts import (
     EXPLANATION_PLANNER_SYSTEM_PROMPT,
     allowed_values_block,
 )
+from devcontext.explanation.policy import (
+    DepthDecision,
+    LocateSelection,
+    SectionBudgetDecision,
+    _LOCATE_HINTS,
+    decide_depth,
+    evidence_requirements_for_labels,
+    section_budget_for,
+    select_locate_evidence,
+)
 from devcontext.llm import LLMClient, LLMMessage
 from devcontext.observability import llm_stage
 from devcontext.models import CONFLICT_RESOLUTIONS, EvidenceConflict
@@ -28,7 +39,11 @@ if TYPE_CHECKING:
     from devcontext.agentic.evidence_models import EvidencePackage
 
 
-EXPLANATION_PLANNER_MAX_TOKENS = 32_768
+# Baseline V1: successful explanation-planner completion p95=16,144 across
+# 27 samples, with zero finish_reason=length.  16,144 * 1.25 rounded up to the
+# next 256-token boundary is 20,224.  This remains completion-total budget (not
+# visible-only budget), so optional reasoning detail cannot make it unsafe.
+EXPLANATION_PLANNER_MAX_TOKENS = 20_224
 MAX_SECTIONS = 12
 LOCATION_ONLY_MAX_SECTIONS = 2
 MAX_STRING_CHARS = 600
@@ -48,10 +63,16 @@ _CLAIM_FIELDS = {
     "claim_goal", "claim_type", "evidence_labels", "confidence", "assumptions",
     "conditional",
 }
+_SLIM_ALLOWED_FIELDS = {
+    "answer_goal", "direct_answer", "core_mental_model", "primary_strategy",
+    "sections", "answer_depth",
+}
+_SLIM_SECTION_FIELDS = {
+    "id", "title", "section_type", "teaching_goal", "key_points",
+    "evidence_labels", "target_tokens",
+}
 
-# Deterministic signals for the fallback only. The LLM path decides all of this
-# itself; these exist so a planner failure still yields a usable shape.
-_LOCATE_HINTS = ("在哪", "哪个类", "哪个文件", "哪里", "谁调用", "调用了", "入口", "位置")
+# Deterministic signals for the fallback only.
 _NEGATIVE_HINTS = ("是不是", "是否真的", "有没有", "真的会", "能否")
 _FAILURE_HINTS = (
     "失败", "异常", "不一致", "超时", "并发", "重复", "回滚", "补偿", "竞态", "崩溃",
@@ -69,47 +90,109 @@ class ExplanationPlanner:
     order, and around which mental model, should a person meet them".
     """
 
-    def __init__(self, llm_client_factory: Callable[[], LLMClient]) -> None:
+    def __init__(
+        self,
+        llm_client_factory: Callable[[], LLMClient],
+        *,
+        depth_policy: str = "legacy",
+    ) -> None:
         self.llm_client_factory = llm_client_factory
+        self.depth_policy = depth_policy
         self.last_client: LLMClient | None = None
+        self.last_depth_decision: DepthDecision | None = None
+        self.last_section_budget: SectionBudgetDecision | None = None
+        self.last_locate_selection = LocateSelection(
+            skip_reason="not a deterministic locate request"
+        )
 
     def plan(
         self,
         request: UserRequest,
         evidence_package: EvidencePackage,
     ) -> ExplanationPlan:
+        depth = decide_depth(request, self.depth_policy)  # type: ignore[arg-type]
+        self.last_depth_decision = depth
+        budget = section_budget_for(evidence_package, depth) if depth else None
+        self.last_section_budget = budget
+        self.last_locate_selection = LocateSelection(
+            skip_reason="not a deterministic locate request"
+        )
+        if budget is not None and budget.target_sections == 0:
+            return _no_evidence_plan(request, depth, budget)
+        if depth is not None and depth.decision_source == "locate" and budget is not None:
+            selection = select_locate_evidence(request, evidence_package, budget)
+            self.last_locate_selection = selection
+            if selection.used:
+                return deterministic_locate_plan(
+                    request, evidence_package, depth, budget, selection
+                )
         payload = _payload(request, evidence_package)
-        self.last_client = self.llm_client_factory()
+        if depth is not None and budget is not None:
+            payload["planning_constraints"] = {
+                "required_answer_depth": depth.answer_depth,
+                "preferred_sections": depth.preferred_sections,
+                "hard_max_sections": depth.hard_max_sections,
+                "required_section_count": budget.target_sections,
+                "section_count_reason": (
+                    budget.gap_reason
+                    or (
+                        f"{len(budget.evidence_backed_requirement_ids)} "
+                        "evidence-backed requirements are available"
+                    )
+                ),
+            }
+        client = self.llm_client_factory()
+        self.last_client = client
         with llm_stage("explanation_planning"):
-            response = self.last_client.generate([
+            response = client.generate([
                 LLMMessage(
                     "system",
                     EXPLANATION_PLANNER_SYSTEM_PROMPT
                     + "\n\n"
                     + allowed_values_block()
                     + "\n\n"
-                    "回答深度由本阶段决定：若 answer_options.depth_override 非空，answer_depth 必须使用该值。",
+                    + (
+                        "若 planning_constraints 存在，answer_depth 和章节数量"
+                        "必须严格使用其中的 required 值；不得用空章节凑数量。"
+                        if depth is not None
+                        else
+                        "回答深度由本阶段决定：若 answer_options.depth_override "
+                        "非空，answer_depth 必须使用该值。"
+                    ),
                 ),
                 LLMMessage("user", json.dumps(payload, ensure_ascii=False)),
             ])
-        return parse_explanation_plan(response, request, evidence_package)
+        return parse_explanation_plan(
+            response,
+            request,
+            evidence_package,
+            depth_decision=depth,
+            section_budget=budget,
+        )
 
 
 def parse_explanation_plan(
     response: str,
     request: UserRequest,
     evidence_package: EvidencePackage,
+    *,
+    depth_decision: DepthDecision | None = None,
+    section_budget: SectionBudgetDecision | None = None,
 ) -> ExplanationPlan:
     try:
         value = json.loads(response)
     except json.JSONDecodeError as exception:
         raise ExplanationPlanError("explanation plan is not valid JSON") from exception
+    if isinstance(value, dict) and set(value) == _SLIM_ALLOWED_FIELDS:
+        value = _expand_slim_plan(value, evidence_package)
     if not isinstance(value, dict) or set(value) != _ALLOWED_FIELDS:
         raise ExplanationPlanError("explanation plan has invalid fields")
 
     depth = value["answer_depth"]
     if depth not in DEPTHS:
         raise ExplanationPlanError("answer_depth is invalid")
+    if depth_decision is not None and depth != depth_decision.answer_depth:
+        raise ExplanationPlanError("answer_depth violates the deterministic policy")
     override = request.answer_options.depth_override
     if override is not None and depth != override:
         raise ExplanationPlanError("answer_depth does not honor the explicit override")
@@ -125,7 +208,16 @@ def parse_explanation_plan(
         " ".join(item.target.split()).casefold()
         for item in evidence_package.evidence_plan.requirements
     }
-    sections = _parse_sections(value["sections"], allowed, requirement_targets)
+    max_sections = (
+        section_budget.hard_max_sections
+        if section_budget is not None
+        else MAX_SECTIONS
+    )
+    sections = _parse_sections(
+        value["sections"], allowed, requirement_targets, max_sections=max_sections
+    )
+    if section_budget is not None:
+        _validate_section_budget(sections, evidence_package, section_budget)
 
     strategy = value["primary_strategy"]
     if strategy not in PRIMARY_STRATEGIES:
@@ -160,14 +252,84 @@ def parse_explanation_plan(
     )
 
 
+def _expand_slim_plan(
+    value: dict[str, Any], evidence_package: EvidencePackage
+) -> dict[str, Any]:
+    """Derive verbose claim/state fields from frozen evidence.
+
+    Legacy full-schema replies remain accepted for compatibility. New planner
+    calls only decide the teaching structure; deterministic data already known
+    from EvidencePackage is not regenerated by the model.
+    """
+    raw_sections = value.get("sections")
+    if not isinstance(raw_sections, list):
+        raise ExplanationPlanError("sections must be a list")
+    coverage = {
+        item.requirement_id: item for item in evidence_package.requirement_coverage
+    }
+    sections: list[dict[str, Any]] = []
+    previous_id: str | None = None
+    for raw in raw_sections:
+        if not isinstance(raw, dict) or set(raw) != _SLIM_SECTION_FIELDS:
+            raise ExplanationPlanError("slim explanation section has invalid fields")
+        raw_labels = raw.get("evidence_labels")
+        labels = tuple(
+            label for label in raw_labels if isinstance(label, str)
+        ) if isinstance(raw_labels, list) else ()
+        requirement_ids = evidence_requirements_for_labels(
+            evidence_package, labels
+        )
+        states = [
+            coverage[requirement_id].state
+            for requirement_id in requirement_ids
+            if requirement_id in coverage
+        ]
+        confidence = (
+            "CONFIRMED"
+            if states and all(state == "SATISFIED" for state in states)
+            else "PARTIAL"
+            if states
+            else "UNVERIFIED"
+        )
+        claim_type = "PROJECT_FACT" if labels else "GENERAL_CONCEPT"
+        section_id = raw.get("id") if isinstance(raw.get("id"), str) else ""
+        sections.append({
+            **raw,
+            "claim_plans": [{
+                "claim_goal": raw.get("teaching_goal", ""),
+                "claim_type": claim_type,
+                "evidence_labels": list(labels),
+                "confidence": confidence,
+                "assumptions": [],
+                "conditional": False,
+            }],
+            "teaching_devices": ["NONE"],
+            "depends_on": [previous_id] if previous_id else [],
+            "evidence_state": confidence,
+        })
+        previous_id = section_id or previous_id
+    return {
+        **value,
+        "audience_model": "熟悉 Java，但需要建立当前项目的实现模型",
+        "secondary_strategies": [],
+        "prerequisite_concepts": [],
+        "likely_misconceptions": [],
+        "sections": sections,
+        "unresolved_gaps": list(evidence_package.unresolved_requirements),
+        "conflicts": [],
+    }
+
+
 def _parse_sections(
     raw_sections: Any,
     allowed: set[str],
     requirement_targets: set[str],
+    *,
+    max_sections: int = MAX_SECTIONS,
 ) -> tuple[ExplanationSection, ...]:
     if not isinstance(raw_sections, list) or not raw_sections:
         raise ExplanationPlanError("explanation plan requires at least one section")
-    if len(raw_sections) > MAX_SECTIONS:
+    if len(raw_sections) > max_sections:
         raise ExplanationPlanError("explanation plan has too many sections")
 
     sections: list[ExplanationSection] = []
@@ -278,12 +440,20 @@ def _parse_conflicts(raw_conflicts: Any, allowed: set[str]) -> tuple[EvidenceCon
 def fallback_explanation_plan(
     request: UserRequest,
     evidence_package: EvidencePackage,
+    depth_decision: DepthDecision | None = None,
+    section_budget: SectionBudgetDecision | None = None,
 ) -> ExplanationPlan:
     """A deterministic plan for when the planner call fails.
 
     Shapes only - it cannot decide what the reader needs to understand, so it
     says so plainly rather than inventing a mental model.
     """
+    if depth_decision is not None and section_budget is not None:
+        if section_budget.target_sections == 0:
+            return _no_evidence_plan(request, depth_decision, section_budget)
+        return _budgeted_fallback_plan(
+            request, evidence_package, depth_decision, section_budget
+        )
     strategy, section_types = _shape_for(request.original_query)
     sections: list[ExplanationSection] = []
     for index, section_type in enumerate(section_types, start=1):
@@ -324,6 +494,240 @@ def fallback_explanation_plan(
     )
 
 
+def deterministic_locate_plan(
+    request: UserRequest,
+    evidence_package: EvidencePackage,
+    depth: DepthDecision,
+    budget: SectionBudgetDecision,
+    selection: LocateSelection,
+) -> ExplanationPlan:
+    requirement_id = selection.requirement_ids[0]
+    requirement = next(
+        item
+        for item in evidence_package.evidence_plan.requirements
+        if item.id == requirement_id
+    )
+    coverage = _coverage_for(evidence_package, requirement_id)
+    labels = selection.evidence_labels
+    section = ExplanationSection(
+        id="S1",
+        title="定位结果",
+        section_type="DIRECT_ANSWER",
+        teaching_goal="指出实现位置及对应职责",
+        key_points=(requirement.target, requirement.success_criteria),
+        claim_plans=(
+            ClaimPlan(
+                claim_goal="根据项目证据指出实现位置",
+                claim_type="PROJECT_FACT",
+                evidence_labels=labels,
+                confidence=_confidence(coverage),
+            ),
+        ),
+        evidence_labels=labels,
+        teaching_devices=("NONE",),
+        evidence_state=_confidence(coverage),
+        target_tokens=400,
+    )
+    if budget.target_sections != 1:
+        raise ExplanationPlanError(
+            "a deterministic locate plan requires exactly one section"
+        )
+    return ExplanationPlan(
+        answer_goal="直接指出用户询问的实现位置",
+        direct_answer="",
+        audience_model="用户需要定位项目中的具体实现",
+        core_mental_model="先给位置，再说明该位置承担的职责",
+        primary_strategy="LOCATION_ONLY",
+        sections=(section,),
+        answer_depth=depth.answer_depth,
+        decision_source="deterministic",
+    )
+
+
+def _validate_section_budget(
+    sections: tuple[ExplanationSection, ...],
+    evidence_package: EvidencePackage,
+    budget: SectionBudgetDecision,
+) -> None:
+    if len(sections) > budget.hard_max_sections:
+        raise ExplanationPlanError("SECTION_HARD_MAX_EXCEEDED")
+    if len(sections) != budget.target_sections:
+        raise ExplanationPlanError(
+            "SECTION_COUNT_MISMATCH: "
+            f"expected {budget.target_sections}, got {len(sections)}"
+        )
+    supported = set(budget.evidence_backed_requirement_ids)
+    teaching_goals: set[str] = set()
+    key_point_sets: set[tuple[str, ...]] = set()
+    fingerprints: set[tuple[str, tuple[str, ...], tuple[str, ...]]] = set()
+    covered_requirements: set[str] = set()
+    for section in sections:
+        teaching_goal = " ".join(section.teaching_goal.split()).casefold()
+        if not teaching_goal or teaching_goal in teaching_goals:
+            raise ExplanationPlanError("DUPLICATE_SECTION_INTENT")
+        teaching_goals.add(teaching_goal)
+        normalized_points = tuple(
+            sorted(" ".join(point.split()).casefold() for point in section.key_points)
+        )
+        if (
+            not normalized_points
+            or any(not point for point in normalized_points)
+            or normalized_points in key_point_sets
+        ):
+            raise ExplanationPlanError("DUPLICATE_SECTION_KEY_POINTS")
+        key_point_sets.add(normalized_points)
+        if not section.evidence_labels:
+            raise ExplanationPlanError("SECTION_WITHOUT_EVIDENCE")
+        if any(
+            re.fullmatch(r"E\d+", label) is None
+            for label in section.evidence_labels
+        ):
+            raise ExplanationPlanError("SECTION_WITH_INVALID_EVIDENCE_LABEL")
+        requirement_ids = (
+            evidence_requirements_for_labels(
+                evidence_package, section.evidence_labels
+            )
+            & supported
+        )
+        if not requirement_ids:
+            raise ExplanationPlanError("SECTION_WITHOUT_SUPPORTED_REQUIREMENT")
+        for claim in section.claim_plans:
+            if claim.claim_type == "PROJECT_FACT" and not set(
+                claim.evidence_labels
+            ) <= set(section.evidence_labels):
+                raise ExplanationPlanError(
+                    "PROJECT_FACT_CITATION_OUTSIDE_SECTION"
+                )
+        fingerprint = (
+            section.section_type,
+            tuple(sorted(requirement_ids)),
+            normalized_points,
+        )
+        if fingerprint in fingerprints:
+            raise ExplanationPlanError("DUPLICATE_SECTION_FINGERPRINT")
+        fingerprints.add(fingerprint)
+        covered_requirements.update(requirement_ids)
+    if len(covered_requirements) < budget.target_sections:
+        raise ExplanationPlanError(
+            "INSUFFICIENT_DISTINCT_REQUIREMENT_COVERAGE"
+        )
+
+
+def _budgeted_fallback_plan(
+    request: UserRequest,
+    evidence_package: EvidencePackage,
+    depth: DepthDecision,
+    budget: SectionBudgetDecision,
+) -> ExplanationPlan:
+    strategy = _shape_for(request.original_query)[0]
+    if strategy == "LOCATION_ONLY" and budget.target_sections > 1:
+        strategy = "PROBLEM_SOLUTION"
+    default_schedule = (
+        "DIRECT_ANSWER",
+        "MENTAL_MODEL",
+        "MECHANISM",
+        "EXECUTION_FLOW",
+        "DESIGN_REASON",
+        "FAILURE_SCENARIO",
+        "SUMMARY",
+    )
+    if strategy == "NEGATIVE_CORRECTION":
+        schedule = (
+            "MISCONCEPTION", "DIRECT_ANSWER", "MENTAL_MODEL", "MECHANISM",
+            "DESIGN_REASON", "BOUNDARY", "SUMMARY",
+        )
+    elif strategy == "FAILURE_ANALYSIS":
+        schedule = (
+            "PROBLEM_SETUP", "EXECUTION_FLOW", "FAILURE_SCENARIO",
+            "MECHANISM", "DESIGN_REASON", "BOUNDARY", "SUMMARY",
+        )
+    else:
+        schedule = default_schedule
+    requirements = {
+        item.id: item for item in evidence_package.evidence_plan.requirements
+    }
+    sections: list[ExplanationSection] = []
+    for index, requirement_id in enumerate(
+        budget.evidence_backed_requirement_ids[: budget.target_sections],
+        start=1,
+    ):
+        requirement = requirements[requirement_id]
+        labels = _labels_for(evidence_package, requirement_id)
+        coverage = _coverage_for(evidence_package, requirement_id)
+        section_type = schedule[index - 1]
+        sections.append(
+            ExplanationSection(
+                id=f"S{index}",
+                title=_title_for(section_type),
+                section_type=section_type,
+                teaching_goal=f"解释第 {index} 个有证据支持的项目要点",
+                key_points=(
+                    requirement.target,
+                    requirement.success_criteria,
+                    f"证据范围 {requirement.id}",
+                ),
+                claim_plans=(
+                    ClaimPlan(
+                        claim_goal="陈述该 Requirement 对应的项目事实",
+                        claim_type="PROJECT_FACT",
+                        evidence_labels=labels,
+                        confidence=_confidence(coverage),
+                    ),
+                ),
+                evidence_labels=labels,
+                teaching_devices=("NONE",),
+                evidence_state=_confidence(coverage),
+            )
+        )
+    _validate_section_budget(tuple(sections), evidence_package, budget)
+    return ExplanationPlan(
+        answer_goal="按现有证据说明用户问题的项目事实",
+        direct_answer="",
+        audience_model="依据检索证据组织回答",
+        core_mental_model="每个结论都由对应 Requirement 的项目证据支撑",
+        primary_strategy=strategy,
+        sections=tuple(sections),
+        answer_depth=depth.answer_depth,
+        unresolved_gaps=tuple(
+            item.target
+            for item in evidence_package.evidence_plan.requirements
+            if item.id in budget.unsupported_requirement_ids
+        ),
+        decision_source="fallback",
+    )
+
+
+def _no_evidence_plan(
+    request: UserRequest,
+    depth: DepthDecision,
+    budget: SectionBudgetDecision,
+) -> ExplanationPlan:
+    return ExplanationPlan(
+        answer_goal="说明当前没有可用于回答的项目证据",
+        direct_answer="",
+        audience_model="用户需要项目事实，但当前检索没有可绑定证据",
+        core_mental_model="没有项目证据时不生成项目事实",
+        primary_strategy="PROBLEM_SOLUTION",
+        sections=(),
+        answer_depth=depth.answer_depth,
+        unresolved_gaps=(budget.gap_reason or request.original_query,),
+        decision_source="no_evidence",
+    )
+
+
+def _coverage_for(
+    evidence_package: EvidencePackage, requirement_id: str
+):
+    return next(
+        (
+            item
+            for item in evidence_package.requirement_coverage
+            if item.requirement_id == requirement_id
+        ),
+        None,
+    )
+
+
 def _shape_for(query: str) -> tuple[str, tuple[str, ...]]:
     if any(hint in query for hint in _NEGATIVE_HINTS):
         return "NEGATIVE_CORRECTION", ("MISCONCEPTION", "DIRECT_ANSWER", "SUMMARY")
@@ -342,7 +746,9 @@ _TITLES = {
     "MENTAL_MODEL": "核心模型",
     "MECHANISM": "实现机制",
     "EXECUTION_FLOW": "执行路径",
+    "DESIGN_REASON": "为什么这样设计",
     "FAILURE_SCENARIO": "失败时会发生什么",
+    "BOUNDARY": "适用边界",
     "MISCONCEPTION": "先纠正一个前提",
     "SUMMARY": "收束",
 }
@@ -375,7 +781,9 @@ def _labels_for(evidence_package: EvidencePackage, requirement_id: str | None) -
     workspace = evidence_package.evidence_workspace
     if workspace is not None:
         return tuple(
-            ref.evidence_id for ref in workspace.for_requirement(requirement_id)
+            ref.evidence_id
+            for ref in workspace.for_requirement(requirement_id)
+            if re.fullmatch(r"E\d+", ref.evidence_id)
         )
     by_chunk = {
         item.chunk_id: item.citation.label
@@ -389,7 +797,7 @@ def _labels_for(evidence_package: EvidencePackage, requirement_id: str | None) -
             if coverage.requirement_id == requirement_id
             for chunk_id in coverage.evidence_ids
         )
-        if label
+        if label and re.fullmatch(r"E\d+", label)
     )
 
 
@@ -406,7 +814,12 @@ def _payload(request: UserRequest, evidence_package: EvidencePackage) -> dict[st
         "answer_options": request.answer_options.to_dict(),
         "evidence_plan": evidence_package.evidence_plan.to_dict(),
         "requirement_coverage": [
-            item.to_dict() for item in evidence_package.requirement_coverage
+            {
+                "requirement_id": item.requirement_id,
+                "state": item.state,
+                "missing_criteria": list(item.missing_criteria),
+            }
+            for item in evidence_package.requirement_coverage
         ],
         "retrieval_state": evidence_package.retrieval_state,
         "available_citations": sorted(_allowed_labels(evidence_package)),
@@ -423,15 +836,33 @@ def _evidence_listing(evidence_package: EvidencePackage) -> Sequence[dict[str, A
     """
     workspace = evidence_package.evidence_workspace
     if workspace is not None:
-        return tuple(ref.to_dict(include_content=True) for ref in workspace.all())
+        return tuple(
+            {
+                "evidence_id": ref.evidence_id,
+                "requirement_ids": list(ref.requirement_ids),
+                "source_type": ref.citation.source_type,
+                "file_path": ref.citation.file_path,
+                "class_name": ref.citation.class_name,
+                "symbol_name": ref.citation.symbol_name,
+                "source_role": ref.source_role,
+                "temporal_status": ref.temporal_status,
+                # The planner needs enough semantics to organize the teaching
+                # path, not complete bodies that the Writer receives later.
+                "content_excerpt": (ref.content or "")[:800],
+            }
+            for ref in workspace.all()
+        )
     return tuple(
         {
             "evidence_id": item.citation.label,
-            "citation": item.citation.to_dict(),
+            "source_type": item.citation.source_type,
+            "file_path": item.citation.file_path,
+            "class_name": item.citation.class_name,
+            "symbol_name": item.citation.symbol_name,
             "requirement_ids": list(item.sub_question_ids),
             "source_role": item.source_role,
             "temporal_status": item.temporal_status,
-            "content": item.content,
+            "content_excerpt": item.content[:800],
         }
         for item in evidence_package.context_bundle.items
     )

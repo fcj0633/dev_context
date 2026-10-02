@@ -126,6 +126,46 @@ def parse(value, *, request=None, package=None):
 
 
 class TestExplanationPlanValidation:
+    def test_slim_plan_derives_evidence_fields_from_the_package(self) -> None:
+        """The low-latency schema leaves factual bookkeeping to the program."""
+        slim = {
+            "answer_goal": "理解余票桶的职责边界",
+            "direct_answer": "它负责准入，但数据库仍是库存事实。",
+            "core_mental_model": "Redis 令牌是准入凭证，MySQL 座位才是库存事实",
+            "primary_strategy": "PROBLEM_SOLUTION",
+            "sections": [
+                {
+                    "id": "S1",
+                    "title": "先建立两层库存模型",
+                    "section_type": "MENTAL_MODEL",
+                    "teaching_goal": "区分准入信号与库存事实",
+                    "key_points": ["令牌桶只负责快速拒绝"],
+                    "evidence_labels": ["E1"],
+                    "target_tokens": 400,
+                },
+                {
+                    "id": "S2",
+                    "title": "再沿调用点看状态变化",
+                    "section_type": "EXECUTION_FLOW",
+                    "teaching_goal": "解释领取与归还令牌的顺序",
+                    "key_points": ["入口领取，失败路径归还"],
+                    "evidence_labels": ["E2"],
+                    "target_tokens": 450,
+                },
+            ],
+            "answer_depth": "detailed",
+        }
+
+        plan = parse(slim)
+
+        assert len(plan.sections) == 2
+        assert plan.audience_model
+        assert plan.sections[0].claim_plans[0].claim_type == "PROJECT_FACT"
+        assert plan.sections[0].claim_plans[0].evidence_labels == ("E1",)
+        assert plan.sections[0].evidence_state == "CONFIRMED"
+        assert plan.sections[1].depends_on == ("S1",)
+        assert plan.sections[1].teaching_devices == ("NONE",)
+
     def test_plan_has_core_mental_model(self) -> None:
         plan = parse(payload())
 

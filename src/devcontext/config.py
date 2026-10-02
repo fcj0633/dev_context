@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from typing import Literal
+
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -31,6 +33,12 @@ class Settings(BaseSettings):
     deepseek_answer_planner_model: str | None = None
     deepseek_answer_model: str | None = None
     deepseek_reviewer_model: str | None = None
+    # Safety defaults stay on the proven path until the live P1/P2 performance
+    # and quality gates pass.  Operators can enable the implemented candidate
+    # with EXPLANATION_DEPTH_POLICY=deterministic and
+    # TEACHING_SECTION_CONCURRENCY=2|3|4.
+    explanation_depth_policy: Literal["legacy", "deterministic"] = "legacy"
+    teaching_section_concurrency: int = Field(default=1, ge=1, le=4)
     source_policy_path: Path | None = None
     repository_name: str = "my12306"
     # Effective ceilings for this pipeline, not the model's advertised limits.

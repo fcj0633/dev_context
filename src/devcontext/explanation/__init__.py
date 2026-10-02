@@ -24,6 +24,12 @@ from devcontext.explanation.planner import (
     parse_explanation_plan,
 )
 from devcontext.explanation.prompts import EXPLANATION_PLANNER_SYSTEM_PROMPT
+from devcontext.explanation.policy import (
+    DepthDecision,
+    LocateSelection,
+    SectionBudgetDecision,
+    TeachingRuntimeOptions,
+)
 from devcontext.explanation.reviewer import (
     SectionIssue,
     TeachingReviewResult,
@@ -38,11 +44,15 @@ from devcontext.explanation.workflow import (
 __all__ = [
     "EXPLANATION_PLANNER_MAX_TOKENS",
     "GroundingIssue",
+    "DepthDecision",
+    "LocateSelection",
     "OutputBudget",
     "SectionComposer",
     "SectionIssue",
+    "SectionBudgetDecision",
     "TeachingReviewResult",
     "TeachingReviewer",
+    "TeachingRuntimeOptions",
     "needs_llm_review",
     "budget_for",
     "grounding_issues",

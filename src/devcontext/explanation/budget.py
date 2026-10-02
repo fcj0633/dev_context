@@ -20,6 +20,11 @@ _TOKENS_PER_SECTION = {
     "deep": 2_800,
 }
 _COMPOSER_RESERVE_TOKENS = 2_000
+# Across the first 64 live high-effort section/revision calls, the nearest-rank
+# reasoning-token p95 was 4,135. Round it to the next 256-token bucket. This is
+# completion-total headroom: visible targets remain separate and are never
+# subtracted from provider usage.
+WRITER_REASONING_RESERVE_TOKENS = 4_352
 # Above this many sections a single pass stops being able to hold the whole
 # argument, so the answer is written section by section and joined afterwards.
 FAST_PATH_MAX_SECTIONS = 3
@@ -74,3 +79,40 @@ def budget_for(
         allow_multi_pass=multi_pass,
         reason="capped by the model's maximum output",
     )
+
+
+def section_max_tokens(
+    plan: ExplanationPlan,
+    section: object,
+    capabilities: ModelCapabilities,
+    *,
+    reasoning_reserve: int = WRITER_REASONING_RESERVE_TOKENS,
+) -> int:
+    target = getattr(section, "target_tokens", None) or _TOKENS_PER_SECTION[
+        plan.answer_depth
+    ]
+    return _bounded_tokens(target, reasoning_reserve, capabilities)
+
+
+def single_pass_max_tokens(
+    plan: ExplanationPlan,
+    capabilities: ModelCapabilities,
+    *,
+    reasoning_reserve: int = WRITER_REASONING_RESERVE_TOKENS,
+) -> int:
+    target = sum(
+        section.target_tokens or _TOKENS_PER_SECTION[plan.answer_depth]
+        for section in plan.sections
+    )
+    return _bounded_tokens(max(target, _TOKENS_PER_SECTION[plan.answer_depth]),
+                           reasoning_reserve, capabilities)
+
+
+def _bounded_tokens(
+    visible_target: int,
+    reasoning_reserve: int,
+    capabilities: ModelCapabilities,
+) -> int:
+    wanted = max(4_096, int(visible_target * 1.5) + max(0, reasoning_reserve))
+    rounded = ((wanted + 255) // 256) * 256
+    return min(rounded, capabilities.max_output_tokens)
