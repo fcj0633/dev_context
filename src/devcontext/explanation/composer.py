@@ -80,7 +80,7 @@ class SectionComposer:
                 ]).strip()
         except Exception:
             mark_last_call_wasted("composer call failed; deterministic join", stage="composer")
-            return _deterministic_join(drafts)
+            return deterministic_join(drafts)
 
         labels = extract_citations(response, EVIDENCE_CITATION_PATTERN)
         introduced = [label for label in labels if label not in permitted]
@@ -90,7 +90,7 @@ class SectionComposer:
             mark_last_call_wasted(
                 "composer output discarded; deterministic join", stage="composer"
             )
-            return _deterministic_join(drafts)
+            return deterministic_join(drafts)
         return TeachingDraft(
             text_with_citations=response,
             used_citations=tuple(dict.fromkeys(labels)),
@@ -98,7 +98,7 @@ class SectionComposer:
         )
 
 
-def _deterministic_join(drafts: Sequence[DraftSection]) -> TeachingDraft:
+def deterministic_join(drafts: Sequence[DraftSection]) -> TeachingDraft:
     parts = []
     labels: list[str] = []
     for draft in drafts:
@@ -109,3 +109,7 @@ def _deterministic_join(drafts: Sequence[DraftSection]) -> TeachingDraft:
         used_citations=tuple(dict.fromkeys(labels)),
         invalid_citations=(),
     )
+
+
+# Kept for callers/tests that imported the old private helper.
+_deterministic_join = deterministic_join

@@ -57,6 +57,7 @@ from devcontext.explanation import (
     EXPLANATION_PLANNER_MAX_TOKENS,
     ExplanationPlanner,
     SectionComposer,
+    TeachingRuntimeOptions,
     TeachingExplanationWorkflow,
     TeachingReviewer,
 )
@@ -446,12 +447,18 @@ def _explanation_planner_factory(settings: Settings) -> Callable[[], LLMClient]:
 
 
 def _teaching_writer_factory(settings: Settings) -> Callable[[], LLMClient]:
-    return lambda: DeepSeekLLMClient(
+    return lambda: _teaching_writer_client(settings, TEACHING_ANSWER_MAX_TOKENS)
+
+
+def _teaching_writer_client(
+    settings: Settings, max_tokens: int
+) -> LLMClient:
+    return DeepSeekLLMClient(
         api_key=settings.deepseek_key(),
         base_url=settings.deepseek_base_url,
         model=settings.deepseek_answer_model or settings.deepseek_model,
         reasoning_effort="high",
-        max_tokens=TEACHING_ANSWER_MAX_TOKENS,
+        max_tokens=max_tokens,
     )
 
 
@@ -532,11 +539,21 @@ def _planned_workflow(
         # do different work from the explain path's, so sharing budgets and
         # effort settings between them would just constrain both.
         teaching_workflow = TeachingExplanationWorkflow(
-            ExplanationPlanner(_explanation_planner_factory(settings)),
-            TeachingWriter(_teaching_writer_factory(settings)),
+            ExplanationPlanner(
+                _explanation_planner_factory(settings),
+                depth_policy=settings.explanation_depth_policy,
+            ),
+            TeachingWriter(
+                _teaching_writer_factory(settings),
+                lambda max_tokens: _teaching_writer_client(settings, max_tokens),
+            ),
             SectionComposer(_composer_factory(settings)),
             TeachingReviewer(_teaching_reviewer_factory(settings)),
             capabilities=settings.model_capabilities(),
+            runtime_options=TeachingRuntimeOptions(
+                depth_policy=settings.explanation_depth_policy,
+                section_concurrency=settings.teaching_section_concurrency,
+            ),
         )
     return EvidenceDrivenWorkflow(
         controller,
