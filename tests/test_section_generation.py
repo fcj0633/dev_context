@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from devcontext.agentic import EvidencePackage, RequirementCoverage
@@ -123,6 +125,20 @@ def request_for(question: str = "详细解释项目的余票桶是如何设计�
 
 
 class TestSectionScopedCitations:
+    def test_section_writer_receives_the_visible_token_target(self) -> None:
+        client = ScriptedClient(["桶用 Hash 存储 [E1]。"])
+        writer = TeachingWriter(lambda: client)
+
+        writer.write_section(
+            "问题",
+            "心智模型",
+            section(1, target_tokens=640),
+            ContextBundle("q", [], "", 0, 1_000, False),
+        )
+
+        payload = json.loads(client.prompts[0])
+        assert payload["section"]["target_tokens"] == 640
+
     def test_section_cannot_use_an_unbound_citation(self) -> None:
         """E3 exists in the workspace but was not bound to this section."""
         client = ScriptedClient(["桶用 Hash 存储 [E3]。"])

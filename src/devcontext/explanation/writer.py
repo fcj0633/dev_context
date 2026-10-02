@@ -42,6 +42,8 @@ D 假设案例：可以用于教学，但必须显式写成"假设/例如/可以
 7. 只看关系复杂时才用表格、流程图或伪代码；每节都套同一个模板是失败的。
 8. 不得每节重复"结论："，不得重复同一事实来充篇幅。
 9. 只输出带 Citation 的回答正文，不要输出 Sources 列表。
+10. target_tokens 是可见正文的软目标（不含内部 reasoning）；优先在该目标附近完成教学任务，
+    不得靠重复结论、证据或背景扩写篇幅。
 
 不同 section_type 要用不同的写法，不要把"结论→依据→实现→为什么→取舍"套到每一节：
 PROBLEM_SETUP：先制造问题，再解释为什么需要这个方案。
@@ -83,8 +85,13 @@ class TeachingDraft:
 
 
 class TeachingWriter:
-    def __init__(self, llm_client_factory: Callable[[], LLMClient]) -> None:
+    def __init__(
+        self,
+        llm_client_factory: Callable[[], LLMClient],
+        budgeted_llm_client_factory: Callable[[int], LLMClient] | None = None,
+    ) -> None:
         self.llm_client_factory = llm_client_factory
+        self.budgeted_llm_client_factory = budgeted_llm_client_factory
         self.last_client: LLMClient | None = None
 
     def write(
@@ -92,6 +99,8 @@ class TeachingWriter:
         query: str,
         context: ContextBundle,
         plan: ExplanationPlan,
+        *,
+        max_output_tokens: int | None = None,
     ) -> TeachingDraft:
         allowed = {
             item.citation.label
@@ -113,6 +122,7 @@ class TeachingWriter:
                     "evidence_labels": list(section.evidence_labels),
                     "teaching_devices": list(section.teaching_devices),
                     "evidence_state": section.evidence_state,
+                    "target_tokens": section.target_tokens,
                     "claims": [
                         {
                             "goal": claim.claim_goal,
@@ -134,15 +144,22 @@ class TeachingWriter:
                 ensure_ascii=False,
             ),
         }
-        self.last_client = self.llm_client_factory()
-        with llm_stage("teaching_draft", "single_pass"):
-            response = self.last_client.generate([
-                LLMMessage("system", TEACHING_WRITER_SYSTEM_PROMPT),
-                LLMMessage(
-                    "user",
-                    json.dumps(payload, ensure_ascii=False) + "\n\n" + TEACHING_WRITER_PROMPT,
-                ),
-            ])
+        client = self._client(max_output_tokens)
+        try:
+            with llm_stage("teaching_draft", "single_pass"):
+                response = client.generate([
+                    LLMMessage("system", TEACHING_WRITER_SYSTEM_PROMPT),
+                    LLMMessage(
+                        "user",
+                        json.dumps(payload, ensure_ascii=False)
+                        + "\n\n"
+                        + TEACHING_WRITER_PROMPT,
+                    ),
+                ])
+        finally:
+            # Compatibility for serial diagnostics only. The actual request used
+            # the local variable above and never dereferenced shared state.
+            self.last_client = client
         labels = extract_citations(response, EVIDENCE_CITATION_PATTERN)
         return TeachingDraft(
             text_with_citations=response.strip(),
@@ -157,6 +174,10 @@ class TeachingWriter:
         section: ExplanationSection,
         context: ContextBundle,
         revision_notes: Sequence[str] = (),
+        *,
+        trace_stage: str = "teaching_draft",
+        max_output_tokens: int | None = None,
+        remember_last_client: bool = True,
     ) -> DraftSection:
         """Write one section against only the evidence the plan bound to it.
 
@@ -176,6 +197,7 @@ class TeachingWriter:
                 "key_points": list(section.key_points),
                 "teaching_devices": list(section.teaching_devices),
                 "evidence_state": section.evidence_state,
+                "target_tokens": section.target_tokens,
                 "claims": [
                     {
                         "goal": claim.claim_goal,
@@ -192,12 +214,17 @@ class TeachingWriter:
         }
         if revision_notes:
             payload["revision_notes"] = list(revision_notes)
-        self.last_client = self.llm_client_factory()
-        with llm_stage("teaching_draft", section.id):
-            response = self.last_client.generate([
-                LLMMessage("system", SECTION_WRITER_SYSTEM_PROMPT),
-                LLMMessage("user", json.dumps(payload, ensure_ascii=False)),
-            ])
+        client = self._client(max_output_tokens)
+        try:
+            with llm_stage(trace_stage, section.id):
+                response = client.generate([
+                    LLMMessage("system", SECTION_WRITER_SYSTEM_PROMPT),
+                    LLMMessage("user", json.dumps(payload, ensure_ascii=False)),
+                ])
+        finally:
+            # Worker tasks pass False: shared writer state is not a result channel.
+            if remember_last_client:
+                self.last_client = client
         labels = extract_citations(response, EVIDENCE_CITATION_PATTERN)
         return DraftSection(
             section_id=section.id,
@@ -209,3 +236,11 @@ class TeachingWriter:
             ),
             evidence_state=section.evidence_state,
         )
+
+    def _client(self, max_output_tokens: int | None) -> LLMClient:
+        if (
+            max_output_tokens is not None
+            and self.budgeted_llm_client_factory is not None
+        ):
+            return self.budgeted_llm_client_factory(max_output_tokens)
+        return self.llm_client_factory()
