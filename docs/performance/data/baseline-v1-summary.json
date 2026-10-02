@@ -1,0 +1,14 @@
+{
+  "source": "artifacts/perf/*.json",
+  "sample_count": 27,
+  "llm_call_count": 315,
+  "reasoning_detail_available_calls": 0,
+  "reasoning_detail_unavailable_calls": 315,
+  "reasoning_detail_policy": "unavailable; no values were inferred or fabricated",
+  "explanation_planner_completion_tokens_p95": 16144,
+  "explanation_planner_length_finishes": 0,
+  "derived_explanation_planner_max_tokens": 20224,
+  "derived_budget_rule": "round_up_to_256(p95 * 1.25)",
+  "planned_section_count_min": 1,
+  "planned_section_count_max": 11
+}

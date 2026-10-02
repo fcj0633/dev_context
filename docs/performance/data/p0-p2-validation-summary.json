@@ -1,0 +1,83 @@
+{
+  "date": "2026-10-02",
+  "defaults_promoted": false,
+  "defaults": {
+    "explanation_depth_policy": "legacy",
+    "teaching_section_concurrency": 1
+  },
+  "tests": {
+    "passed": 479,
+    "failed": 0,
+    "postgres_integration_executed": true,
+    "embedding_smoke_passed": true
+  },
+  "planner_schema_slimming": {
+    "before_mean_seconds": 25.11,
+    "after_mean_seconds": 9.85,
+    "after_p50_seconds": 9.39,
+    "before_fallbacks": 1,
+    "after_fallbacks": 0
+  },
+  "locate": {
+    "locate_01_p50_seconds": 14.8,
+    "locate_01_passed": true,
+    "locate_02_p50_seconds": 24.9,
+    "locate_02_passed": false
+  },
+  "section_counts": {
+    "why_02": [3, 3, 3],
+    "teach_token_bucket_01_corrected": [5, 5, 4],
+    "flow_01": [5, 5, 4],
+    "max_range": 1,
+    "hard_max_violations": 0
+  },
+  "concurrency_3_corrected": {
+    "runs": 3,
+    "teaching_draft_p50_seconds": 37.7,
+    "section_wall_p50_seconds": 33.8,
+    "total_p50_seconds": 212.4,
+    "peak_section_concurrency": 3,
+    "failed_sections": 0,
+    "length_finishes": 0
+  },
+  "improvements": {
+    "teach_token_bucket_draft_percent": 78.4,
+    "teach_token_bucket_total_percent": 39.9,
+    "flow_01_draft_percent": 69.6,
+    "flow_01_total_percent": 72.0,
+    "max_logical_sequential_depth_before": 23,
+    "max_logical_sequential_depth_after": 11
+  },
+  "reasoning_detail": {
+    "legacy_available_calls": 0,
+    "legacy_total_calls": 315,
+    "p0_p2_available_calls": 224,
+    "p0_p2_total_calls": 224,
+    "p0_p2_availability_rate": 1.0,
+    "writer_reasoning_p95_tokens": 4135,
+    "writer_reasoning_reserve_tokens": 4352
+  },
+  "quality": {
+    "valid_blind_cases": 2,
+    "teach_wins": 1,
+    "teach_losses": 1,
+    "teach_win_or_tie_rate": 0.5,
+    "required_win_or_tie_rate": 0.9,
+    "invalid_citations": 0,
+    "passed": false
+  },
+  "retrieval": {
+    "case_count": 36,
+    "hybrid_recall_at_5_before": 0.4722222222,
+    "hybrid_recall_at_5_after": 0.4722222222,
+    "hybrid_mrr_before": 0.3763888889,
+    "hybrid_mrr_after": 0.384461716,
+    "hybrid_average_latency_ms_before": 956.68865,
+    "hybrid_average_latency_ms_after": 875.082014,
+    "regression": false
+  },
+  "blocking_gates": [
+    "locate-02 p50 exceeds 20 seconds",
+    "L2 teach win-or-tie rate is below 90 percent"
+  ]
+}
