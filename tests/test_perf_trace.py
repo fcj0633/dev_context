@@ -25,6 +25,7 @@ from devcontext.llm import LLMMessage
 from devcontext.llm.deepseek import DeepSeekLLMClient
 from devcontext.models import ContextBundle, SearchResult
 from devcontext.observability import (
+    LLMCallTrace,
     PerfRecorder,
     capture,
     llm_stage,
@@ -52,15 +53,19 @@ def _reply(
     finish_reason: str = "stop",
     prompt_tokens: int = 11,
     completion_tokens: int = 7,
+    completion_tokens_details: object = ...,
 ) -> str:
+    usage = {
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+    }
+    if completion_tokens_details is not ...:
+        usage["completion_tokens_details"] = completion_tokens_details
     return json.dumps({
         "choices": [
             {"finish_reason": finish_reason, "message": {"content": content}}
         ],
-        "usage": {
-            "prompt_tokens": prompt_tokens,
-            "completion_tokens": completion_tokens,
-        },
+        "usage": usage,
     })
 
 
@@ -157,6 +162,42 @@ class TestLLMCallTrace:
         call, = recorder.llm_calls
         assert call.finish_reason == "length"
         assert call.success is False
+
+    def test_nested_reasoning_tokens_are_recorded_when_valid(self, fake_curl) -> None:
+        fake_curl(_reply(
+            completion_tokens=30,
+            completion_tokens_details={"reasoning_tokens": 12},
+        ))
+
+        with capture() as recorder:
+            _client().generate([LLMMessage("user", "问题")])
+
+        call, = recorder.llm_calls
+        assert call.output_tokens == 30
+        assert call.reasoning_tokens == 12
+        assert call.visible_output_tokens == 18
+        assert call.token_detail_available is True
+
+    @pytest.mark.parametrize(
+        "detail",
+        [..., None, {}, {"reasoning_tokens": "12"}, {"reasoning_tokens": 99}],
+    )
+    def test_missing_or_malformed_reasoning_detail_is_optional(
+        self, fake_curl, detail
+    ) -> None:
+        fake_curl(_reply(
+            completion_tokens=30,
+            completion_tokens_details=detail,
+        ))
+
+        with capture() as recorder:
+            assert _client().generate([LLMMessage("user", "问题")]) == "答案正文"
+
+        call, = recorder.llm_calls
+        assert call.output_tokens == 30
+        assert call.reasoning_tokens is None
+        assert call.visible_output_tokens == 30
+        assert call.token_detail_available is False
 
 
 class TestWastedLatency:
@@ -354,8 +395,11 @@ class TestSectionExecutionTraces:
         assert first.title == "章节 1"
         assert first.evidence_count == 1
         assert first.revision is False
-        assert first.input_tokens == 100
-        assert first.output_tokens == 50
+        # Test doubles that do not participate in the recorder do not provide
+        # authoritative per-call usage. Production clients are joined by the
+        # exact call IDs instead of reading writer.last_client.
+        assert first.input_tokens is None
+        assert first.output_tokens is None
         assert first.success is True
 
     def test_the_sum_of_sections_is_the_teaching_draft_stage(self) -> None:
@@ -557,6 +601,36 @@ class TestUnattributedUsesOnlyTopLevelStages:
 
         assert [stage["round_index"] for stage in report["stages"]] == [0, 1]
         assert report["attributed_ms"] == 4000.0
+
+
+class TestConcurrencyMetrics:
+    def test_interval_union_peak_depth_and_waves_are_distinct(self) -> None:
+        recorder = PerfRecorder()
+        recorder.llm_calls.extend([
+            LLMCallTrace(
+                1, "teaching_draft", 100.0, 0.0, 100.0,
+                parallel_group_id="sections", attempt_index=1,
+            ),
+            LLMCallTrace(
+                2, "teaching_draft", 100.0, 0.0, 100.0,
+                parallel_group_id="sections", attempt_index=1,
+            ),
+            LLMCallTrace(
+                3, "teaching_draft", 50.0, 100.0, 150.0,
+                parallel_group_id="sections", attempt_index=2,
+            ),
+            LLMCallTrace(4, "composer", 50.0, 200.0, 250.0),
+        ])
+
+        summary = _report(recorder, _stub_result())["summary"]
+
+        assert summary["llm_work_ms"] == 300.0
+        assert summary["llm_active_wall_ms"] == 200.0
+        assert summary["llm_wall_span_ms"] == 250.0
+        assert summary["peak_llm_concurrency"] == 2
+        assert summary["parallelism_ratio"] == 1.5
+        assert summary["logical_sequential_llm_depth"] == 3
+        assert summary["scheduled_llm_waves"] == 3
 
 
 class TestSummaryRendering:

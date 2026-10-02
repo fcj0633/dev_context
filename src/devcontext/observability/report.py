@@ -1,8 +1,13 @@
 from __future__ import annotations
 
-from typing import Any
+import math
+from typing import Any, Sequence
 
-from devcontext.observability.trace import PerfRecorder
+from devcontext.observability.trace import (
+    LLMCallTrace,
+    PerfRecorder,
+    SectionExecutionTrace,
+)
 
 
 # The only stages that partition a request's wall clock, and the only ones that
@@ -55,6 +60,20 @@ def build_perf_report(
     llm = recorder.llm_totals()
     sections = [item for item in recorder.section_executions if not item.revision]
     revisions = [item for item in recorder.section_executions if item.revision]
+    llm_intervals = _interval_metrics(recorder.llm_calls)
+    section_intervals = _interval_metrics(recorder.section_executions)
+    raw_teaching = getattr(trace, "teaching", None)
+    teaching = raw_teaching if isinstance(raw_teaching, dict) else {}
+    section_budget = (
+        teaching.get("section_budget")
+        if isinstance(teaching.get("section_budget"), dict)
+        else {}
+    )
+    locate = (
+        teaching.get("locate")
+        if isinstance(teaching.get("locate"), dict)
+        else {}
+    )
 
     return {
         "query": query,
@@ -78,11 +97,61 @@ def build_perf_report(
             "sections": len(sections),
             "revisions": len(revisions),
             "planned_section_count": _planned_sections(trace),
+            "planned_answer_depth": _planned_depth(trace),
+            "primary_strategy": _primary_strategy(trace),
+            "planner_decision_source": _planner_source(trace),
+            "planner_fallback": _planner_source(trace) == "fallback",
+            "preferred_sections": section_budget.get("preferred_sections"),
+            "hard_max_sections": section_budget.get("hard_max_sections"),
+            "target_sections": section_budget.get("target_sections"),
+            "section_budget_gap_code": section_budget.get("gap_code"),
+            "section_budget_gap_reason": section_budget.get("gap_reason"),
+            "unsupported_requirement_ids": section_budget.get(
+                "unsupported_requirement_ids", []
+            ),
+            "budget_allow_multi_pass": teaching.get(
+                "output_budget", {}
+            ).get("allow_multi_pass")
+            if isinstance(teaching.get("output_budget"), dict)
+            else None,
+            "failed_section_ids": teaching.get("failed_section_ids", []),
+            "locate_requirement_ids": locate.get("locate_requirement_ids", []),
+            "locate_evidence_labels": locate.get("locate_evidence_labels", []),
+            "locate_fast_path_used": locate.get("locate_fast_path_used"),
+            "locate_fast_path_skip_reason": locate.get(
+                "locate_fast_path_skip_reason"
+            ),
             # Actual, from the provider's usage block.
             "llm_latency_ms": round(llm["latency_ms"], 3),
             "llm_input_tokens": llm["input_tokens"],
             "llm_output_tokens": llm["output_tokens"],
+            "llm_reasoning_tokens": llm["reasoning_tokens"],
+            "llm_visible_output_tokens": llm["visible_output_tokens"],
+            "token_detail_available_calls": llm[
+                "token_detail_available_calls"
+            ],
+            "token_detail_unavailable_calls": (
+                llm["call_count"] - llm["token_detail_available_calls"]
+            ),
             "discarded_llm_latency_ms": round(llm["discarded_latency_ms"], 3),
+            "llm_work_ms": round(llm["latency_ms"], 3),
+            "llm_active_wall_ms": llm_intervals["active_wall_ms"],
+            "llm_wall_span_ms": llm_intervals["wall_span_ms"],
+            "peak_llm_concurrency": llm_intervals["peak_concurrency"],
+            "parallelism_ratio": (
+                round(llm["latency_ms"] / llm_intervals["active_wall_ms"], 4)
+                if llm_intervals["active_wall_ms"]
+                else None
+            ),
+            "section_work_ms": round(
+                sum(item.latency_ms for item in recorder.section_executions), 3
+            ),
+            "section_wall_ms": section_intervals["active_wall_ms"],
+            "peak_section_concurrency": section_intervals["peak_concurrency"],
+            "logical_sequential_llm_depth": _logical_depth(
+                recorder.llm_calls
+            ),
+            "scheduled_llm_waves": _scheduled_waves(recorder.llm_calls),
             # Estimated from characters. Never mixed into the fields above.
             "final_answer_chars": len(answer_text),
             "final_answer_tokens_estimated": _estimate_tokens(answer_text),
@@ -106,6 +175,86 @@ def _planned_sections(trace: Any) -> int | None:
         return None
     sections = plan.get("sections")
     return len(sections) if isinstance(sections, list) else None
+
+
+def _planned_depth(trace: Any) -> str | None:
+    plan = getattr(trace, "explanation_plan", None)
+    return plan.get("answer_depth") if isinstance(plan, dict) else None
+
+
+def _primary_strategy(trace: Any) -> str | None:
+    plan = getattr(trace, "explanation_plan", None)
+    return plan.get("primary_strategy") if isinstance(plan, dict) else None
+
+
+def _planner_source(trace: Any) -> str | None:
+    plan = getattr(trace, "explanation_plan", None)
+    return plan.get("decision_source") if isinstance(plan, dict) else None
+
+
+def _interval_metrics(
+    records: Sequence[LLMCallTrace] | Sequence[SectionExecutionTrace],
+) -> dict[str, float | int]:
+    intervals = sorted(
+        (
+            float(item.started_offset_ms),
+            float(item.ended_offset_ms),
+        )
+        for item in records
+        if item.ended_offset_ms > item.started_offset_ms
+    )
+    if not intervals:
+        return {"active_wall_ms": 0.0, "wall_span_ms": 0.0, "peak_concurrency": 0}
+    merged: list[list[float]] = []
+    events: list[tuple[float, int]] = []
+    for started, ended in intervals:
+        if not merged or started > merged[-1][1]:
+            merged.append([started, ended])
+        else:
+            merged[-1][1] = max(merged[-1][1], ended)
+        # End events sort before start events at the same timestamp.
+        events.append((started, 1))
+        events.append((ended, -1))
+    active = sum(ended - started for started, ended in merged)
+    concurrency = 0
+    peak = 0
+    for _, delta in sorted(events, key=lambda item: (item[0], item[1])):
+        concurrency += delta
+        peak = max(peak, concurrency)
+    return {
+        "active_wall_ms": round(active, 3),
+        "wall_span_ms": round(
+            max(ended for _, ended in intervals) - intervals[0][0], 3
+        ),
+        "peak_concurrency": peak,
+    }
+
+
+def _logical_depth(calls: Sequence[LLMCallTrace]) -> int:
+    serial = sum(1 for call in calls if call.parallel_group_id is None)
+    groups: dict[str, int] = {}
+    for call in calls:
+        if call.parallel_group_id is not None:
+            groups[call.parallel_group_id] = max(
+                groups.get(call.parallel_group_id, 0), call.attempt_index
+            )
+    return serial + sum(groups.values())
+
+
+def _scheduled_waves(calls: Sequence[LLMCallTrace]) -> int:
+    serial = sum(1 for call in calls if call.parallel_group_id is None)
+    grouped: dict[str, list[LLMCallTrace]] = {}
+    for call in calls:
+        if call.parallel_group_id is not None:
+            grouped.setdefault(call.parallel_group_id, []).append(call)
+    waves = serial
+    for group_calls in grouped.values():
+        metrics = _interval_metrics(group_calls)
+        peak = max(1, int(metrics["peak_concurrency"]))
+        first_attempts = sum(1 for call in group_calls if call.attempt_index == 1)
+        retries = sum(1 for call in group_calls if call.attempt_index > 1)
+        waves += math.ceil(first_attempts / peak) + retries
+    return waves
 
 
 def render_summary(report: dict[str, Any]) -> str:

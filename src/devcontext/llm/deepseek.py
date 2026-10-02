@@ -7,9 +7,10 @@ import subprocess
 import tempfile
 import time
 from collections.abc import Sequence
+from typing import Any
 
 from devcontext.llm.client import LLMMessage
-from devcontext.observability.recorder import record_llm_call
+from devcontext.observability.recorder import begin_llm_call, finish_llm_call
 
 
 class DeepSeekLLMClient:
@@ -42,7 +43,7 @@ class DeepSeekLLMClient:
         self.max_tokens = max_tokens
         self.timeout_seconds = timeout_seconds
         self.json_mode = json_mode
-        self.last_usage: dict[str, int] = {}
+        self.last_usage: dict[str, Any] = {}
         self.last_latency_ms: float = 0.0
         # Kept rather than discarded: "length" is how a call silently burns its
         # whole token allowance, and it is invisible if the value is only ever
@@ -56,34 +57,40 @@ class DeepSeekLLMClient:
         taken as an argument, so the ``LLMClient`` protocol - and every test
         double that implements it - keeps its single-parameter shape.
         """
-        started = time.perf_counter()
         self.last_usage = {}
         self.last_finish_reason = None
+        call_id = begin_llm_call(
+            model=self.model,
+            reasoning_effort=self.reasoning_effort,
+            max_tokens=self.max_tokens,
+            json_mode=self.json_mode,
+        )
         try:
             content = self._generate(messages)
         except Exception as exception:
             from devcontext.agentic.models import error_detail
 
-            record_llm_call(
-                latency_ms=(time.perf_counter() - started) * 1000,
-                model=self.model,
-                reasoning_effort=self.reasoning_effort,
-                max_tokens=self.max_tokens,
-                json_mode=self.json_mode,
+            usage = _usage_breakdown(self.last_usage)
+            finish_llm_call(
+                call_id,
+                input_tokens=usage["input_tokens"],
+                output_tokens=usage["output_tokens"],
+                reasoning_tokens=usage["reasoning_tokens"],
+                visible_output_tokens=usage["visible_output_tokens"],
+                token_detail_available=usage["token_detail_available"],
                 finish_reason=self.last_finish_reason,
                 success=False,
                 error=error_detail(exception),
             )
             raise
-        usage = self.last_usage
-        record_llm_call(
-            latency_ms=(time.perf_counter() - started) * 1000,
-            model=self.model,
-            reasoning_effort=self.reasoning_effort,
-            max_tokens=self.max_tokens,
-            json_mode=self.json_mode,
-            input_tokens=usage.get("prompt_tokens", usage.get("input_tokens")),
-            output_tokens=usage.get("completion_tokens", usage.get("output_tokens")),
+        usage = _usage_breakdown(self.last_usage)
+        finish_llm_call(
+            call_id,
+            input_tokens=usage["input_tokens"],
+            output_tokens=usage["output_tokens"],
+            reasoning_tokens=usage["reasoning_tokens"],
+            visible_output_tokens=usage["visible_output_tokens"],
+            token_detail_available=usage["token_detail_available"],
             finish_reason=self.last_finish_reason,
             success=True,
         )
@@ -172,9 +179,9 @@ class DeepSeekLLMClient:
             content = choice["message"]["content"]
             usage = payload.get("usage", {})
             if isinstance(usage, dict):
-                self.last_usage = {
-                    key: value for key, value in usage.items() if isinstance(value, int)
-                }
+                # Keep nested token details. Older providers omit them, which is
+                # a supported response shape handled by _usage_breakdown.
+                self.last_usage = dict(usage)
         except (json.JSONDecodeError, KeyError, IndexError, TypeError) as exception:
             raise RuntimeError("DeepSeek returned an invalid response payload") from exception
         if finish_reason != "stop":
@@ -195,3 +202,47 @@ class DeepSeekLLMClient:
             return response_body, int(raw_status.strip())
         except ValueError:
             return response_body, 0
+
+
+def _usage_breakdown(usage: dict[str, Any]) -> dict[str, int | bool | None]:
+    input_tokens = _non_negative_int(
+        usage.get("prompt_tokens", usage.get("input_tokens"))
+    )
+    output_tokens = _non_negative_int(
+        usage.get("completion_tokens", usage.get("output_tokens"))
+    )
+    reasoning_tokens: int | None = None
+    detail_available = False
+    details = usage.get(
+        "completion_tokens_details", usage.get("output_tokens_details")
+    )
+    if isinstance(details, dict):
+        candidate = _non_negative_int(details.get("reasoning_tokens"))
+        if (
+            candidate is not None
+            and output_tokens is not None
+            and candidate <= output_tokens
+        ):
+            reasoning_tokens = candidate
+            detail_available = True
+    visible_output_tokens = (
+        None
+        if output_tokens is None
+        else output_tokens - reasoning_tokens
+        if detail_available and reasoning_tokens is not None
+        else output_tokens
+    )
+    return {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "reasoning_tokens": reasoning_tokens,
+        "visible_output_tokens": visible_output_tokens,
+        "token_detail_available": detail_available,
+    }
+
+
+def _non_negative_int(value: object) -> int | None:
+    # bool is an int subclass but never a valid token count.
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+        return value
+    return None
