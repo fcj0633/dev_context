@@ -59,6 +59,9 @@ def build_perf_report(
     return {
         "query": query,
         "answer_mode": answer_mode,
+        "generation_mode": (getattr(trace, "teaching", None) or {}).get("generation_mode"),
+        "stream": (getattr(trace, "teaching", None) or {}) if (
+            getattr(trace, "teaching", None) or {}).get("generation_mode") == "single_stream" else None,
         "depth": depth,
         "top_k": top_k,
         "timestamp": timestamp,
@@ -75,13 +78,18 @@ def build_perf_report(
             "llm_calls": llm["call_count"],
             "embedding_calls": len(recorder.embedding_calls),
             "retrieval_actions": len(recorder.retrieval_actions),
-            "sections": len(sections),
+            "sections": (getattr(trace, "teaching", None) or {}).get("sections_emitted", len(sections)),
             "revisions": len(revisions),
             "planned_section_count": _planned_sections(trace),
             # Actual, from the provider's usage block.
             "llm_latency_ms": round(llm["latency_ms"], 3),
             "llm_input_tokens": llm["input_tokens"],
             "llm_output_tokens": llm["output_tokens"],
+            "llm_reasoning_tokens": (
+                sum(call.reasoning_tokens for call in recorder.llm_calls)
+                if recorder.llm_calls and all(call.reasoning_tokens is not None for call in recorder.llm_calls)
+                else None
+            ),
             "discarded_llm_latency_ms": round(llm["discarded_latency_ms"], 3),
             # Estimated from characters. Never mixed into the fields above.
             "final_answer_chars": len(answer_text),

@@ -63,6 +63,8 @@ from devcontext.explanation import (
 from devcontext.explanation.composer import COMPOSER_MAX_TOKENS
 from devcontext.explanation.reviewer import REVIEWER_MAX_TOKENS as TEACHING_REVIEWER_MAX_TOKENS
 from devcontext.explanation.writer import TEACHING_ANSWER_MAX_TOKENS, TeachingWriter
+from devcontext.explanation.micro import TeachingRuntimeOptions, MicroExplanationPlanner
+from devcontext.explanation.stream_writer import SingleStreamingTeachingWriter
 from devcontext.planning import EvidencePlan, EvidencePlanner, QuestionPlan, QuestionPlanner
 from devcontext.request import ANSWER_MODES, TEACH_DEPTHS
 from devcontext.retrieval import RetrievalPolicy, RetrievalService
@@ -141,6 +143,8 @@ def _parser() -> argparse.ArgumentParser:
         help="Choose the plan schema printed by --plan-only",
     )
     ask.add_argument("--debug", action="store_true")
+    ask.add_argument("--teaching-generation-mode", choices=("multi_pass", "single_stream"), default=None,
+                     help="Explicit teaching generation strategy; default comes from settings")
     ask.add_argument(
         "--answer-mode",
         choices=ANSWER_MODES,
@@ -276,6 +280,9 @@ def _print_agentic_answer(
     if debug:
         _print_requirement_statuses(trace.final_sufficiency)
     print(f"Retries: {trace.retry_count}")
+    teaching_status = (trace.teaching or {}).get("completion_status")
+    if teaching_status in {"failed", "partial"}:
+        print(f"Generation status: {teaching_status}; {(trace.teaching or {}).get('error')}")
     print("\nAnswer:")
     print(result.answer_result.answer)
     if debug:
@@ -537,6 +544,9 @@ def _planned_workflow(
             SectionComposer(_composer_factory(settings)),
             TeachingReviewer(_teaching_reviewer_factory(settings)),
             capabilities=settings.model_capabilities(),
+            runtime_options=TeachingRuntimeOptions(settings.teaching_generation_mode),
+            micro_planner=MicroExplanationPlanner(_explanation_planner_factory(settings), settings.model_capabilities()),
+            streaming_writer=SingleStreamingTeachingWriter(_teaching_writer_factory(settings)),
         )
     return EvidenceDrivenWorkflow(
         controller,
@@ -668,6 +678,10 @@ def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     settings = Settings()
     try:
+        if args.command == "ask" and args.teaching_generation_mode is not None:
+            if args.answer_mode != "teach" or args.no_plan or args.plan_only:
+                raise ValueError("--teaching-generation-mode requires the teach answering workflow")
+            settings = settings.model_copy(update={"teaching_generation_mode": args.teaching_generation_mode})
         if args.command == "init-db":
             ChunkStore(settings.database_url).initialize()
             print("Database schema is ready.")
