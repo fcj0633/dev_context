@@ -191,6 +191,9 @@ V2 验证入口为 `.venv\Scripts\python.exe scripts/run_teaching_v2_experiment.
 不足时记录未运行，不反复尝试。产物保存至 `artifacts/teaching-answer-v2/`，非空目录拒绝覆盖。
 参见 [V2 设计](docs/design/teaching-answer-v2.md) 和 [V2 对照报告](docs/performance/06-teaching-answer-v2-comparison.md)。
 
+已完成的真实测试答案、章节计划、trace、性能与可读性记录已提交至仓库，
+统一阅读入口为 [真实回答分析样本](artifacts/README.md)，包含V1/V2对照及较早的历史回答。
+
 旧 `multi_pass` 路径中，节数 ≤ 3 且深度为 `brief`/`standard` 时走 **Fast Path**：一次生成。否则走 **Deep Path**：逐节生成，一节一次调用，每节**只喂该节绑定的证据**，最后交给 Composer 编排。
 
 **Section-scoped Citation Validation。** 每一节只能使用它自己绑定的标签。即使用了存在于 Workspace、但不属于本节的证据，也记为 `invalid_citations`，不放行。这把 Citation 从"引用了一个存在的 chunk"升级为"这一节只能使用 Planner 指定的证据"。

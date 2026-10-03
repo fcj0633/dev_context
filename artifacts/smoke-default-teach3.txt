@@ -1,0 +1,586 @@
+Question:
+项目的余票桶在哪个类里？
+
+Evidence Plan: llm
+  ER1. 项目中余票桶所在的类的名称 — CODE
+
+Route: CODE (rules)
+Sufficiency: enough
+Requirements: ER1 SATISFIED
+Retries: 0
+
+Answer:
+余票桶在 **`TicketAvailabilityTokenBucket`** 类里，路径是 `services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/handler/ticket/tokenbucket/TicketAvailabilityTokenBucket.java` [E4]。
+
+## 余票桶的承载类
+
+这个类的声明上带着 `@Slf4j`、`@Component`、`@RequiredArgsConstructor` [E4]，因此它是一个被 Spring 装配的组件，而不是数据实体——这说明"桶"不是一个表映射对象，而是一段有行为、有依赖注入的服务代码。
+
+它的字段本身就是桶的构成清单 [E4]：
+
+- 两个 Lua 脚本资源 `TAKE_TOKEN_SCRIPT`（`lua/take_token_from_bucket.lua`）与 `RETURN_TOKEN_SCRIPT`（`lua/return_token_to_bucket.lua`），说明取令牌和还令牌是脚本化的原子操作；
+- `StringRedisTemplate`，桶的数据实际落在 Redis 上；
+- `enabled` 与 `expireMinutes` 两个配置项（`my12306.availability.token-bucket.enabled` 默认 true、`expire-minutes` 默认 10），对应"开关"和"TTL 自愈"这两个运维旋钮；
+- `seatMapper`、`trainMapper`、`redisCacheHelper`、`meterRegistry`，分别服务于装载时查真实可售数、查车次车型、加锁与批量写 Hash、以及打点计数。
+
+桶的三类操作都闭环在这一个类里：对外入口 `takeToken` [E3] 与 `returnToken` [E1]，以及私有的 `loadBucket` [E2]。从调用顺序看，`takeToken` 在脚本返回 `BUCKET_MISSING`（-1）时会先调 `loadBucket` 装载桶，然后重新执行一次取令牌脚本 [E3]——也就是说"装载"不是独立触发的，而是被"取令牌发现桶缺失"这一步带出来的；写回路径则由 `returnToken` 在退票/释放场景里执行归还 [E1]。
+
+## 这个桶不是什么
+
+类注释自述得很直白：Redis 余票令牌桶只负责购票准入，不是库存事实源；异常时始终降级放行，最终能否占座仍由 MySQL 条件更新决定 [E4]。所以这一层只是"准入闸门"，不是"账本"。
+
+容易混淆的是另一个类 `TicketDO`——它是车票实体（购票事实），映射 `t_ticket` 表 [E5]。两者关注点不同：
+
+| 维度 | `TicketAvailabilityTokenBucket` | `TicketDO` |
+|---|---|---|
+| 角色 | 购票准入的令牌桶组件 [E4] | 车票（购票事实）实体 [E5] |
+| 存储 | Redis（Hash + Lua 脚本 + TTL） [E4] | MySQL 表 `t_ticket` [E5] |
+| 粒度 | 车次 + 出发站 + 到达站（由 `buildBucketKey(trainId, departure, arrival)` 决定） [E4] | 单张票（含车厢号、座位号、乘客、席别等） [E5] |
+| 失败姿态 | 降级放行，靠 TTL 自愈 [E1][E3] | 作为事实记录被读写 [E5] |
+
+因此可以把边界概括成：这个桶决定"要不要继续往下走"，但不决定"最终有没有座"。
+
+需要说明的是，现有证据只给出 `buildBucketKey` 的方法签名 [E4]，方法体未见，所以桶键的具体前缀与拼装格式无法确认；两个 Lua 脚本的内容也没有出现在证据里，取令牌/还令牌的原子语义细节（比如部分席别不足时是整体拒绝还是逐项扣减）同样无法确认。此外，除该类之外是否还有其他类或模块读写同一批 Redis 桶键，现有证据未覆盖。
+
+Explanation Strategy:
+LOCATION_ONLY + NEGATIVE_CORRECTION
+
+Mental Model:
+余票桶＝TicketAvailabilityTokenBucket 这个 Spring 组件：以“车次+出发站+到达站”为键、以 Redis Hash 字段为席别令牌，只做购票准入，异常时降级放行，真实库存仍由 MySQL 决定。
+
+Context:
+  Workspace evidence: 5
+  Bound evidence: 5
+
+Generation:
+  0 sections
+  0 targeted revision
+
+Sources:
+[E4] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/handler/ticket/tokenbucket/TicketAvailabilityTokenBucket.java:37-214 — TicketAvailabilityTokenBucket#TicketAvailabilityTokenBucket
+[E3] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/handler/ticket/tokenbucket/TicketAvailabilityTokenBucket.java:73-105 — TicketAvailabilityTokenBucket#takeToken
+[E1] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/handler/ticket/tokenbucket/TicketAvailabilityTokenBucket.java:110-126 — TicketAvailabilityTokenBucket#returnToken
+[E2] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/handler/ticket/tokenbucket/TicketAvailabilityTokenBucket.java:128-173 — TicketAvailabilityTokenBucket#loadBucket
+[E5] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/dao/entity/TicketDO.java:12-56 — TicketDO#TicketDO
+
+Trace:
+{
+  "route": {
+    "query_type": "CODE",
+    "decision_source": "rules",
+    "reason": "union of evidence source requirements",
+    "code_signals": [],
+    "doc_signals": []
+  },
+  "rounds": [
+    {
+      "round_index": 0,
+      "retrieval_query": "余票桶 类 字段 数据结构 定义",
+      "retrieval_query_type": "CODE",
+      "selected_chunks": [
+        {
+          "citation_label": "E1",
+          "chunk_id": 8875,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/handler/ticket/tokenbucket/TicketAvailabilityTokenBucket.java",
+          "identity": "TicketAvailabilityTokenBucket#returnToken",
+          "retrieval_rank": 1,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1"
+          ]
+        },
+        {
+          "citation_label": "E2",
+          "chunk_id": 8876,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/handler/ticket/tokenbucket/TicketAvailabilityTokenBucket.java",
+          "identity": "TicketAvailabilityTokenBucket#loadBucket",
+          "retrieval_rank": 2,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1"
+          ]
+        },
+        {
+          "citation_label": "E3",
+          "chunk_id": 8874,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/handler/ticket/tokenbucket/TicketAvailabilityTokenBucket.java",
+          "identity": "TicketAvailabilityTokenBucket#takeToken",
+          "retrieval_rank": 3,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1"
+          ]
+        },
+        {
+          "citation_label": "E4",
+          "chunk_id": 8873,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/handler/ticket/tokenbucket/TicketAvailabilityTokenBucket.java",
+          "identity": "TicketAvailabilityTokenBucket#TicketAvailabilityTokenBucket",
+          "retrieval_rank": 4,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1"
+          ]
+        },
+        {
+          "citation_label": "E5",
+          "chunk_id": 8799,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/dao/entity/TicketDO.java",
+          "identity": "TicketDO#TicketDO",
+          "retrieval_rank": 5,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1"
+          ]
+        }
+      ],
+      "sufficiency": {
+        "enough": true,
+        "missing_aspects": [],
+        "reason": "all CORE evidence requirements are satisfied",
+        "decision_source": "llm",
+        "statuses": [
+          {
+            "sub_question_id": "ER1",
+            "satisfied": true,
+            "reason": "证据8873包含类定义public class TicketAvailabilityTokenBucket，并含余票令牌桶相关字段（脚本、Redis模板等），可确定类名。",
+            "state": "SATISFIED"
+          }
+        ]
+      },
+      "rewrite": null,
+      "rewrite_error": null,
+      "rewrites": []
+    }
+  ],
+  "retry_count": 0,
+  "final_sufficiency": {
+    "enough": true,
+    "missing_aspects": [],
+    "reason": "all CORE evidence requirements are satisfied",
+    "decision_source": "llm",
+    "statuses": [
+      {
+        "sub_question_id": "ER1",
+        "satisfied": true,
+        "reason": "证据8873包含类定义public class TicketAvailabilityTokenBucket，并含余票令牌桶相关字段（脚本、Redis模板等），可确定类名。",
+        "state": "SATISFIED"
+      }
+    ]
+  },
+  "stop_reason": "ready",
+  "plan": null,
+  "sub_question_traces": [
+    {
+      "sub_question_id": "ER1",
+      "question": "项目中余票桶所在的类的名称",
+      "purpose": "证据必须包含一个类定义，且该类中包含余票桶相关的字段或数据结构，能够据此确定余票桶所属的类名",
+      "query_type": "CODE",
+      "selected_chunks": [
+        {
+          "citation_label": "C1",
+          "chunk_id": 8875,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/handler/ticket/tokenbucket/TicketAvailabilityTokenBucket.java",
+          "identity": "TicketAvailabilityTokenBucket#returnToken",
+          "retrieval_rank": 1,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1"
+          ]
+        },
+        {
+          "citation_label": "C2",
+          "chunk_id": 8876,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/handler/ticket/tokenbucket/TicketAvailabilityTokenBucket.java",
+          "identity": "TicketAvailabilityTokenBucket#loadBucket",
+          "retrieval_rank": 2,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1"
+          ]
+        },
+        {
+          "citation_label": "C3",
+          "chunk_id": 8874,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/handler/ticket/tokenbucket/TicketAvailabilityTokenBucket.java",
+          "identity": "TicketAvailabilityTokenBucket#takeToken",
+          "retrieval_rank": 3,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1"
+          ]
+        },
+        {
+          "citation_label": "C4",
+          "chunk_id": 8873,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/handler/ticket/tokenbucket/TicketAvailabilityTokenBucket.java",
+          "identity": "TicketAvailabilityTokenBucket#TicketAvailabilityTokenBucket",
+          "retrieval_rank": 4,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1"
+          ]
+        }
+      ]
+    }
+  ],
+  "citations": {
+    "used_labels": [
+      "E4",
+      "E3",
+      "E1",
+      "E2",
+      "E5"
+    ],
+    "invalid_labels": [],
+    "zero_valid": false,
+    "sources": [
+      "[E4] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/handler/ticket/tokenbucket/TicketAvailabilityTokenBucket.java:37-214 — TicketAvailabilityTokenBucket#TicketAvailabilityTokenBucket",
+      "[E3] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/handler/ticket/tokenbucket/TicketAvailabilityTokenBucket.java:73-105 — TicketAvailabilityTokenBucket#takeToken",
+      "[E1] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/handler/ticket/tokenbucket/TicketAvailabilityTokenBucket.java:110-126 — TicketAvailabilityTokenBucket#returnToken",
+      "[E2] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/handler/ticket/tokenbucket/TicketAvailabilityTokenBucket.java:128-173 — TicketAvailabilityTokenBucket#loadBucket",
+      "[E5] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/dao/entity/TicketDO.java:12-56 — TicketDO#TicketDO"
+    ]
+  },
+  "sections": {
+    "count": 2,
+    "lengths": [
+      838,
+      728
+    ],
+    "max_chars": 838,
+    "over_budget": 2
+  },
+  "answer_plan": null,
+  "source_conflicts": [],
+  "review": null,
+  "stage_usage": [
+    {
+      "stage": "evidence_planning",
+      "latency_ms": 3428.446499980055,
+      "decision_source": "llm",
+      "model": "deepseek-flash",
+      "reasoning_effort": "high",
+      "input_tokens": 476,
+      "output_tokens": 580
+    },
+    {
+      "stage": "search_action_planning",
+      "latency_ms": 3341.490300022997,
+      "decision_source": "llm",
+      "model": "deepseek-flash",
+      "reasoning_effort": "low",
+      "input_tokens": 365,
+      "output_tokens": 545
+    },
+    {
+      "stage": "evidence_retrieval",
+      "latency_ms": 695.4331999877468,
+      "decision_source": "policy",
+      "model": null,
+      "reasoning_effort": null,
+      "input_tokens": null,
+      "output_tokens": null
+    },
+    {
+      "stage": "coverage_check",
+      "latency_ms": 2321.594700042624,
+      "decision_source": "llm",
+      "model": "deepseek-flash",
+      "reasoning_effort": "low",
+      "input_tokens": 2736,
+      "output_tokens": 333
+    },
+    {
+      "stage": "explanation_planning",
+      "latency_ms": 10968.799399968702,
+      "decision_source": "llm",
+      "model": "deepseek-flash",
+      "reasoning_effort": "high",
+      "input_tokens": 4528,
+      "output_tokens": 2321
+    },
+    {
+      "stage": "teaching_draft",
+      "latency_ms": 6539.43199996138,
+      "decision_source": "llm",
+      "model": "deepseek-flash",
+      "reasoning_effort": "high",
+      "input_tokens": 4253,
+      "output_tokens": 1308
+    }
+  ],
+  "evidence_plan": {
+    "schema_version": 2,
+    "original_query": "项目的余票桶在哪个类里？",
+    "requirements": [
+      {
+        "id": "ER1",
+        "target": "项目中余票桶所在的类的名称",
+        "success_criteria": "证据必须包含一个类定义，且该类中包含余票桶相关的字段或数据结构，能够据此确定余票桶所属的类名",
+        "priority": "CORE",
+        "temporal_scope": "CURRENT",
+        "source_requirement": "CODE"
+      }
+    ],
+    "decision_source": "llm"
+  },
+  "requirement_traces": [
+    {
+      "requirement_id": "ER1",
+      "target": "项目中余票桶所在的类的名称",
+      "search_history": [
+        {
+          "action_id": "SA1",
+          "requirement_id": "ER1",
+          "round_index": 0,
+          "query": "余票桶 类 字段 数据结构 定义",
+          "source_scope": "CODE",
+          "reason": "首次搜索，结合原问题和目标，查找余票桶所属类的代码证据",
+          "decision_source": "llm",
+          "error": null
+        }
+      ],
+      "evidence_ids": [
+        8873
+      ],
+      "coverage_history": [
+        {
+          "requirement_id": "ER1",
+          "state": "SATISFIED",
+          "evidence_ids": [
+            8873
+          ],
+          "missing_criteria": [],
+          "reason": "证据8873包含类定义public class TicketAvailabilityTokenBucket，并含余票令牌桶相关字段（脚本、Redis模板等），可确定类名。",
+          "decision_source": "llm",
+          "check_error": null
+        }
+      ],
+      "final_state": "SATISFIED"
+    }
+  ],
+  "search_actions": [
+    {
+      "action_id": "SA1",
+      "requirement_id": "ER1",
+      "round_index": 0,
+      "query": "余票桶 类 字段 数据结构 定义",
+      "source_scope": "CODE",
+      "reason": "首次搜索，结合原问题和目标，查找余票桶所属类的代码证据",
+      "decision_source": "llm",
+      "error": null
+    }
+  ],
+  "coverage_rounds": [
+    {
+      "round_index": 0,
+      "statuses": [
+        {
+          "requirement_id": "ER1",
+          "state": "SATISFIED",
+          "evidence_ids": [
+            8873
+          ],
+          "missing_criteria": [],
+          "reason": "证据8873包含类定义public class TicketAvailabilityTokenBucket，并含余票令牌桶相关字段（脚本、Redis模板等），可确定类名。",
+          "decision_source": "llm",
+          "check_error": null
+        }
+      ]
+    }
+  ],
+  "final_coverage": [
+    {
+      "requirement_id": "ER1",
+      "state": "SATISFIED",
+      "evidence_ids": [
+        8873
+      ],
+      "missing_criteria": [],
+      "reason": "证据8873包含类定义public class TicketAvailabilityTokenBucket，并含余票令牌桶相关字段（脚本、Redis模板等），可确定类名。",
+      "decision_source": "llm",
+      "check_error": null
+    }
+  ],
+  "evidence_package_state": "READY",
+  "explanation_plan": {
+    "answer_goal": "读者能立刻说出余票桶由哪个类承载、它在哪里，并知道这个类只承担购票准入、不是库存事实源，不会把它和车票实体混淆。",
+    "direct_answer": "余票桶在 TicketAvailabilityTokenBucket 类里（services/ticket-services/.../handler/ticket/tokenbucket/TicketAvailabilityTokenBucket.java），它是一个 Spring 组件，用 Redis Hash 承载按车次+区间切分的余票令牌桶。",
+    "audience_model": "读者熟悉 Java/Spring 与 Redis，能读懂类和方法签名；但不知道项目里“余票桶”对应哪个符号，可能误以为它是数据库实体、某个 Service 或每席别各一个类。",
+    "core_mental_model": "余票桶＝TicketAvailabilityTokenBucket 这个 Spring 组件：以“车次+出发站+到达站”为键、以 Redis Hash 字段为席别令牌，只做购票准入，异常时降级放行，真实库存仍由 MySQL 决定。",
+    "primary_strategy": "LOCATION_ONLY",
+    "secondary_strategies": [
+      "NEGATIVE_CORRECTION"
+    ],
+    "prerequisite_concepts": [
+      "Redis Hash 结构",
+      "Spring @Component 组件与依赖注入",
+      "Lua 脚本在 Redis 中的原子执行",
+      "令牌桶限流/准入语义"
+    ],
+    "likely_misconceptions": [
+      "以为余票桶是数据库实体或 TicketDO 之类的表映射类",
+      "以为桶里存的是权威库存，扣减失败就等于不能下单",
+      "以为每个席别或每个车次各有一个桶类",
+      "把余票桶与“余票查询接口/缓存”当成同一件事"
+    ],
+    "sections": [
+      {
+        "id": "S1",
+        "title": "余票桶的承载类",
+        "section_type": "DIRECT_ANSWER",
+        "teaching_goal": "让读者锁定唯一答案：类名、文件位置、以及该类的桶相关组成要素。",
+        "key_points": [
+          "类名是 TicketAvailabilityTokenBucket，位于 ticket-services 的 handler/ticket/tokenbucket 包下。",
+          "类上有 @Component（配合 @Slf4j、@RequiredArgsConstructor），说明它是被 Spring 装配的组件而非数据实体。",
+          "类的字段直接体现桶的构成：两个 Lua 脚本（take_token_from_bucket.lua / return_token_to_bucket.lua）、StringRedisTemplate、以及开关与 TTL 配置。",
+          "对外入口 takeToken / returnToken 与私有 loadBucket 都定义在这个类内，桶的取、还、装载都在此处闭环。"
+        ],
+        "claim_plans": [
+          {
+            "claim_goal": "余票桶由 TicketAvailabilityTokenBucket 类承载，该类是 Spring 组件，字段与脚本资源均围绕令牌桶组织。",
+            "claim_type": "PROJECT_FACT",
+            "evidence_labels": [
+              "E4"
+            ],
+            "confidence": "CONFIRMED",
+            "assumptions": [],
+            "conditional": false
+          },
+          {
+            "claim_goal": "桶的取令牌、还令牌、装载三类操作都实现在同一个类中（takeToken / returnToken / loadBucket）。",
+            "claim_type": "PROJECT_FACT",
+            "evidence_labels": [
+              "E4",
+              "E1",
+              "E2",
+              "E3"
+            ],
+            "confidence": "CONFIRMED",
+            "assumptions": [],
+            "conditional": false
+          }
+        ],
+        "evidence_labels": [
+          "E4",
+          "E1",
+          "E2",
+          "E3"
+        ],
+        "teaching_devices": [
+          "NONE"
+        ],
+        "depends_on": [],
+        "evidence_state": "CONFIRMED",
+        "target_tokens": 180
+      },
+      {
+        "id": "S2",
+        "title": "这个桶不是什么",
+        "section_type": "BOUNDARY",
+        "teaching_goal": "防止读者把余票桶当成库存事实源或车票实体，明确它的职责边界。",
+        "key_points": [
+          "类注释自述：Redis 余票令牌桶只负责购票准入，不是库存事实源。",
+          "异常路径始终降级放行，最终能否占座仍由 MySQL 条件更新决定。",
+          "桶的粒度由 buildBucketKey(trainId, departure, arrival) 决定，是“车次+区间”而非整表或单张票。",
+          "TicketDO 是车票（购票事实）实体，映射 t_ticket 表，不承载余票桶，属于不同的关注点。"
+        ],
+        "claim_plans": [
+          {
+            "claim_goal": "该类在设计上只做购票准入，异常时降级放行，不承担库存事实源角色。",
+            "claim_type": "PROJECT_FACT",
+            "evidence_labels": [
+              "E4"
+            ],
+            "confidence": "CONFIRMED",
+            "assumptions": [],
+            "conditional": false
+          },
+          {
+            "claim_goal": "TicketDO 是车票实体而非余票桶的载体，二者不是同一个东西。",
+            "claim_type": "PROJECT_FACT",
+            "evidence_labels": [
+              "E5"
+            ],
+            "confidence": "CONFIRMED",
+            "assumptions": [],
+            "conditional": false
+          }
+        ],
+        "evidence_labels": [
+          "E4",
+          "E5"
+        ],
+        "teaching_devices": [
+          "TABLE"
+        ],
+        "depends_on": [
+          "S1"
+        ],
+        "evidence_state": "CONFIRMED",
+        "target_tokens": 200
+      }
+    ],
+    "unresolved_gaps": [
+      "除 TicketAvailabilityTokenBucket 外，是否还有其他类/模块也持有或操作同一批 Redis 桶键（例如调用方、脚本文件本体），现有证据未覆盖。",
+      "桶键的具体前缀与格式由 buildBucketKey 实现决定，证据只给出方法签名，未见其方法体。",
+      "桶中使用的 Lua 脚本内容未在证据中出现，取值/归还的原子语义细节无法确认。"
+    ],
+    "conflicts": [],
+    "answer_depth": "brief",
+    "decision_source": "llm"
+  },
+  "teaching": {
+    "decision_source": "llm",
+    "planning_error": null,
+    "primary_strategy": "LOCATION_ONLY",
+    "secondary_strategies": [
+      "NEGATIVE_CORRECTION"
+    ],
+    "core_mental_model": "余票桶＝TicketAvailabilityTokenBucket 这个 Spring 组件：以“车次+出发站+到达站”为键、以 Redis Hash 字段为席别令牌，只做购票准入，异常时降级放行，真实库存仍由 MySQL 决定。",
+    "context_views": {
+      "workspace_evidence": 5,
+      "bound_evidence": 5,
+      "per_section": {}
+    },
+    "section_drafts": [],
+    "section_citations": {},
+    "section_confidence": {},
+    "compression_events": [],
+    "revision_trace": null,
+    "output_budget": {
+      "max_output_tokens": 1190,
+      "preferred_sections": 2,
+      "allow_multi_pass": false,
+      "reason": "sized from the explanation plan"
+    }
+  }
+}

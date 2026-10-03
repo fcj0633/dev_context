@@ -1,0 +1,489 @@
+{
+  "query": "详细解释当前购票占座的数据一致性是如何保证的",
+  "answer_mode": "teach",
+  "generation_mode": "single_stream",
+  "stream": {
+    "generation_mode": "single_stream",
+    "completion_status": "complete",
+    "stream_started_offset_ms": 49844.461900007445,
+    "first_content_token_ms": 102365.66380003933,
+    "first_section_ready_ms": 103416.46730003413,
+    "first_content_token_from_stream_ms": 52521.20190003188,
+    "first_section_ready_from_stream_ms": 53572.00540002668,
+    "stream_finished_ms": 111348.5864000395,
+    "stream_duration_ms": 61504.12450003205,
+    "sections_planned": 11,
+    "sections_completed": 11,
+    "sections_emitted": 11,
+    "sections_failed": 0,
+    "missing_sections": [],
+    "input_tokens": 7897,
+    "output_tokens": 9655,
+    "reasoning_tokens": 7791,
+    "visible_output_tokens": 1864,
+    "stream_retry_count": 0,
+    "stream_partial": false,
+    "stream_cancelled": false,
+    "failed_section": null,
+    "error": null,
+    "attempts": [
+      {
+        "attempt": 1,
+        "started_offset_ms": 49844.47549999459,
+        "finished_offset_ms": 111348.58230000827,
+        "first_content_token_ms": 102365.66380003933,
+        "first_section_ready_ms": 103416.46730003413,
+        "error": null,
+        "usage": {
+          "prompt_tokens": 7897,
+          "completion_tokens": 9655,
+          "total_tokens": 17552,
+          "prompt_cache_hit_tokens": 0,
+          "prompt_cache_miss_tokens": 7897,
+          "reasoning_tokens": 7791
+        }
+      }
+    ],
+    "core_mental_model": "多层防线：入口控量、锁串行化、数据库条件更新原子判定、本地事务回滚、回调幂等、失败补偿与令牌归还共同构成占座一致性保障。",
+    "output_budget": {
+      "max_output_tokens": 11000,
+      "preferred_sections": 7,
+      "allow_multi_pass": false,
+      "reason": "fixed depth budget, micro granularity"
+    },
+    "context_views": {
+      "bound_evidence": 12
+    },
+    "section_drafts": [
+      {
+        "id": "S1",
+        "chars": 348,
+        "used_citations": [
+          "E10",
+          "E5",
+          "E9",
+          "E12"
+        ]
+      },
+      {
+        "id": "S2",
+        "chars": 318,
+        "used_citations": [
+          "E3",
+          "E9"
+        ]
+      },
+      {
+        "id": "S3",
+        "chars": 347,
+        "used_citations": [
+          "E1",
+          "E10",
+          "E5",
+          "E9"
+        ]
+      },
+      {
+        "id": "S4",
+        "chars": 327,
+        "used_citations": [
+          "E5",
+          "E6"
+        ]
+      },
+      {
+        "id": "S5",
+        "chars": 290,
+        "used_citations": [
+          "E9",
+          "E6"
+        ]
+      },
+      {
+        "id": "S6",
+        "chars": 267,
+        "used_citations": [
+          "E9",
+          "E3",
+          "E12"
+        ]
+      },
+      {
+        "id": "S7",
+        "chars": 240,
+        "used_citations": [
+          "E9",
+          "E5",
+          "E7"
+        ]
+      },
+      {
+        "id": "S8",
+        "chars": 271,
+        "used_citations": [
+          "E12",
+          "E2"
+        ]
+      },
+      {
+        "id": "S9",
+        "chars": 302,
+        "used_citations": [
+          "E10",
+          "E8",
+          "E4"
+        ]
+      },
+      {
+        "id": "S10",
+        "chars": 255,
+        "used_citations": [
+          "E11",
+          "E10",
+          "E7",
+          "E4"
+        ]
+      },
+      {
+        "id": "S11",
+        "chars": 232,
+        "used_citations": [
+          "E9",
+          "E12",
+          "E7",
+          "E4",
+          "E11"
+        ]
+      }
+    ]
+  },
+  "depth": "detailed",
+  "top_k": 12,
+  "timestamp": "2026-10-03T07:54:51.803462+00:00",
+  "sample_kind": "first_sample",
+  "total_latency_ms": 111350.438,
+  "attributed_ms": 111345.23,
+  "unattributed_ms": 5.207,
+  "unattributed_ratio": 0.0,
+  "top_level_stages_used": [
+    "evidence_planning",
+    "search_action_planning",
+    "evidence_retrieval",
+    "coverage_check",
+    "explanation_planning",
+    "teaching_draft",
+    "teaching_review",
+    "teaching_revision"
+  ],
+  "stop_reason": "ready",
+  "summary": {
+    "llm_calls": 5,
+    "embedding_calls": 5,
+    "retrieval_actions": 5,
+    "sections": 11,
+    "revisions": 0,
+    "planned_section_count": null,
+    "llm_latency_ms": 108666.817,
+    "llm_input_tokens": 30558,
+    "llm_output_tokens": 19921,
+    "llm_reasoning_tokens": 14667,
+    "discarded_llm_latency_ms": 0.0,
+    "final_answer_chars": 3217,
+    "final_answer_tokens_estimated": 2182
+  },
+  "stages": [
+    {
+      "stage": "evidence_planning",
+      "latency_ms": 9345.228899968788,
+      "decision_source": "llm",
+      "model": "deepseek-flash",
+      "reasoning_effort": "high",
+      "input_tokens": 480,
+      "output_tokens": 1762,
+      "round_index": null
+    },
+    {
+      "stage": "search_action_planning",
+      "latency_ms": 5221.419700013939,
+      "decision_source": "llm",
+      "model": "deepseek-flash",
+      "reasoning_effort": "low",
+      "input_tokens": 772,
+      "output_tokens": 1163,
+      "round_index": 0
+    },
+    {
+      "stage": "evidence_retrieval",
+      "latency_ms": 2659.3039999715984,
+      "decision_source": "policy",
+      "model": null,
+      "reasoning_effort": null,
+      "input_tokens": null,
+      "output_tokens": null,
+      "round_index": 0
+    },
+    {
+      "stage": "coverage_check",
+      "latency_ms": 5007.820500002708,
+      "decision_source": "llm",
+      "model": "deepseek-flash",
+      "reasoning_effort": "low",
+      "input_tokens": 13181,
+      "output_tokens": 824,
+      "round_index": 0
+    },
+    {
+      "stage": "explanation_planning",
+      "latency_ms": 27592.57479995722,
+      "decision_source": "llm",
+      "model": "deepseek-flash",
+      "reasoning_effort": "high",
+      "input_tokens": 8228,
+      "output_tokens": 6517,
+      "round_index": null
+    },
+    {
+      "stage": "teaching_draft",
+      "latency_ms": 61518.88250000775,
+      "decision_source": "llm",
+      "model": "deepseek-flash",
+      "reasoning_effort": "high",
+      "input_tokens": 7897,
+      "output_tokens": 9655,
+      "round_index": null
+    }
+  ],
+  "llm_calls": [
+    {
+      "call_id": 1,
+      "stage": "evidence_planning",
+      "latency_ms": 9345.094199990854,
+      "substage": null,
+      "model": "deepseek-flash",
+      "reasoning_effort": "high",
+      "max_tokens": 8192,
+      "json_mode": true,
+      "input_tokens": 480,
+      "output_tokens": 1762,
+      "reasoning_tokens": 1322,
+      "finish_reason": "stop",
+      "success": true,
+      "error": null,
+      "wasted": false,
+      "wasted_reason": null,
+      "discarded_latency_ms": 0.0
+    },
+    {
+      "call_id": 2,
+      "stage": "search_action_planning",
+      "latency_ms": 5221.159800013993,
+      "substage": "round_0",
+      "model": "deepseek-flash",
+      "reasoning_effort": "low",
+      "max_tokens": 4096,
+      "json_mode": true,
+      "input_tokens": 772,
+      "output_tokens": 1163,
+      "reasoning_tokens": 851,
+      "finish_reason": "stop",
+      "success": true,
+      "error": null,
+      "wasted": false,
+      "wasted_reason": null,
+      "discarded_latency_ms": 0.0
+    },
+    {
+      "call_id": 3,
+      "stage": "coverage_check",
+      "latency_ms": 5006.189500039909,
+      "substage": "round_0",
+      "model": "deepseek-flash",
+      "reasoning_effort": "low",
+      "max_tokens": 32768,
+      "json_mode": true,
+      "input_tokens": 13181,
+      "output_tokens": 824,
+      "reasoning_tokens": 458,
+      "finish_reason": "stop",
+      "success": true,
+      "error": null,
+      "wasted": false,
+      "wasted_reason": null,
+      "discarded_latency_ms": 0.0
+    },
+    {
+      "call_id": 4,
+      "stage": "explanation_planning",
+      "latency_ms": 27590.380100009497,
+      "substage": null,
+      "model": "deepseek-flash",
+      "reasoning_effort": "high",
+      "max_tokens": 32768,
+      "json_mode": true,
+      "input_tokens": 8228,
+      "output_tokens": 6517,
+      "reasoning_tokens": 4245,
+      "finish_reason": "stop",
+      "success": true,
+      "error": null,
+      "wasted": false,
+      "wasted_reason": null,
+      "discarded_latency_ms": 0.0
+    },
+    {
+      "call_id": 5,
+      "stage": "teaching_draft",
+      "latency_ms": 61503.99319996359,
+      "substage": "single_stream",
+      "model": "deepseek-flash",
+      "reasoning_effort": "high",
+      "max_tokens": 11000,
+      "json_mode": false,
+      "input_tokens": 7897,
+      "output_tokens": 9655,
+      "reasoning_tokens": 7791,
+      "finish_reason": "stop",
+      "success": true,
+      "error": null,
+      "wasted": false,
+      "wasted_reason": null,
+      "discarded_latency_ms": 0.0
+    }
+  ],
+  "embedding_calls": [
+    {
+      "call_id": 1,
+      "query": "购票占座 座位 库存 状态 定义 状态流转 合法流转 重复占座 超卖 约束",
+      "latency_ms": 362.95480001717806,
+      "batch_size": 1,
+      "model": "text-embedding-v4",
+      "dimensions": 1024,
+      "transport": "curl",
+      "success": true,
+      "error": null
+    },
+    {
+      "call_id": 2,
+      "query": "购票占座 并发 冲突检测 互斥 锁 串行化 资源 座位 库存 冲突处理",
+      "latency_ms": 488.64550003781915,
+      "batch_size": 1,
+      "model": "text-embedding-v4",
+      "dimensions": 1024,
+      "transport": "curl",
+      "success": true,
+      "error": null
+    },
+    {
+      "call_id": 3,
+      "query": "购票占座 事务 开启 提交 回滚 原子性 隔离级别 锁范围 座位 库存 订单",
+      "latency_ms": 356.17280000587925,
+      "batch_size": 1,
+      "model": "text-embedding-v4",
+      "dimensions": 1024,
+      "transport": "curl",
+      "success": true,
+      "error": null
+    },
+    {
+      "call_id": 4,
+      "query": "购票占座 幂等 重试 补偿 消息 最终一致性 超时释放 对账 异常 重复提交 跨服务",
+      "latency_ms": 368.7089000013657,
+      "batch_size": 1,
+      "model": "text-embedding-v4",
+      "dimensions": 1024,
+      "transport": "curl",
+      "success": true,
+      "error": null
+    },
+    {
+      "call_id": 5,
+      "query": "购票占座 接口 入口 核心占座逻辑 调用链路 存储层 一致性 保障 位置",
+      "latency_ms": 418.65409997990355,
+      "batch_size": 1,
+      "model": "text-embedding-v4",
+      "dimensions": 1024,
+      "transport": "curl",
+      "success": true,
+      "error": null
+    }
+  ],
+  "retrieval_actions": [
+    {
+      "action_id": "SA1",
+      "requirement_id": "ER1",
+      "round_index": 0,
+      "query": "购票占座 座位 库存 状态 定义 状态流转 合法流转 重复占座 超卖 约束",
+      "source_scope": "CODE",
+      "top_k": 5,
+      "total_ms": 667.3642999958247,
+      "result_count": 5,
+      "query_embedding_ms": 580.9837999986485,
+      "keyword_sql_ms": 0.0,
+      "vector_sql_ms": 86.36930002830923,
+      "fusion_ms": 0.0,
+      "error": null
+    },
+    {
+      "action_id": "SA2",
+      "requirement_id": "ER2",
+      "round_index": 0,
+      "query": "购票占座 并发 冲突检测 互斥 锁 串行化 资源 座位 库存 冲突处理",
+      "source_scope": "CODE",
+      "top_k": 5,
+      "total_ms": 562.6558000221848,
+      "result_count": 5,
+      "query_embedding_ms": 496.6814000508748,
+      "keyword_sql_ms": 0.0,
+      "vector_sql_ms": 65.78689999878407,
+      "fusion_ms": 0.0,
+      "error": null
+    },
+    {
+      "action_id": "SA3",
+      "requirement_id": "ER3",
+      "round_index": 0,
+      "query": "购票占座 事务 开启 提交 回滚 原子性 隔离级别 锁范围 座位 库存 订单",
+      "source_scope": "CODE",
+      "top_k": 5,
+      "total_ms": 413.901399995666,
+      "result_count": 5,
+      "query_embedding_ms": 361.55089997919276,
+      "keyword_sql_ms": 0.0,
+      "vector_sql_ms": 52.34110000310466,
+      "fusion_ms": 0.0,
+      "error": null
+    },
+    {
+      "action_id": "SA4",
+      "requirement_id": "ER4",
+      "round_index": 0,
+      "query": "购票占座 幂等 重试 补偿 消息 最终一致性 超时释放 对账 异常 重复提交 跨服务",
+      "source_scope": "CODE",
+      "top_k": 5,
+      "total_ms": 481.9664999959059,
+      "result_count": 5,
+      "query_embedding_ms": 374.5503999525681,
+      "keyword_sql_ms": 0.0,
+      "vector_sql_ms": 107.40550002083182,
+      "fusion_ms": 0.0,
+      "error": null
+    },
+    {
+      "action_id": "SA5",
+      "requirement_id": "ER5",
+      "round_index": 0,
+      "query": "购票占座 接口 入口 核心占座逻辑 调用链路 存储层 一致性 保障 位置",
+      "source_scope": "CODE",
+      "top_k": 3,
+      "total_ms": 530.7846000068821,
+      "result_count": 3,
+      "query_embedding_ms": 424.40979997627437,
+      "keyword_sql_ms": 0.0,
+      "vector_sql_ms": 106.36350000277162,
+      "fusion_ms": 0.0,
+      "error": null
+    }
+  ],
+  "section_executions": [],
+  "repeated_embeddings": {}
+}

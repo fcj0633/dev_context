@@ -1,0 +1,1704 @@
+Question:
+详细解释项目的余票桶是如何设计的
+
+Evidence Plan: llm
+  ER1. 项目中余票桶的数据结构定义（如类、结构体、字段组成）及其在代码中的表示方式。 — CODE
+  ER2. 余票桶的创建时机、初始余票数量的确定方式以及初始化流程。 — CODE
+  ER3. 从余票桶中扣减余票的操作流程及更新逻辑。 — CODE
+  ER4. 余票桶在高并发场景下的并发控制或一致性保障机制。 — CODE
+  ER5. 余票桶按何种维度进行拆分或组织（如按车次、日期、席别、区间等）。 — ANY
+  ER6. 余票桶与持久化存储或主库存之间的数据同步、回写或对账机制。 — ANY
+
+Route: MIXED (rules)
+Sufficiency: insufficient
+Requirements: ER1 missing, ER2 missing, ER3 missing, ER4 missing, ER5 missing, ER6 missing
+Retries: 0
+
+Answer:
+项目中的“余票桶”指的是 `TicketAvailabilityTokenBucket`，它的设计目标不是保存最终库存，而是在请求进入用户锁、席别锁和数据库事务之前，先用 Redis 做一道廉价的购票准入判断：如果桶里明显没有对应区间、对应席别的余票，就提前拒绝，避免无效请求穿透到锁和 MySQL；如果桶缺失，先尝试懒加载并重试；装载后仍缺席别或 Redis 异常，则降级放行，让后续链路继续处理。因此它本质上是一份“更近似的余票副本”，不是库存事实源，最终能不能占座仍由 MySQL 条件更新决定。
+
+## 一、设计目标与领域模型
+
+余票桶最重要的设计前提是“余票按区间算”，而不是按整列车算。项目设计文档明确指出：一个座位可以按不重叠区间重复售卖，余票口径是“车次 × 区间 × 席别”，`t_seat` 的每一行带 `start_station` / `end_station`，购票时也必须按区间过滤。这解释了为什么桶不是简单按 `trainId` 存一个总余票数，而是要把出发站、到达站纳入定位维度。当前代码中取令牌和还令牌都传入 `trainId`、`departure`、`arrival`，并通过 `buildBucketKey(trainId, departure, arrival)` 构建桶键；装载桶时的聚合查询也明确以 `train_id`、`start_station = departure`、`end_station = arrival`、`seat_status = AVAILABLE`、`del_flag = 0` 为条件，再按 `seat_type` 分组统计。也就是说，桶的一个键对应一个“车次 + 区间”，这个键下的 Hash 字段对应不同席别。
+
+## 二、数据结构、装载与 TTL
+
+从实现证据看，桶使用 Redis Hash：`takeToken` 和 `returnToken` 都先对传入的 `seatTypeCountMap` 做 `normalize`，再构建 `bucketKey`，然后执行 Lua 脚本。`loadBucket` 中把席别转成字符串作为 Hash field，把可售数量转成字符串作为 value，最后通过 `hPutAllWithTtl` 写入并设置 TTL。验证报告记录了一个具体现象：首次购票会自动创建类似 `my12306-ticket-service:train_station_token_bucket:1_北京南_宁波` 的键，Hash 包含车型全部席别 `0/1/2`，没有库存的席别也保留为 `0`，实测 TTL 为 600 秒。代码中 TTL 由 `my12306.availability.token-bucket.expire-minutes` 控制，默认 10 分钟，启停由 `my12306.availability.token-bucket.enabled` 控制且默认开启；600 秒与默认 10 分钟一致。
+
+装载策略是“懒加载 + 加锁 + 补零”。取令牌时先执行 `TAKE_TOKEN_SCRIPT`，如果返回 `BUCKET_MISSING`，就调用 `loadBucket` 装载，然后重试一次取令牌。`loadBucket` 会先对 `LOCK_TRAIN_STATION_TOKEN_BUCKET` 加锁，检查本次请求涉及的席别字段是否都已存在；只要任一席别缺失，就重新装载完整桶。装载时先做一次聚合查询取得该区间各席别的真实可售数，再查车次车型支持的全部席别，并按车型席别集合补 `0`，避免售完席别永久触发“字段缺失”重装。这个设计在验证报告中被描述为：没有库存的席别也保留为 `0`。写完后打点 `my12306.token.load`。
+
+这里需要指出一个证据口径差异：一般设计文档 `S2C-2` 把令牌桶描述为 `TICKET_AVAILABILITY_TOKEN_BUCKET + trainId`，Field 为 `出发_到达_席别`；但当前代码调用 `buildBucketKey(trainId, departure, arrival)`，`loadBucket` 把席别作为 Hash field 写入，验证报告给出的键示例也包含区间信息。由于 `buildBucketKey` 的具体实现和 Lua 脚本内容未在证据中展开，无法仅凭现有 Context 裁决精确拼装方式，只能确认桶键由车次和区间共同决定、席别通常作为 Hash field 参与定位。
+
+## 三、取令牌、还令牌与降级策略
+
+取令牌流程体现了“准入过滤、异常放行”的取舍。`takeToken` 在桶未启用、入参为空或规范化后为空时直接返回 `true`，不拦截。真正执行 Lua 后，返回 `1` 表示取令牌成功，打点 `my12306.token.pass` 并返回 `true`；返回 `0` 表示拒绝，打点 `my12306.token.reject` 并返回 `false`；如果装载后仍缺少席别，或者执行脚本抛异常，就记录告警、打点 `my12306.token.degrade`，然后降级放行返回 `true`。这说明桶的设计原则是“宁可偏松，不可误杀”：Redis 或桶状态异常时不能阻塞正常购票，最终由下游锁和 MySQL 条件更新兜底。
+
+还令牌流程与之对称。`returnToken` 在未启用或 `seatTypeCountMap` 为空时直接返回；否则规范化后执行 `RETURN_TOKEN_SCRIPT`。如果归还异常，会记录“余票令牌归还异常，保留偏松降级并等待 TTL 自愈”，并打点 `my12306.token.degrade`。归还时机不是随意调用，而是在回调链路中通过 `returnTokensAfterCommit` 处理：如果当前存在事务同步，就注册 `afterCommit`，在事务提交后归还；如果不存在事务同步，则立即执行。这可以避免事务回滚后错误地把令牌加回去，说明令牌归还与事务边界被有意绑定。
+
+## 四、并发协调与最终正确性
+
+令牌桶本身不是锁，也不是最终库存。真正本地占座由 `reserveLocally` 完成：先获取用户级 Redisson 锁，再按席别获取席别锁，然后在事务服务 `doPurchaseInTransaction` 中执行占座。释放时逆序释放席别锁，再释放用户锁，并对计时上报异常做了保护，注释明确“Observability must never change reservation or token ownership semantics”。因此整体结构是：令牌桶在前置阶段做快速准入，锁和事务在后置阶段保证占座互斥与一致性。
+
+最终事实源是 MySQL。类注释明确写道：Redis 余票令牌桶只负责购票准入，不是库存事实源；异常时始终降级放行，最终是否能占座仍由 MySQL 条件更新决定。设计文档进一步把购票链路里的余票分成三份：MySQL `t_seat` 真实库存、Redis 站点余票缓存、Redis 令牌桶；三者载体、写入方、精度不同，因此天然会漂移。站点余票缓存的加载逻辑在 `SeatMarginCacheLoader#load` 中：它使用 `TRAIN_STATION_REMAINING_TICKET + trainId_出发_到达` 作为 Hash 键，按路线批量写入各区间各席别余票，并有锁与回填逻辑。购票成功或回调时会删除该站点余票缓存，删除失败则记录告警并等待缓存过期。这些证据说明令牌桶之外还存在一份近似余票缓存，令牌桶是更前置、更近似的一层副本。
+
+## 五、证据边界
+
+当前证据可以确认余票桶的核心设计：Redis Hash、按车次与区间定位、席别为字段、懒加载完整装载、车型席别补零、TTL 自愈、Lua 脚本取还、异常降级放行、不是最终库存事实源、最终由 MySQL 条件更新和锁事务兜底。但仍有关键细节无法从现有 Context 可靠确认：`buildBucketKey` 的具体拼装实现未展示；`take_token_from_bucket.lua` 与 `return_token_to_bucket.lua` 的脚本内容未提供；`SeatMapper` 最终条件更新的 SQL 未出现；令牌桶与站点余票缓存之间是否存在同步、回写或对账机制，证据中没有实现级说明。设计文档提到的“10 秒自愈机制”只出现在一般文档中，且被引用的第 8 节细节未进入证据，不能据此证明当前代码已经落地。C2 和 C12 属于设计意图层面的文档，C6 是验证报告，只能证明其中明确记录的创建键、席别补零和 600 秒 TTL 测试结果，不能单独证明全部代码路径。
+
+总体上，项目的余票桶是一个“区间化、席别化、懒加载、带 TTL、Lua 脚本取还、异常降级”的 Redis 准入桶。它的价值在于用近似快照挡住明显无票的请求，而不是替代 MySQL 库存；一旦桶缺失、过期或异常，系统优先保证可购票，再由锁、事务和 MySQL 条件更新承担最终正确性。
+
+Sources:
+[C3] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/handler/ticket/tokenbucket/TicketAvailabilityTokenBucket.java:73-105 — TicketAvailabilityTokenBucket#takeToken
+[C5] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/handler/ticket/tokenbucket/TicketAvailabilityTokenBucket.java:37-214 — TicketAvailabilityTokenBucket#TicketAvailabilityTokenBucket
+[C12] 4-原项目对标学习/01-全局/S2C-2-令牌桶与Lua详解.md > S2C-2 详解：令牌桶与 Lua —— 在进入锁和事务之前先拦住注定失败的请求 > 3. 数据结构：Key / Field / Value 到底是什么 > 3.2 必须分清的三份"余票"
+[C2] 6-面试复习/模块2-核心链路深挖.md > 模块二 · 核心链路深挖 > 2.2 查询链路与缓存设计 🔴 > ③ 系统实现 > 区间模型（**这是 12306 最有辨识度的设计**）
+[C1] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/handler/ticket/tokenbucket/TicketAvailabilityTokenBucket.java:110-126 — TicketAvailabilityTokenBucket#returnToken
+[C7] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/handler/ticket/tokenbucket/TicketAvailabilityTokenBucket.java:128-173 — TicketAvailabilityTokenBucket#loadBucket
+[C6] 5-后续开发规划/baseline/D2余票令牌桶与Lua实验报告.md > D2 余票令牌桶、Lua 与锁事务边界实验报告 > 6. Lua 与运行态正确性 > 6.2 懒加载与 TTL
+[C9] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/impl/TicketCallbackServiceImpl.java:116-131 — TicketCallbackServiceImpl#returnTokensAfterCommit
+[C10] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/impl/PurchaseTicketServiceImpl.java:118-154 — PurchaseTicketServiceImpl#reserveLocally
+[C11] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/cache/SeatMarginCacheLoader.java:45-90 — SeatMarginCacheLoader#load
+[C4] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/impl/PurchaseTicketServiceImpl.java:214-222 — PurchaseTicketServiceImpl#evictRemainingTicketCacheSafely
+[C8] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/impl/TicketCallbackServiceImpl.java:207-212 — TicketCallbackServiceImpl#evictRemainingTicketCache
+
+Trace:
+{
+  "route": {
+    "query_type": "MIXED",
+    "decision_source": "rules",
+    "reason": "union of evidence source requirements",
+    "code_signals": [],
+    "doc_signals": []
+  },
+  "rounds": [
+    {
+      "round_index": 0,
+      "retrieval_query": "余票桶 数据结构 类 字段 余票数量 | 余票桶 创建 初始化 初始余票 赋值 | 余票桶 扣减 余票 更新 方法 | 余票桶 并发 锁 一致性 控制 | 余票桶 拆分 维度 车次 日期 席别 区间 | 余票桶 持久化 同步 主库存 回写 对账",
+      "retrieval_query_type": "MIXED",
+      "selected_chunks": [
+        {
+          "citation_label": "C1",
+          "chunk_id": 8875,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/handler/ticket/tokenbucket/TicketAvailabilityTokenBucket.java",
+          "identity": "TicketAvailabilityTokenBucket#returnToken",
+          "retrieval_rank": 1,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1",
+            "ER2",
+            "ER3",
+            "ER4",
+            "ER6"
+          ]
+        },
+        {
+          "citation_label": "C2",
+          "chunk_id": 10991,
+          "source_type": "DOCUMENT",
+          "file_path": "6-面试复习/模块2-核心链路深挖.md",
+          "identity": "模块二 · 核心链路深挖 > 2.2 查询链路与缓存设计 🔴 > ③ 系统实现 > 区间模型（**这是 12306 最有辨识度的设计**）",
+          "retrieval_rank": 5,
+          "source_role": "GENERAL_DOCUMENT",
+          "temporal_status": "UNKNOWN",
+          "authority_priority": 55,
+          "sub_question_ids": [
+            "ER5"
+          ]
+        },
+        {
+          "citation_label": "C3",
+          "chunk_id": 8874,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/handler/ticket/tokenbucket/TicketAvailabilityTokenBucket.java",
+          "identity": "TicketAvailabilityTokenBucket#takeToken",
+          "retrieval_rank": 2,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1",
+            "ER2",
+            "ER3",
+            "ER4"
+          ]
+        },
+        {
+          "citation_label": "C4",
+          "chunk_id": 8888,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/impl/PurchaseTicketServiceImpl.java",
+          "identity": "PurchaseTicketServiceImpl#evictRemainingTicketCacheSafely",
+          "retrieval_rank": 3,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER3"
+          ]
+        },
+        {
+          "citation_label": "C5",
+          "chunk_id": 8873,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/handler/ticket/tokenbucket/TicketAvailabilityTokenBucket.java",
+          "identity": "TicketAvailabilityTokenBucket#TicketAvailabilityTokenBucket",
+          "retrieval_rank": 4,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1",
+            "ER2",
+            "ER3",
+            "ER4"
+          ]
+        },
+        {
+          "citation_label": "C6",
+          "chunk_id": 10318,
+          "source_type": "DOCUMENT",
+          "file_path": "5-后续开发规划/baseline/D2余票令牌桶与Lua实验报告.md",
+          "identity": "D2 余票令牌桶、Lua 与锁事务边界实验报告 > 6. Lua 与运行态正确性 > 6.2 懒加载与 TTL",
+          "retrieval_rank": 6,
+          "source_role": "VERIFICATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 90,
+          "sub_question_ids": [
+            "ER6"
+          ]
+        },
+        {
+          "citation_label": "C7",
+          "chunk_id": 8876,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/handler/ticket/tokenbucket/TicketAvailabilityTokenBucket.java",
+          "identity": "TicketAvailabilityTokenBucket#loadBucket",
+          "retrieval_rank": 7,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1",
+            "ER2"
+          ]
+        },
+        {
+          "citation_label": "C8",
+          "chunk_id": 8909,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/impl/TicketCallbackServiceImpl.java",
+          "identity": "TicketCallbackServiceImpl#evictRemainingTicketCache",
+          "retrieval_rank": 8,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER3"
+          ]
+        },
+        {
+          "citation_label": "C9",
+          "chunk_id": 8902,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/impl/TicketCallbackServiceImpl.java",
+          "identity": "TicketCallbackServiceImpl#returnTokensAfterCommit",
+          "retrieval_rank": 9,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER4"
+          ]
+        },
+        {
+          "citation_label": "C10",
+          "chunk_id": 8884,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/impl/PurchaseTicketServiceImpl.java",
+          "identity": "PurchaseTicketServiceImpl#reserveLocally",
+          "retrieval_rank": 10,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER4"
+          ]
+        },
+        {
+          "citation_label": "C11",
+          "chunk_id": 8842,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/cache/SeatMarginCacheLoader.java",
+          "identity": "SeatMarginCacheLoader#load",
+          "retrieval_rank": 11,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1",
+            "ER2"
+          ]
+        },
+        {
+          "citation_label": "C12",
+          "chunk_id": 10092,
+          "source_type": "DOCUMENT",
+          "file_path": "4-原项目对标学习/01-全局/S2C-2-令牌桶与Lua详解.md",
+          "identity": "S2C-2 详解：令牌桶与 Lua —— 在进入锁和事务之前先拦住注定失败的请求 > 3. 数据结构：Key / Field / Value 到底是什么 > 3.2 必须分清的三份\"余票\"",
+          "retrieval_rank": 12,
+          "source_role": "GENERAL_DOCUMENT",
+          "temporal_status": "UNKNOWN",
+          "authority_priority": 55,
+          "sub_question_ids": [
+            "ER6"
+          ]
+        }
+      ],
+      "sufficiency": {
+        "enough": false,
+        "missing_aspects": [
+          {
+            "source_type": "CODE",
+            "description": "证据必须包含定义余票桶的代码元素（类/结构体/接口）以及用于存储余票数量的字段或属性，如有标识字段也需体现。",
+            "sub_question_id": "ER1"
+          },
+          {
+            "source_type": "CODE",
+            "description": "证据必须包含创建余票桶的代码位置、触发条件以及初始余票数量的赋值来源或计算规则。",
+            "sub_question_id": "ER2"
+          },
+          {
+            "source_type": "CODE",
+            "description": "证据必须包含扣减余票桶的核心方法或调用链路，以及扣减时的校验条件、更新操作和返回值处理。",
+            "sub_question_id": "ER3"
+          },
+          {
+            "source_type": "CODE",
+            "description": "证据必须包含对余票桶并发访问的保护措施或一致性保障机制的代码实现或配置说明。",
+            "sub_question_id": "ER4"
+          },
+          {
+            "source_type": "ANY",
+            "description": "证据必须包含描述余票桶拆分维度或组织方式的代码、注释或设计文档，说明桶的粒度或分组依据。",
+            "sub_question_id": "ER5"
+          },
+          {
+            "source_type": "ANY",
+            "description": "证据必须包含余票桶数据持久化或与主库存同步的代码逻辑，如同步触发条件、数据流向等。",
+            "sub_question_id": "ER6"
+          }
+        ],
+        "reason": "some CORE evidence requirements remain unresolved",
+        "decision_source": "fallback",
+        "statuses": [
+          {
+            "sub_question_id": "ER1",
+            "satisfied": false,
+            "reason": "已有候选证据，但语义覆盖检查未能完成"
+          },
+          {
+            "sub_question_id": "ER2",
+            "satisfied": false,
+            "reason": "已有候选证据，但语义覆盖检查未能完成"
+          },
+          {
+            "sub_question_id": "ER3",
+            "satisfied": false,
+            "reason": "已有候选证据，但语义覆盖检查未能完成"
+          },
+          {
+            "sub_question_id": "ER4",
+            "satisfied": false,
+            "reason": "已有候选证据，但语义覆盖检查未能完成"
+          },
+          {
+            "sub_question_id": "ER5",
+            "satisfied": false,
+            "reason": "已有候选证据，但语义覆盖检查未能完成"
+          },
+          {
+            "sub_question_id": "ER6",
+            "satisfied": false,
+            "reason": "已有候选证据，但语义覆盖检查未能完成"
+          }
+        ]
+      },
+      "rewrite": null,
+      "rewrite_error": null,
+      "rewrites": []
+    }
+  ],
+  "retry_count": 0,
+  "final_sufficiency": {
+    "enough": false,
+    "missing_aspects": [
+      {
+        "source_type": "CODE",
+        "description": "证据必须包含定义余票桶的代码元素（类/结构体/接口）以及用于存储余票数量的字段或属性，如有标识字段也需体现。",
+        "sub_question_id": "ER1"
+      },
+      {
+        "source_type": "CODE",
+        "description": "证据必须包含创建余票桶的代码位置、触发条件以及初始余票数量的赋值来源或计算规则。",
+        "sub_question_id": "ER2"
+      },
+      {
+        "source_type": "CODE",
+        "description": "证据必须包含扣减余票桶的核心方法或调用链路，以及扣减时的校验条件、更新操作和返回值处理。",
+        "sub_question_id": "ER3"
+      },
+      {
+        "source_type": "CODE",
+        "description": "证据必须包含对余票桶并发访问的保护措施或一致性保障机制的代码实现或配置说明。",
+        "sub_question_id": "ER4"
+      },
+      {
+        "source_type": "ANY",
+        "description": "证据必须包含描述余票桶拆分维度或组织方式的代码、注释或设计文档，说明桶的粒度或分组依据。",
+        "sub_question_id": "ER5"
+      },
+      {
+        "source_type": "ANY",
+        "description": "证据必须包含余票桶数据持久化或与主库存同步的代码逻辑，如同步触发条件、数据流向等。",
+        "sub_question_id": "ER6"
+      }
+    ],
+    "reason": "some CORE evidence requirements remain unresolved",
+    "decision_source": "fallback",
+    "statuses": [
+      {
+        "sub_question_id": "ER1",
+        "satisfied": false,
+        "reason": "已有候选证据，但语义覆盖检查未能完成"
+      },
+      {
+        "sub_question_id": "ER2",
+        "satisfied": false,
+        "reason": "已有候选证据，但语义覆盖检查未能完成"
+      },
+      {
+        "sub_question_id": "ER3",
+        "satisfied": false,
+        "reason": "已有候选证据，但语义覆盖检查未能完成"
+      },
+      {
+        "sub_question_id": "ER4",
+        "satisfied": false,
+        "reason": "已有候选证据，但语义覆盖检查未能完成"
+      },
+      {
+        "sub_question_id": "ER5",
+        "satisfied": false,
+        "reason": "已有候选证据，但语义覆盖检查未能完成"
+      },
+      {
+        "sub_question_id": "ER6",
+        "satisfied": false,
+        "reason": "已有候选证据，但语义覆盖检查未能完成"
+      }
+    ]
+  },
+  "stop_reason": "partial",
+  "plan": {
+    "original_query": "详细解释项目的余票桶是如何设计的",
+    "intent_summary": "详细解释项目的余票桶是如何设计的",
+    "answer_depth": "detailed",
+    "decision_source": "llm",
+    "answer_goal": "依据当前项目证据回答：详细解释项目的余票桶是如何设计的",
+    "explanation_strategy": "mixed",
+    "sub_questions": [
+      {
+        "id": "ER1",
+        "question": "项目中余票桶的数据结构定义（如类、结构体、字段组成）及其在代码中的表示方式。",
+        "purpose": "证据必须包含定义余票桶的代码元素（类/结构体/接口）以及用于存储余票数量的字段或属性，如有标识字段也需体现。",
+        "evidence_description": "证据必须包含定义余票桶的代码元素（类/结构体/接口）以及用于存储余票数量的字段或属性，如有标识字段也需体现。",
+        "preferred_sources": [
+          "CODE"
+        ],
+        "retrieval_query": "",
+        "importance": "CORE",
+        "temporal_scope": "CURRENT"
+      },
+      {
+        "id": "ER2",
+        "question": "余票桶的创建时机、初始余票数量的确定方式以及初始化流程。",
+        "purpose": "证据必须包含创建余票桶的代码位置、触发条件以及初始余票数量的赋值来源或计算规则。",
+        "evidence_description": "证据必须包含创建余票桶的代码位置、触发条件以及初始余票数量的赋值来源或计算规则。",
+        "preferred_sources": [
+          "CODE"
+        ],
+        "retrieval_query": "",
+        "importance": "CORE",
+        "temporal_scope": "CURRENT"
+      },
+      {
+        "id": "ER3",
+        "question": "从余票桶中扣减余票的操作流程及更新逻辑。",
+        "purpose": "证据必须包含扣减余票桶的核心方法或调用链路，以及扣减时的校验条件、更新操作和返回值处理。",
+        "evidence_description": "证据必须包含扣减余票桶的核心方法或调用链路，以及扣减时的校验条件、更新操作和返回值处理。",
+        "preferred_sources": [
+          "CODE"
+        ],
+        "retrieval_query": "",
+        "importance": "CORE",
+        "temporal_scope": "CURRENT"
+      },
+      {
+        "id": "ER4",
+        "question": "余票桶在高并发场景下的并发控制或一致性保障机制。",
+        "purpose": "证据必须包含对余票桶并发访问的保护措施或一致性保障机制的代码实现或配置说明。",
+        "evidence_description": "证据必须包含对余票桶并发访问的保护措施或一致性保障机制的代码实现或配置说明。",
+        "preferred_sources": [
+          "CODE"
+        ],
+        "retrieval_query": "",
+        "importance": "CORE",
+        "temporal_scope": "CURRENT"
+      },
+      {
+        "id": "ER5",
+        "question": "余票桶按何种维度进行拆分或组织（如按车次、日期、席别、区间等）。",
+        "purpose": "证据必须包含描述余票桶拆分维度或组织方式的代码、注释或设计文档，说明桶的粒度或分组依据。",
+        "evidence_description": "证据必须包含描述余票桶拆分维度或组织方式的代码、注释或设计文档，说明桶的粒度或分组依据。",
+        "preferred_sources": [
+          "CODE",
+          "DOCUMENT"
+        ],
+        "retrieval_query": "",
+        "importance": "SUPPORTING",
+        "temporal_scope": "CURRENT"
+      },
+      {
+        "id": "ER6",
+        "question": "余票桶与持久化存储或主库存之间的数据同步、回写或对账机制。",
+        "purpose": "证据必须包含余票桶数据持久化或与主库存同步的代码逻辑，如同步触发条件、数据流向等。",
+        "evidence_description": "证据必须包含余票桶数据持久化或与主库存同步的代码逻辑，如同步触发条件、数据流向等。",
+        "preferred_sources": [
+          "CODE",
+          "DOCUMENT"
+        ],
+        "retrieval_query": "",
+        "importance": "SUPPORTING",
+        "temporal_scope": "CURRENT"
+      }
+    ]
+  },
+  "sub_question_traces": [
+    {
+      "sub_question_id": "ER1",
+      "question": "项目中余票桶的数据结构定义（如类、结构体、字段组成）及其在代码中的表示方式。",
+      "purpose": "证据必须包含定义余票桶的代码元素（类/结构体/接口）以及用于存储余票数量的字段或属性，如有标识字段也需体现。",
+      "query_type": "CODE",
+      "selected_chunks": [
+        {
+          "citation_label": "C1",
+          "chunk_id": 8875,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/handler/ticket/tokenbucket/TicketAvailabilityTokenBucket.java",
+          "identity": "TicketAvailabilityTokenBucket#returnToken",
+          "retrieval_rank": 1,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1",
+            "ER2",
+            "ER3",
+            "ER4",
+            "ER6"
+          ]
+        },
+        {
+          "citation_label": "C3",
+          "chunk_id": 8874,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/handler/ticket/tokenbucket/TicketAvailabilityTokenBucket.java",
+          "identity": "TicketAvailabilityTokenBucket#takeToken",
+          "retrieval_rank": 2,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1",
+            "ER2",
+            "ER3",
+            "ER4"
+          ]
+        },
+        {
+          "citation_label": "C5",
+          "chunk_id": 8873,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/handler/ticket/tokenbucket/TicketAvailabilityTokenBucket.java",
+          "identity": "TicketAvailabilityTokenBucket#TicketAvailabilityTokenBucket",
+          "retrieval_rank": 4,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1",
+            "ER2",
+            "ER3",
+            "ER4"
+          ]
+        },
+        {
+          "citation_label": "C7",
+          "chunk_id": 8876,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/handler/ticket/tokenbucket/TicketAvailabilityTokenBucket.java",
+          "identity": "TicketAvailabilityTokenBucket#loadBucket",
+          "retrieval_rank": 7,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1",
+            "ER2"
+          ]
+        },
+        {
+          "citation_label": "C11",
+          "chunk_id": 8842,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/cache/SeatMarginCacheLoader.java",
+          "identity": "SeatMarginCacheLoader#load",
+          "retrieval_rank": 11,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1",
+            "ER2"
+          ]
+        }
+      ]
+    },
+    {
+      "sub_question_id": "ER2",
+      "question": "余票桶的创建时机、初始余票数量的确定方式以及初始化流程。",
+      "purpose": "证据必须包含创建余票桶的代码位置、触发条件以及初始余票数量的赋值来源或计算规则。",
+      "query_type": "CODE",
+      "selected_chunks": [
+        {
+          "citation_label": "C1",
+          "chunk_id": 8875,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/handler/ticket/tokenbucket/TicketAvailabilityTokenBucket.java",
+          "identity": "TicketAvailabilityTokenBucket#returnToken",
+          "retrieval_rank": 1,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1",
+            "ER2",
+            "ER3",
+            "ER4",
+            "ER6"
+          ]
+        },
+        {
+          "citation_label": "C3",
+          "chunk_id": 8874,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/handler/ticket/tokenbucket/TicketAvailabilityTokenBucket.java",
+          "identity": "TicketAvailabilityTokenBucket#takeToken",
+          "retrieval_rank": 2,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1",
+            "ER2",
+            "ER3",
+            "ER4"
+          ]
+        },
+        {
+          "citation_label": "C5",
+          "chunk_id": 8873,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/handler/ticket/tokenbucket/TicketAvailabilityTokenBucket.java",
+          "identity": "TicketAvailabilityTokenBucket#TicketAvailabilityTokenBucket",
+          "retrieval_rank": 4,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1",
+            "ER2",
+            "ER3",
+            "ER4"
+          ]
+        },
+        {
+          "citation_label": "C7",
+          "chunk_id": 8876,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/handler/ticket/tokenbucket/TicketAvailabilityTokenBucket.java",
+          "identity": "TicketAvailabilityTokenBucket#loadBucket",
+          "retrieval_rank": 7,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1",
+            "ER2"
+          ]
+        },
+        {
+          "citation_label": "C11",
+          "chunk_id": 8842,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/cache/SeatMarginCacheLoader.java",
+          "identity": "SeatMarginCacheLoader#load",
+          "retrieval_rank": 11,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1",
+            "ER2"
+          ]
+        }
+      ]
+    },
+    {
+      "sub_question_id": "ER3",
+      "question": "从余票桶中扣减余票的操作流程及更新逻辑。",
+      "purpose": "证据必须包含扣减余票桶的核心方法或调用链路，以及扣减时的校验条件、更新操作和返回值处理。",
+      "query_type": "CODE",
+      "selected_chunks": [
+        {
+          "citation_label": "C1",
+          "chunk_id": 8875,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/handler/ticket/tokenbucket/TicketAvailabilityTokenBucket.java",
+          "identity": "TicketAvailabilityTokenBucket#returnToken",
+          "retrieval_rank": 1,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1",
+            "ER2",
+            "ER3",
+            "ER4",
+            "ER6"
+          ]
+        },
+        {
+          "citation_label": "C3",
+          "chunk_id": 8874,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/handler/ticket/tokenbucket/TicketAvailabilityTokenBucket.java",
+          "identity": "TicketAvailabilityTokenBucket#takeToken",
+          "retrieval_rank": 2,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1",
+            "ER2",
+            "ER3",
+            "ER4"
+          ]
+        },
+        {
+          "citation_label": "C4",
+          "chunk_id": 8888,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/impl/PurchaseTicketServiceImpl.java",
+          "identity": "PurchaseTicketServiceImpl#evictRemainingTicketCacheSafely",
+          "retrieval_rank": 3,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER3"
+          ]
+        },
+        {
+          "citation_label": "C5",
+          "chunk_id": 8873,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/handler/ticket/tokenbucket/TicketAvailabilityTokenBucket.java",
+          "identity": "TicketAvailabilityTokenBucket#TicketAvailabilityTokenBucket",
+          "retrieval_rank": 4,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1",
+            "ER2",
+            "ER3",
+            "ER4"
+          ]
+        },
+        {
+          "citation_label": "C8",
+          "chunk_id": 8909,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/impl/TicketCallbackServiceImpl.java",
+          "identity": "TicketCallbackServiceImpl#evictRemainingTicketCache",
+          "retrieval_rank": 8,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER3"
+          ]
+        }
+      ]
+    },
+    {
+      "sub_question_id": "ER4",
+      "question": "余票桶在高并发场景下的并发控制或一致性保障机制。",
+      "purpose": "证据必须包含对余票桶并发访问的保护措施或一致性保障机制的代码实现或配置说明。",
+      "query_type": "CODE",
+      "selected_chunks": [
+        {
+          "citation_label": "C1",
+          "chunk_id": 8875,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/handler/ticket/tokenbucket/TicketAvailabilityTokenBucket.java",
+          "identity": "TicketAvailabilityTokenBucket#returnToken",
+          "retrieval_rank": 1,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1",
+            "ER2",
+            "ER3",
+            "ER4",
+            "ER6"
+          ]
+        },
+        {
+          "citation_label": "C3",
+          "chunk_id": 8874,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/handler/ticket/tokenbucket/TicketAvailabilityTokenBucket.java",
+          "identity": "TicketAvailabilityTokenBucket#takeToken",
+          "retrieval_rank": 2,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1",
+            "ER2",
+            "ER3",
+            "ER4"
+          ]
+        },
+        {
+          "citation_label": "C5",
+          "chunk_id": 8873,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/handler/ticket/tokenbucket/TicketAvailabilityTokenBucket.java",
+          "identity": "TicketAvailabilityTokenBucket#TicketAvailabilityTokenBucket",
+          "retrieval_rank": 4,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1",
+            "ER2",
+            "ER3",
+            "ER4"
+          ]
+        },
+        {
+          "citation_label": "C9",
+          "chunk_id": 8902,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/impl/TicketCallbackServiceImpl.java",
+          "identity": "TicketCallbackServiceImpl#returnTokensAfterCommit",
+          "retrieval_rank": 9,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER4"
+          ]
+        },
+        {
+          "citation_label": "C10",
+          "chunk_id": 8884,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/impl/PurchaseTicketServiceImpl.java",
+          "identity": "PurchaseTicketServiceImpl#reserveLocally",
+          "retrieval_rank": 10,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER4"
+          ]
+        }
+      ]
+    },
+    {
+      "sub_question_id": "ER5",
+      "question": "余票桶按何种维度进行拆分或组织（如按车次、日期、席别、区间等）。",
+      "purpose": "证据必须包含描述余票桶拆分维度或组织方式的代码、注释或设计文档，说明桶的粒度或分组依据。",
+      "query_type": "MIXED",
+      "selected_chunks": [
+        {
+          "citation_label": "C2",
+          "chunk_id": 10991,
+          "source_type": "DOCUMENT",
+          "file_path": "6-面试复习/模块2-核心链路深挖.md",
+          "identity": "模块二 · 核心链路深挖 > 2.2 查询链路与缓存设计 🔴 > ③ 系统实现 > 区间模型（**这是 12306 最有辨识度的设计**）",
+          "retrieval_rank": 5,
+          "source_role": "GENERAL_DOCUMENT",
+          "temporal_status": "UNKNOWN",
+          "authority_priority": 55,
+          "sub_question_ids": [
+            "ER5"
+          ]
+        }
+      ]
+    },
+    {
+      "sub_question_id": "ER6",
+      "question": "余票桶与持久化存储或主库存之间的数据同步、回写或对账机制。",
+      "purpose": "证据必须包含余票桶数据持久化或与主库存同步的代码逻辑，如同步触发条件、数据流向等。",
+      "query_type": "MIXED",
+      "selected_chunks": [
+        {
+          "citation_label": "C1",
+          "chunk_id": 8875,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/handler/ticket/tokenbucket/TicketAvailabilityTokenBucket.java",
+          "identity": "TicketAvailabilityTokenBucket#returnToken",
+          "retrieval_rank": 1,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1",
+            "ER2",
+            "ER3",
+            "ER4",
+            "ER6"
+          ]
+        },
+        {
+          "citation_label": "C6",
+          "chunk_id": 10318,
+          "source_type": "DOCUMENT",
+          "file_path": "5-后续开发规划/baseline/D2余票令牌桶与Lua实验报告.md",
+          "identity": "D2 余票令牌桶、Lua 与锁事务边界实验报告 > 6. Lua 与运行态正确性 > 6.2 懒加载与 TTL",
+          "retrieval_rank": 6,
+          "source_role": "VERIFICATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 90,
+          "sub_question_ids": [
+            "ER6"
+          ]
+        },
+        {
+          "citation_label": "C12",
+          "chunk_id": 10092,
+          "source_type": "DOCUMENT",
+          "file_path": "4-原项目对标学习/01-全局/S2C-2-令牌桶与Lua详解.md",
+          "identity": "S2C-2 详解：令牌桶与 Lua —— 在进入锁和事务之前先拦住注定失败的请求 > 3. 数据结构：Key / Field / Value 到底是什么 > 3.2 必须分清的三份\"余票\"",
+          "retrieval_rank": 12,
+          "source_role": "GENERAL_DOCUMENT",
+          "temporal_status": "UNKNOWN",
+          "authority_priority": 55,
+          "sub_question_ids": [
+            "ER6"
+          ]
+        }
+      ]
+    }
+  ],
+  "citations": {
+    "used_labels": [
+      "C3",
+      "C5",
+      "C12",
+      "C2",
+      "C1",
+      "C7",
+      "C6",
+      "C9",
+      "C10",
+      "C11",
+      "C4",
+      "C8"
+    ],
+    "invalid_labels": [],
+    "zero_valid": false,
+    "sources": [
+      "[C3] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/handler/ticket/tokenbucket/TicketAvailabilityTokenBucket.java:73-105 — TicketAvailabilityTokenBucket#takeToken",
+      "[C5] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/handler/ticket/tokenbucket/TicketAvailabilityTokenBucket.java:37-214 — TicketAvailabilityTokenBucket#TicketAvailabilityTokenBucket",
+      "[C12] 4-原项目对标学习/01-全局/S2C-2-令牌桶与Lua详解.md > S2C-2 详解：令牌桶与 Lua —— 在进入锁和事务之前先拦住注定失败的请求 > 3. 数据结构：Key / Field / Value 到底是什么 > 3.2 必须分清的三份\"余票\"",
+      "[C2] 6-面试复习/模块2-核心链路深挖.md > 模块二 · 核心链路深挖 > 2.2 查询链路与缓存设计 🔴 > ③ 系统实现 > 区间模型（**这是 12306 最有辨识度的设计**）",
+      "[C1] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/handler/ticket/tokenbucket/TicketAvailabilityTokenBucket.java:110-126 — TicketAvailabilityTokenBucket#returnToken",
+      "[C7] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/handler/ticket/tokenbucket/TicketAvailabilityTokenBucket.java:128-173 — TicketAvailabilityTokenBucket#loadBucket",
+      "[C6] 5-后续开发规划/baseline/D2余票令牌桶与Lua实验报告.md > D2 余票令牌桶、Lua 与锁事务边界实验报告 > 6. Lua 与运行态正确性 > 6.2 懒加载与 TTL",
+      "[C9] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/impl/TicketCallbackServiceImpl.java:116-131 — TicketCallbackServiceImpl#returnTokensAfterCommit",
+      "[C10] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/impl/PurchaseTicketServiceImpl.java:118-154 — PurchaseTicketServiceImpl#reserveLocally",
+      "[C11] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/cache/SeatMarginCacheLoader.java:45-90 — SeatMarginCacheLoader#load",
+      "[C4] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/impl/PurchaseTicketServiceImpl.java:214-222 — PurchaseTicketServiceImpl#evictRemainingTicketCacheSafely",
+      "[C8] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/impl/TicketCallbackServiceImpl.java:207-212 — TicketCallbackServiceImpl#evictRemainingTicketCache"
+    ]
+  },
+  "sections": {
+    "count": 5,
+    "lengths": [
+      489,
+      1152,
+      629,
+      656,
+      593
+    ],
+    "max_chars": 1152,
+    "over_budget": 5
+  },
+  "answer_plan": {
+    "direct_answer": "当前回答只能陈述已进入证据包的项目事实，未满足的核心证据需要明确保留为未知。",
+    "summary_citation_labels": [
+      "C1",
+      "C2"
+    ],
+    "explanation_strategy": "mixed",
+    "sections": [
+      {
+        "title": "直接回答",
+        "purpose": "先回应用户真正的问题",
+        "key_points": [
+          "只陈述现有证据直接支持的中心判断"
+        ],
+        "evidence_labels": [
+          "C1",
+          "C2",
+          "C3",
+          "C4",
+          "C5",
+          "C6",
+          "C7",
+          "C8",
+          "C9",
+          "C10",
+          "C11",
+          "C12"
+        ],
+        "target_chars": 734
+      },
+      {
+        "title": "实现与依据",
+        "purpose": "组织当前项目证据",
+        "key_points": [
+          "按读者理解顺序解释实现、边界和关系"
+        ],
+        "evidence_labels": [
+          "C1",
+          "C2",
+          "C3",
+          "C4",
+          "C5",
+          "C6",
+          "C7",
+          "C8",
+          "C9",
+          "C10",
+          "C11",
+          "C12"
+        ],
+        "target_chars": 734
+      },
+      {
+        "title": "证据边界",
+        "purpose": "集中说明未解决内容",
+        "key_points": [
+          "区分已确认事实与当前不能确认的部分"
+        ],
+        "evidence_labels": [
+          "C1",
+          "C2",
+          "C3",
+          "C4",
+          "C5",
+          "C6",
+          "C7",
+          "C8",
+          "C9",
+          "C10",
+          "C11",
+          "C12"
+        ],
+        "target_chars": 734
+      }
+    ],
+    "unresolved_gaps": [
+      "项目中余票桶的数据结构定义（如类、结构体、字段组成）及其在代码中的表示方式。：已有候选证据，但语义覆盖检查未能完成",
+      "余票桶的创建时机、初始余票数量的确定方式以及初始化流程。：已有候选证据，但语义覆盖检查未能完成",
+      "从余票桶中扣减余票的操作流程及更新逻辑。：已有候选证据，但语义覆盖检查未能完成",
+      "余票桶在高并发场景下的并发控制或一致性保障机制。：已有候选证据，但语义覆盖检查未能完成",
+      "余票桶按何种维度进行拆分或组织（如按车次、日期、席别、区间等）。：已有候选证据，但语义覆盖检查未能完成",
+      "余票桶与持久化存储或主库存之间的数据同步、回写或对账机制。：已有候选证据，但语义覆盖检查未能完成"
+    ],
+    "conflicts": [],
+    "decision_source": "fallback",
+    "answer_goal": "依据当前项目证据回答：详细解释项目的余票桶是如何设计的",
+    "answer_depth": "detailed"
+  },
+  "source_conflicts": [],
+  "review": {
+    "accepted": false,
+    "issues": [
+      {
+        "issue_type": "UNSUPPORTED_CLAIM",
+        "description": "草稿多处称“Lua 原子取还”“原子取还”，但 Context 只展示加载并执行 take_token_from_bucket.lua / return_token_to_bucket.lua 脚本，未提供脚本内容或明确说明其原子性；应改为“Lua 脚本取还”或仅陈述执行脚本。"
+      },
+      {
+        "issue_type": "OVERCLAIM",
+        "description": "开头将“桶缺失”直接表述为降级放行，与 C3 代码不符：BUCKET_MISSING 时会先 loadBucket 并重试，只有装载后仍缺席别或执行异常才降级放行；应精确表述。"
+      }
+    ],
+    "final_answer_with_citations": "项目中的“余票桶”指的是 `TicketAvailabilityTokenBucket`，它的设计目标不是保存最终库存，而是在请求进入用户锁、席别锁和数据库事务之前，先用 Redis 做一道廉价的购票准入判断：如果桶里明显没有对应区间、对应席别的余票，就提前拒绝，避免无效请求穿透到锁和 MySQL；如果桶缺失，先尝试懒加载并重试；装载后仍缺席别或 Redis 异常，则降级放行，让后续链路继续处理 [C3][C5]。因此它本质上是一份“更近似的余票副本”，不是库存事实源，最终能不能占座仍由 MySQL 条件更新决定 [C5][C12]。\n\n## 一、设计目标与领域模型\n\n余票桶最重要的设计前提是“余票按区间算”，而不是按整列车算。项目设计文档明确指出：一个座位可以按不重叠区间重复售卖，余票口径是“车次 × 区间 × 席别”，`t_seat` 的每一行带 `start_station` / `end_station`，购票时也必须按区间过滤 [C2]。这解释了为什么桶不是简单按 `trainId` 存一个总余票数，而是要把出发站、到达站纳入定位维度。当前代码中取令牌和还令牌都传入 `trainId`、`departure`、`arrival`，并通过 `buildBucketKey(trainId, departure, arrival)` 构建桶键 [C1][C3]；装载桶时的聚合查询也明确以 `train_id`、`start_station = departure`、`end_station = arrival`、`seat_status = AVAILABLE`、`del_flag = 0` 为条件，再按 `seat_type` 分组统计 [C7]。也就是说，桶的一个键对应一个“车次 + 区间”，这个键下的 Hash 字段对应不同席别。\n\n## 二、数据结构、装载与 TTL\n\n从实现证据看，桶使用 Redis Hash：`takeToken` 和 `returnToken` 都先对传入的 `seatTypeCountMap` 做 `normalize`，再构建 `bucketKey`，然后执行 Lua 脚本 [C1][C3]。`loadBucket` 中把席别转成字符串作为 Hash field，把可售数量转成字符串作为 value，最后通过 `hPutAllWithTtl` 写入并设置 TTL [C7]。验证报告记录了一个具体现象：首次购票会自动创建类似 `my12306-ticket-service:train_station_token_bucket:1_北京南_宁波` 的键，Hash 包含车型全部席别 `0/1/2`，没有库存的席别也保留为 `0`，实测 TTL 为 600 秒 [C6]。代码中 TTL 由 `my12306.availability.token-bucket.expire-minutes` 控制，默认 10 分钟，启停由 `my12306.availability.token-bucket.enabled` 控制且默认开启 [C5]；600 秒与默认 10 分钟一致 [C5][C6]。\n\n装载策略是“懒加载 + 加锁 + 补零”。取令牌时先执行 `TAKE_TOKEN_SCRIPT`，如果返回 `BUCKET_MISSING`，就调用 `loadBucket` 装载，然后重试一次取令牌 [C3]。`loadBucket` 会先对 `LOCK_TRAIN_STATION_TOKEN_BUCKET` 加锁，检查本次请求涉及的席别字段是否都已存在；只要任一席别缺失，就重新装载完整桶 [C7]。装载时先做一次聚合查询取得该区间各席别的真实可售数，再查车次车型支持的全部席别，并按车型席别集合补 `0`，避免售完席别永久触发“字段缺失”重装 [C7]。这个设计在验证报告中被描述为：没有库存的席别也保留为 `0` [C6]。写完后打点 `my12306.token.load` [C7]。\n\n这里需要指出一个证据口径差异：一般设计文档 `S2C-2` 把令牌桶描述为 `TICKET_AVAILABILITY_TOKEN_BUCKET + trainId`，Field 为 `出发_到达_席别` [C12]；但当前代码调用 `buildBucketKey(trainId, departure, arrival)` [C1][C3]，`loadBucket` 把席别作为 Hash field 写入 [C7]，验证报告给出的键示例也包含区间信息 [C6]。由于 `buildBucketKey` 的具体实现和 Lua 脚本内容未在证据中展开，无法仅凭现有 Context 裁决精确拼装方式，只能确认桶键由车次和区间共同决定、席别通常作为 Hash field 参与定位 [C1][C3][C7][C6]。\n\n## 三、取令牌、还令牌与降级策略\n\n取令牌流程体现了“准入过滤、异常放行”的取舍。`takeToken` 在桶未启用、入参为空或规范化后为空时直接返回 `true`，不拦截 [C3]。真正执行 Lua 后，返回 `1` 表示取令牌成功，打点 `my12306.token.pass` 并返回 `true`；返回 `0` 表示拒绝，打点 `my12306.token.reject` 并返回 `false`；如果装载后仍缺少席别，或者执行脚本抛异常，就记录告警、打点 `my12306.token.degrade`，然后降级放行返回 `true` [C3]。这说明桶的设计原则是“宁可偏松，不可误杀”：Redis 或桶状态异常时不能阻塞正常购票，最终由下游锁和 MySQL 条件更新兜底 [C3][C5]。\n\n还令牌流程与之对称。`returnToken` 在未启用或 `seatTypeCountMap` 为空时直接返回；否则规范化后执行 `RETURN_TOKEN_SCRIPT` [C1]。如果归还异常，会记录“余票令牌归还异常，保留偏松降级并等待 TTL 自愈”，并打点 `my12306.token.degrade` [C1]。归还时机不是随意调用，而是在回调链路中通过 `returnTokensAfterCommit` 处理：如果当前存在事务同步，就注册 `afterCommit`，在事务提交后归还；如果不存在事务同步，则立即执行 [C9]。这可以避免事务回滚后错误地把令牌加回去，说明令牌归还与事务边界被有意绑定 [C9]。\n\n## 四、并发协调与最终正确性\n\n令牌桶本身不是锁，也不是最终库存。真正本地占座由 `reserveLocally` 完成：先获取用户级 Redisson 锁，再按席别获取席别锁，然后在事务服务 `doPurchaseInTransaction` 中执行占座 [C10]。释放时逆序释放席别锁，再释放用户锁，并对计时上报异常做了保护，注释明确“Observability must never change reservation or token ownership semantics” [C10]。因此整体结构是：令牌桶在前置阶段做快速准入，锁和事务在后置阶段保证占座互斥与一致性 [C3][C5][C10]。\n\n最终事实源是 MySQL。类注释明确写道：Redis 余票令牌桶只负责购票准入，不是库存事实源；异常时始终降级放行，最终是否能占座仍由 MySQL 条件更新决定 [C5]。设计文档进一步把购票链路里的余票分成三份：MySQL `t_seat` 真实库存、Redis 站点余票缓存、Redis 令牌桶；三者载体、写入方、精度不同，因此天然会漂移 [C12]。站点余票缓存的加载逻辑在 `SeatMarginCacheLoader#load` 中：它使用 `TRAIN_STATION_REMAINING_TICKET + trainId_出发_到达` 作为 Hash 键，按路线批量写入各区间各席别余票，并有锁与回填逻辑 [C11]。购票成功或回调时会删除该站点余票缓存，删除失败则记录告警并等待缓存过期 [C4][C8]。这些证据说明令牌桶之外还存在一份近似余票缓存，令牌桶是更前置、更近似的一层副本 [C12]。\n\n## 五、证据边界\n\n当前证据可以确认余票桶的核心设计：Redis Hash、按车次与区间定位、席别为字段、懒加载完整装载、车型席别补零、TTL 自愈、Lua 脚本取还、异常降级放行、不是最终库存事实源、最终由 MySQL 条件更新和锁事务兜底 [C1][C3][C5][C6][C7][C10][C12]。但仍有关键细节无法从现有 Context 可靠确认：`buildBucketKey` 的具体拼装实现未展示；`take_token_from_bucket.lua` 与 `return_token_to_bucket.lua` 的脚本内容未提供；`SeatMapper` 最终条件更新的 SQL 未出现；令牌桶与站点余票缓存之间是否存在同步、回写或对账机制，证据中没有实现级说明 [C1][C3][C7][C11]。设计文档提到的“10 秒自愈机制”只出现在一般文档中，且被引用的第 8 节细节未进入证据，不能据此证明当前代码已经落地 [C12]。C2 和 C12 属于设计意图层面的文档，C6 是验证报告，只能证明其中明确记录的创建键、席别补零和 600 秒 TTL 测试结果，不能单独证明全部代码路径 [C2][C6][C12]。\n\n总体上，项目的余票桶是一个“区间化、席别化、懒加载、带 TTL、Lua 脚本取还、异常降级”的 Redis 准入桶。它的价值在于用近似快照挡住明显无票的请求，而不是替代 MySQL 库存；一旦桶缺失、过期或异常，系统优先保证可购票，再由锁、事务和 MySQL 条件更新承担最终正确性 [C3][C5][C7][C10]。",
+    "decision_source": "llm",
+    "error": null
+  },
+  "stage_usage": [
+    {
+      "stage": "evidence_planning",
+      "latency_ms": 12462.229900003877,
+      "decision_source": "llm",
+      "model": "deepseek-flash",
+      "reasoning_effort": "high",
+      "input_tokens": 476,
+      "output_tokens": 3039
+    },
+    {
+      "stage": "search_action_planning",
+      "latency_ms": 24248.782500013476,
+      "decision_source": "llm",
+      "model": "deepseek-flash",
+      "reasoning_effort": "low",
+      "input_tokens": 860,
+      "output_tokens": 1367
+    },
+    {
+      "stage": "evidence_retrieval",
+      "latency_ms": 4097.28190000169,
+      "decision_source": "policy",
+      "model": null,
+      "reasoning_effort": null,
+      "input_tokens": null,
+      "output_tokens": null
+    },
+    {
+      "stage": "coverage_check",
+      "latency_ms": 23406.886999990093,
+      "decision_source": "fallback",
+      "model": "deepseek-flash",
+      "reasoning_effort": "low",
+      "input_tokens": 11288,
+      "output_tokens": 3337
+    },
+    {
+      "stage": "answer_planning",
+      "latency_ms": 35713.790700014215,
+      "decision_source": "fallback",
+      "model": "deepseek-flash",
+      "reasoning_effort": "high",
+      "input_tokens": 7174,
+      "output_tokens": 8193
+    },
+    {
+      "stage": "grounded_draft",
+      "latency_ms": 30601.85549999005,
+      "decision_source": "llm",
+      "model": "deepseek-flash",
+      "reasoning_effort": "high",
+      "input_tokens": 6041,
+      "output_tokens": 6334
+    },
+    {
+      "stage": "answer_review",
+      "latency_ms": 45058.35229999502,
+      "decision_source": "llm",
+      "model": "deepseek-flash",
+      "reasoning_effort": "high",
+      "input_tokens": 9615,
+      "output_tokens": 11775
+    }
+  ],
+  "evidence_plan": {
+    "schema_version": 2,
+    "original_query": "详细解释项目的余票桶是如何设计的",
+    "requirements": [
+      {
+        "id": "ER1",
+        "target": "项目中余票桶的数据结构定义（如类、结构体、字段组成）及其在代码中的表示方式。",
+        "success_criteria": "证据必须包含定义余票桶的代码元素（类/结构体/接口）以及用于存储余票数量的字段或属性，如有标识字段也需体现。",
+        "priority": "CORE",
+        "temporal_scope": "CURRENT",
+        "source_requirement": "CODE"
+      },
+      {
+        "id": "ER2",
+        "target": "余票桶的创建时机、初始余票数量的确定方式以及初始化流程。",
+        "success_criteria": "证据必须包含创建余票桶的代码位置、触发条件以及初始余票数量的赋值来源或计算规则。",
+        "priority": "CORE",
+        "temporal_scope": "CURRENT",
+        "source_requirement": "CODE"
+      },
+      {
+        "id": "ER3",
+        "target": "从余票桶中扣减余票的操作流程及更新逻辑。",
+        "success_criteria": "证据必须包含扣减余票桶的核心方法或调用链路，以及扣减时的校验条件、更新操作和返回值处理。",
+        "priority": "CORE",
+        "temporal_scope": "CURRENT",
+        "source_requirement": "CODE"
+      },
+      {
+        "id": "ER4",
+        "target": "余票桶在高并发场景下的并发控制或一致性保障机制。",
+        "success_criteria": "证据必须包含对余票桶并发访问的保护措施或一致性保障机制的代码实现或配置说明。",
+        "priority": "CORE",
+        "temporal_scope": "CURRENT",
+        "source_requirement": "CODE"
+      },
+      {
+        "id": "ER5",
+        "target": "余票桶按何种维度进行拆分或组织（如按车次、日期、席别、区间等）。",
+        "success_criteria": "证据必须包含描述余票桶拆分维度或组织方式的代码、注释或设计文档，说明桶的粒度或分组依据。",
+        "priority": "SUPPORTING",
+        "temporal_scope": "CURRENT",
+        "source_requirement": "ANY"
+      },
+      {
+        "id": "ER6",
+        "target": "余票桶与持久化存储或主库存之间的数据同步、回写或对账机制。",
+        "success_criteria": "证据必须包含余票桶数据持久化或与主库存同步的代码逻辑，如同步触发条件、数据流向等。",
+        "priority": "SUPPORTING",
+        "temporal_scope": "CURRENT",
+        "source_requirement": "ANY"
+      }
+    ],
+    "decision_source": "llm"
+  },
+  "requirement_traces": [
+    {
+      "requirement_id": "ER1",
+      "target": "项目中余票桶的数据结构定义（如类、结构体、字段组成）及其在代码中的表示方式。",
+      "search_history": [
+        {
+          "action_id": "SA1",
+          "requirement_id": "ER1",
+          "round_index": 0,
+          "query": "余票桶 数据结构 类 字段 余票数量",
+          "source_scope": "CODE",
+          "reason": "寻找余票桶的类定义和关键字段",
+          "decision_source": "llm",
+          "error": null
+        }
+      ],
+      "evidence_ids": [
+        8875,
+        8874,
+        8873,
+        8876,
+        8842
+      ],
+      "coverage_history": [
+        {
+          "requirement_id": "ER1",
+          "state": "UNVERIFIED",
+          "evidence_ids": [
+            8875,
+            8874,
+            8873,
+            8876,
+            8842
+          ],
+          "missing_criteria": [
+            "证据必须包含定义余票桶的代码元素（类/结构体/接口）以及用于存储余票数量的字段或属性，如有标识字段也需体现。"
+          ],
+          "reason": "已有候选证据，但语义覆盖检查未能完成",
+          "decision_source": "fallback",
+          "check_error": "CoverageCheckError"
+        }
+      ],
+      "final_state": "UNVERIFIED"
+    },
+    {
+      "requirement_id": "ER2",
+      "target": "余票桶的创建时机、初始余票数量的确定方式以及初始化流程。",
+      "search_history": [
+        {
+          "action_id": "SA2",
+          "requirement_id": "ER2",
+          "round_index": 0,
+          "query": "余票桶 创建 初始化 初始余票 赋值",
+          "source_scope": "CODE",
+          "reason": "寻找余票桶创建和初始化的代码位置及初始值来源",
+          "decision_source": "llm",
+          "error": null
+        }
+      ],
+      "evidence_ids": [
+        8875,
+        8874,
+        8873,
+        8876,
+        8842
+      ],
+      "coverage_history": [
+        {
+          "requirement_id": "ER2",
+          "state": "UNVERIFIED",
+          "evidence_ids": [
+            8875,
+            8874,
+            8873,
+            8876,
+            8842
+          ],
+          "missing_criteria": [
+            "证据必须包含创建余票桶的代码位置、触发条件以及初始余票数量的赋值来源或计算规则。"
+          ],
+          "reason": "已有候选证据，但语义覆盖检查未能完成",
+          "decision_source": "fallback",
+          "check_error": "CoverageCheckError"
+        }
+      ],
+      "final_state": "UNVERIFIED"
+    },
+    {
+      "requirement_id": "ER3",
+      "target": "从余票桶中扣减余票的操作流程及更新逻辑。",
+      "search_history": [
+        {
+          "action_id": "SA3",
+          "requirement_id": "ER3",
+          "round_index": 0,
+          "query": "余票桶 扣减 余票 更新 方法",
+          "source_scope": "CODE",
+          "reason": "寻找扣减余票的核心方法及更新逻辑",
+          "decision_source": "llm",
+          "error": null
+        }
+      ],
+      "evidence_ids": [
+        8875,
+        8874,
+        8888,
+        8873,
+        8909
+      ],
+      "coverage_history": [
+        {
+          "requirement_id": "ER3",
+          "state": "UNVERIFIED",
+          "evidence_ids": [
+            8875,
+            8874,
+            8888,
+            8873,
+            8909
+          ],
+          "missing_criteria": [
+            "证据必须包含扣减余票桶的核心方法或调用链路，以及扣减时的校验条件、更新操作和返回值处理。"
+          ],
+          "reason": "已有候选证据，但语义覆盖检查未能完成",
+          "decision_source": "fallback",
+          "check_error": "CoverageCheckError"
+        }
+      ],
+      "final_state": "UNVERIFIED"
+    },
+    {
+      "requirement_id": "ER4",
+      "target": "余票桶在高并发场景下的并发控制或一致性保障机制。",
+      "search_history": [
+        {
+          "action_id": "SA4",
+          "requirement_id": "ER4",
+          "round_index": 0,
+          "query": "余票桶 并发 锁 一致性 控制",
+          "source_scope": "CODE",
+          "reason": "寻找余票桶并发控制相关代码",
+          "decision_source": "llm",
+          "error": null
+        }
+      ],
+      "evidence_ids": [
+        8875,
+        8874,
+        8873,
+        8902,
+        8884
+      ],
+      "coverage_history": [
+        {
+          "requirement_id": "ER4",
+          "state": "UNVERIFIED",
+          "evidence_ids": [
+            8875,
+            8874,
+            8873,
+            8902,
+            8884
+          ],
+          "missing_criteria": [
+            "证据必须包含对余票桶并发访问的保护措施或一致性保障机制的代码实现或配置说明。"
+          ],
+          "reason": "已有候选证据，但语义覆盖检查未能完成",
+          "decision_source": "fallback",
+          "check_error": "CoverageCheckError"
+        }
+      ],
+      "final_state": "UNVERIFIED"
+    },
+    {
+      "requirement_id": "ER5",
+      "target": "余票桶按何种维度进行拆分或组织（如按车次、日期、席别、区间等）。",
+      "search_history": [
+        {
+          "action_id": "SA5",
+          "requirement_id": "ER5",
+          "round_index": 0,
+          "query": "余票桶 拆分 维度 车次 日期 席别 区间",
+          "source_scope": "ANY",
+          "reason": "寻找余票桶按维度拆分的代码或设计文档",
+          "decision_source": "llm",
+          "error": null
+        }
+      ],
+      "evidence_ids": [
+        10991
+      ],
+      "coverage_history": [
+        {
+          "requirement_id": "ER5",
+          "state": "UNVERIFIED",
+          "evidence_ids": [
+            10991
+          ],
+          "missing_criteria": [
+            "证据必须包含描述余票桶拆分维度或组织方式的代码、注释或设计文档，说明桶的粒度或分组依据。"
+          ],
+          "reason": "已有候选证据，但语义覆盖检查未能完成",
+          "decision_source": "fallback",
+          "check_error": "CoverageCheckError"
+        }
+      ],
+      "final_state": "UNVERIFIED"
+    },
+    {
+      "requirement_id": "ER6",
+      "target": "余票桶与持久化存储或主库存之间的数据同步、回写或对账机制。",
+      "search_history": [
+        {
+          "action_id": "SA6",
+          "requirement_id": "ER6",
+          "round_index": 0,
+          "query": "余票桶 持久化 同步 主库存 回写 对账",
+          "source_scope": "ANY",
+          "reason": "寻找余票桶与持久化存储同步的机制",
+          "decision_source": "llm",
+          "error": null
+        }
+      ],
+      "evidence_ids": [
+        8875,
+        10318,
+        10092
+      ],
+      "coverage_history": [
+        {
+          "requirement_id": "ER6",
+          "state": "UNVERIFIED",
+          "evidence_ids": [
+            8875,
+            10318,
+            10092
+          ],
+          "missing_criteria": [
+            "证据必须包含余票桶数据持久化或与主库存同步的代码逻辑，如同步触发条件、数据流向等。"
+          ],
+          "reason": "已有候选证据，但语义覆盖检查未能完成",
+          "decision_source": "fallback",
+          "check_error": "CoverageCheckError"
+        }
+      ],
+      "final_state": "UNVERIFIED"
+    }
+  ],
+  "search_actions": [
+    {
+      "action_id": "SA1",
+      "requirement_id": "ER1",
+      "round_index": 0,
+      "query": "余票桶 数据结构 类 字段 余票数量",
+      "source_scope": "CODE",
+      "reason": "寻找余票桶的类定义和关键字段",
+      "decision_source": "llm",
+      "error": null
+    },
+    {
+      "action_id": "SA2",
+      "requirement_id": "ER2",
+      "round_index": 0,
+      "query": "余票桶 创建 初始化 初始余票 赋值",
+      "source_scope": "CODE",
+      "reason": "寻找余票桶创建和初始化的代码位置及初始值来源",
+      "decision_source": "llm",
+      "error": null
+    },
+    {
+      "action_id": "SA3",
+      "requirement_id": "ER3",
+      "round_index": 0,
+      "query": "余票桶 扣减 余票 更新 方法",
+      "source_scope": "CODE",
+      "reason": "寻找扣减余票的核心方法及更新逻辑",
+      "decision_source": "llm",
+      "error": null
+    },
+    {
+      "action_id": "SA4",
+      "requirement_id": "ER4",
+      "round_index": 0,
+      "query": "余票桶 并发 锁 一致性 控制",
+      "source_scope": "CODE",
+      "reason": "寻找余票桶并发控制相关代码",
+      "decision_source": "llm",
+      "error": null
+    },
+    {
+      "action_id": "SA5",
+      "requirement_id": "ER5",
+      "round_index": 0,
+      "query": "余票桶 拆分 维度 车次 日期 席别 区间",
+      "source_scope": "ANY",
+      "reason": "寻找余票桶按维度拆分的代码或设计文档",
+      "decision_source": "llm",
+      "error": null
+    },
+    {
+      "action_id": "SA6",
+      "requirement_id": "ER6",
+      "round_index": 0,
+      "query": "余票桶 持久化 同步 主库存 回写 对账",
+      "source_scope": "ANY",
+      "reason": "寻找余票桶与持久化存储同步的机制",
+      "decision_source": "llm",
+      "error": null
+    }
+  ],
+  "coverage_rounds": [
+    {
+      "round_index": 0,
+      "statuses": [
+        {
+          "requirement_id": "ER1",
+          "state": "UNVERIFIED",
+          "evidence_ids": [
+            8875,
+            8874,
+            8873,
+            8876,
+            8842
+          ],
+          "missing_criteria": [
+            "证据必须包含定义余票桶的代码元素（类/结构体/接口）以及用于存储余票数量的字段或属性，如有标识字段也需体现。"
+          ],
+          "reason": "已有候选证据，但语义覆盖检查未能完成",
+          "decision_source": "fallback",
+          "check_error": "CoverageCheckError"
+        },
+        {
+          "requirement_id": "ER2",
+          "state": "UNVERIFIED",
+          "evidence_ids": [
+            8875,
+            8874,
+            8873,
+            8876,
+            8842
+          ],
+          "missing_criteria": [
+            "证据必须包含创建余票桶的代码位置、触发条件以及初始余票数量的赋值来源或计算规则。"
+          ],
+          "reason": "已有候选证据，但语义覆盖检查未能完成",
+          "decision_source": "fallback",
+          "check_error": "CoverageCheckError"
+        },
+        {
+          "requirement_id": "ER3",
+          "state": "UNVERIFIED",
+          "evidence_ids": [
+            8875,
+            8874,
+            8888,
+            8873,
+            8909
+          ],
+          "missing_criteria": [
+            "证据必须包含扣减余票桶的核心方法或调用链路，以及扣减时的校验条件、更新操作和返回值处理。"
+          ],
+          "reason": "已有候选证据，但语义覆盖检查未能完成",
+          "decision_source": "fallback",
+          "check_error": "CoverageCheckError"
+        },
+        {
+          "requirement_id": "ER4",
+          "state": "UNVERIFIED",
+          "evidence_ids": [
+            8875,
+            8874,
+            8873,
+            8902,
+            8884
+          ],
+          "missing_criteria": [
+            "证据必须包含对余票桶并发访问的保护措施或一致性保障机制的代码实现或配置说明。"
+          ],
+          "reason": "已有候选证据，但语义覆盖检查未能完成",
+          "decision_source": "fallback",
+          "check_error": "CoverageCheckError"
+        },
+        {
+          "requirement_id": "ER5",
+          "state": "UNVERIFIED",
+          "evidence_ids": [
+            10991
+          ],
+          "missing_criteria": [
+            "证据必须包含描述余票桶拆分维度或组织方式的代码、注释或设计文档，说明桶的粒度或分组依据。"
+          ],
+          "reason": "已有候选证据，但语义覆盖检查未能完成",
+          "decision_source": "fallback",
+          "check_error": "CoverageCheckError"
+        },
+        {
+          "requirement_id": "ER6",
+          "state": "UNVERIFIED",
+          "evidence_ids": [
+            8875,
+            10318,
+            10092
+          ],
+          "missing_criteria": [
+            "证据必须包含余票桶数据持久化或与主库存同步的代码逻辑，如同步触发条件、数据流向等。"
+          ],
+          "reason": "已有候选证据，但语义覆盖检查未能完成",
+          "decision_source": "fallback",
+          "check_error": "CoverageCheckError"
+        }
+      ]
+    }
+  ],
+  "final_coverage": [
+    {
+      "requirement_id": "ER1",
+      "state": "UNVERIFIED",
+      "evidence_ids": [
+        8875,
+        8874,
+        8873,
+        8876,
+        8842
+      ],
+      "missing_criteria": [
+        "证据必须包含定义余票桶的代码元素（类/结构体/接口）以及用于存储余票数量的字段或属性，如有标识字段也需体现。"
+      ],
+      "reason": "已有候选证据，但语义覆盖检查未能完成",
+      "decision_source": "fallback",
+      "check_error": "CoverageCheckError"
+    },
+    {
+      "requirement_id": "ER2",
+      "state": "UNVERIFIED",
+      "evidence_ids": [
+        8875,
+        8874,
+        8873,
+        8876,
+        8842
+      ],
+      "missing_criteria": [
+        "证据必须包含创建余票桶的代码位置、触发条件以及初始余票数量的赋值来源或计算规则。"
+      ],
+      "reason": "已有候选证据，但语义覆盖检查未能完成",
+      "decision_source": "fallback",
+      "check_error": "CoverageCheckError"
+    },
+    {
+      "requirement_id": "ER3",
+      "state": "UNVERIFIED",
+      "evidence_ids": [
+        8875,
+        8874,
+        8888,
+        8873,
+        8909
+      ],
+      "missing_criteria": [
+        "证据必须包含扣减余票桶的核心方法或调用链路，以及扣减时的校验条件、更新操作和返回值处理。"
+      ],
+      "reason": "已有候选证据，但语义覆盖检查未能完成",
+      "decision_source": "fallback",
+      "check_error": "CoverageCheckError"
+    },
+    {
+      "requirement_id": "ER4",
+      "state": "UNVERIFIED",
+      "evidence_ids": [
+        8875,
+        8874,
+        8873,
+        8902,
+        8884
+      ],
+      "missing_criteria": [
+        "证据必须包含对余票桶并发访问的保护措施或一致性保障机制的代码实现或配置说明。"
+      ],
+      "reason": "已有候选证据，但语义覆盖检查未能完成",
+      "decision_source": "fallback",
+      "check_error": "CoverageCheckError"
+    },
+    {
+      "requirement_id": "ER5",
+      "state": "UNVERIFIED",
+      "evidence_ids": [
+        10991
+      ],
+      "missing_criteria": [
+        "证据必须包含描述余票桶拆分维度或组织方式的代码、注释或设计文档，说明桶的粒度或分组依据。"
+      ],
+      "reason": "已有候选证据，但语义覆盖检查未能完成",
+      "decision_source": "fallback",
+      "check_error": "CoverageCheckError"
+    },
+    {
+      "requirement_id": "ER6",
+      "state": "UNVERIFIED",
+      "evidence_ids": [
+        8875,
+        10318,
+        10092
+      ],
+      "missing_criteria": [
+        "证据必须包含余票桶数据持久化或与主库存同步的代码逻辑，如同步触发条件、数据流向等。"
+      ],
+      "reason": "已有候选证据，但语义覆盖检查未能完成",
+      "decision_source": "fallback",
+      "check_error": "CoverageCheckError"
+    }
+  ],
+  "evidence_package_state": "PARTIAL"
+}

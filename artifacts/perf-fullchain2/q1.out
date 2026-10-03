@@ -1,0 +1,1879 @@
+Question:
+详细解释当前购票占座的数据一致性是如何保证的
+
+Evidence Plan: llm
+  ER1. 当前项目中购票与占座请求的完整处理链路，包括入口、核心服务方法与最终落库的调用顺序 — CODE
+  ER2. 占座写入时对座位或票量状态的并发控制手段 — CODE
+  ER3. 购票占座涉及的数据写入范围与其事务边界 — CODE
+  ER4. 占座失败、超时或取消时的一致性兜底处理 — CODE
+  ER5. 项目文档中对购票占座数据一致性方案的设计约定 — DOCUMENT
+
+Route: MIXED (rules)
+Sufficiency: enough
+Requirements: ER1 SATISFIED, ER2 SATISFIED, ER3 SATISFIED, ER4 PARTIAL, ER5 SATISFIED
+Retries: 0
+
+Answer:
+## 一句话结论：一致性由一条写链路串起四份数据
+
+**结论先给**：当前购票占座的一致性不是靠某个单点机制（一把锁、一个事务）撑起来的，而是靠一条被串行化的写链路，加上一条不变量——“有占用必然对应一笔订单，本次请求没成功就必须不留下任何占用” [E17]。
+
+需要同时对上的其实是四份数据：座位状态、余票数量、车票记录、订单结果，设计文档把它们画成一条互相牵连的关系链 [E16]。但这四者里只有一个锚点：余票不是独立数据源，它是“可售座位”的计数派生出来的展示口径 [E17]；支付结果与取消结果反过来作用于座位状态，再由座位状态决定可售性和余票展示 [E18]。因此真正必须对齐的是座位状态与车票记录、订单结果之间的一致，余票只是它的投影。
+
+保证手段分三层 [E2]：入口先用令牌桶拦掉无票请求，取不到令牌直接失败；接着在占用任一把分布式锁之前完成登录与乘客归属校验，把非法请求挡在锁外；核心段落在锁内执行 `reserveLocally` 完成占座与车票记录写入，提交后才把 `reservationCommitted` 置为真，然后才做缓存失效、远程创建订单这些周边动作。
+
+失败路径同样是这条链路的一部分：订单被拒绝时走 `compensateKnownFailure` 释放座位，而令牌只有在本地事务未提交时才在 `finally` 中归还，避免成功归还与失败归还各做一次 [E2]。释放侧则靠“只把已锁定改成可售”这一条件堵死超卖 [E18]。
+
+## 为什么占座是个一致性问题：四条关系与三道裂缝
+
+上面这条结论之所以成立，前提是占座本身不是单条 SQL 的原子性问题。假设占座就是一句 `UPDATE seat SET status='已锁定' WHERE ...`，看起来它天然原子，写完了不就一致了吗？要看清问题在哪，得先看这一次请求到底牵扯了多少份数据。项目的设计文档把这归结成四条互相牵制的关系：座位状态 ↔ 余票、座位占用 ↔ 购票结果、购票结果 ↔ 订单结果，以及支付/取消结果反过来决定座位状态 [E17][E18]。关系一旦成网，单条 SQL 的原子性就不再等于业务的一致性——它只锁住了网里的一个节点。
+
+第一道裂缝出现在写集合本身。[E16] 的故障表把“座位分配成功但订单创建失败”列为需要原子性的操作，即“占座 + 写车票记录 + 订单创建”三者的结果一致 [E16]。在 ticket 库内部，座位状态与车票记录由同一个本地事务承担：`PurchaseTicketTxService` 的类注释写明“本事务只操作 ticket 数据库” [E10]，因此这两者在同一事务里同生同死。但订单创建并不在这条事务里——这就是第二道裂缝。
+
+第二道裂缝是事务边界管不到的地方。同一处注释紧接着说“远程调用留在编排层，避免网络等待延长行锁持有时间” [E10]。这句话说明取舍的来由：订单创建、通知下游是远程调用，本地数据库事务覆盖不到它们；若为了表面的“一起成功”把它们塞进事务，行锁就要跨越网络等待被持有，占座链路的吞吐会被下游抖动直接拖住。于是“一致性”必须拆成“本地事务保证什么”和“事务提交后靠什么补偿”两件事。
+
+第三道裂缝在余票。余票不是独立事实，它是可售座位计数的派生量 [E17]，派生量可以被缓存，缓存就可能落后于数据库。E5 里占座提交后删除余票缓存，删除抛出异常时只记 warn、等 key 自然过期 [E5]——这恰恰说明这类不一致是被有意容忍的，因为它的后果只是少卖。真正不能容忍的是另一头：[E18] 的对照表把错误从“余票缓存未失效（少卖）”一路排到“座位被错误改成可售（超卖）”，并强调设计重点就是把这最后一行彻底堵死 [E18]。所以三道裂缝的处置并不对称：前两道要靠锁序与事务边界收窄，第三道则必须分成“可容忍的少卖”和“绝不能发生的超卖”来分别设防。
+
+## 从请求到落库：占座写链路的执行顺序
+
+理解了三道裂缝之后，再看一次请求实际如何穿过这条写链路。把这条链路在脑内走一遍，最省力的方式是把它看成一条“漏斗 + 临界区 + 事务”三段式：并发先被挡在门外，再穿过两把分布式锁，再进入一层本地事务，最后才处理那些即便失败也无伤大雅的周边动作。入口是 [E1] 声明的 `PurchaseTicketService.purchaseTickets`，实现落在 [E2]。
+
+进入方法后第一件事不是查数据，而是跑责任链 `TRAIN_PURCHASE_TICKET_FILTER` 做前置过滤，随后才校验 `UserContext` 里的登录态，并限制单笔订单乘车人不超过 5 位，再按席别聚合出 `seatTypeCounts` [E2]。**限流紧跟在参数准备之后**：以 `trainId + departure + arrival + seatTypeCounts` 为键做令牌桶 `takeToken`，拿不到令牌直接抛“列车站点已无余票”，根本进不了后面的锁与事务 [E2]。这一步的职责很明确——把并发量削到写链路能承受的规模之前，不让请求白白去争锁。
+
+真正的临界区在 `reserveLocally` [E4]。注意加锁顺序：先按 `username + trainId` 拿用户锁，锁住“同一个人对同一车次”的并发；再遍历 `seatTypeCounts.keySet()`，对本次涉及的每个席别逐把获取席别锁 [E4]。两把锁都覆盖了整个占座写过程，释放时席别锁逆序、用户锁最后，都在 `finally` 里兜底 [E4]。顺带一提，`loadPassengers` 的乘车人归属校验发生在拿锁**之前** [E2]，这说明设计上刻意不让远程校验的耗时空转在分布式锁里面。
+
+锁内调用 `purchaseTicketTxService.doPurchaseInTransaction`，方法体带 `@Transactional(rollbackFor = Exception.class)` [E3]，这就是事务真正的起点。事务内依次是：加载车次、按出发到达查区间关系、把乘客按席别分组、由 `SeatAllocator` 选座；随后对选中的座位执行条件更新，只把 `AVAILABLE` 改成 `LOCKED`，并用 `affectedRows != seats.size()` 判定是否被别人抢先 [E3]；最后逐条插入 `TicketDO`，组装订单创建请求与补偿请求返回。因此事务提交的那一刻，落库的只有“座位被占 + 车票已写”这两件本地事实，订单还没创建。[E10] 的类注释把这条边界说得很直白：本事务只操作 ticket 库，远程调用留在编排层，避免网络等待延长行锁持有时间。
+
+事务返回后，控制权回到编排层，剩下的动作都在事务之外：[E5] 的余票缓存失效发生在提交之后，而且删除失败只记 warn、靠缓存过期兜底，不会被反灌成占座失败；接着才远程 `createOrder`，失败则走 `compensateKnownFailure` [E2]。`finally` 里还有一处所有权约定：只有本地占座未提交时才归还令牌，提交之后令牌的归还由回调独占 [E2]。
+
+把这串顺序连起来看，锁边界与事务边界并不重合——锁包住了事务和提交，事务只包住本地写；越是可失败、可重试的动作，越被推到临界区之外。
+
+## 原子性与时序：事务边界、锁粒度和提交后动作
+
+执行顺序给出的是动作先后，但一致性还取决于边界画在哪里。原子性由 ticket 库的本地事务提供，而不是分布式事务，而且这个事务边界是被刻意收窄的。
+
+先看锁是怎么进来的。[E4] 的 `reserveLocally` 先取用户锁（用户名 × 车次），再按 `seatTypeCounts` 的 key 逐个取席别锁（车次 × 席别），全部拿到后才进入临界区，`finally` 里按相反顺序先释放席别锁、再释放用户锁。这里要把两层职责分开：锁解决的是「并发进入」——同一用户同一车次串行、同一席别串行，不同席别之间可以并行；事务解决的是「写入原子」。而 [E10] 的类注释把边界写得很直白：调用方已经完成校验并持有用户锁和全部席别锁，本事务只操作 ticket 数据库，远程调用留在编排层，避免网络等待延长行锁持有时间。原因在于事务存活期里被持有的是数据库行锁，一次慢 RPC 的几秒钟会被放大成同一席别上所有请求的等待。所以把远程调用挤出事务，不是代码整洁问题，而是把「锁 + 事务」的临界区压到最短。
+
+临界区内部的动作可以概括成一次状态机推进。[E11] 中 `seatStatus` 取值为 0 可售、1 已锁定、2 已出售，占座就是把 0 改成 1。关键在于更新的前置条件：回滚时只允许把 1 改回 0，绝不允许把 2 改回 0。[E18] 的一致性对照表把这一条单独标出——座位被错误改成可售，对外影响是超卖，修法是「靠只把已锁定改成可售的条件杜绝」。这说明防超卖靠的是更新语句里带原状态的条件，而不是某段 if 判断；只要 WHERE 带上原状态，并发或重试都无法把已售座位释放回可售。这条条件更新正是「有占用必有订单、没成功必无占用」这个不变量在写入侧的落点。
+
+再看提交之后的动作，它们必须发生在事务成功提交之后，否则回滚会把副作用留在外面。[E12] 的延迟关单消息在 `send` 里先判断是否处于事务同步中，是则注册 `afterCommit` 再发，否则直接发；[E8] 的令牌归还走同样路数：先判断 `TransactionSynchronizationManager.isSynchronizationActive()`，有同步就注册 `afterCommit`，没有才立即执行。为什么必须这样切？如果关单消息在提交前发出而事务随后回滚，订单并不存在，消费者却会去关一张不存在的单；如果令牌提前归还而座位占用没落库，令牌就在描述一个并不存在的可售能力，后续请求会按错误余量放行。
+
+跨服务这一段没有分布式事务。[E18] 给出的修法是补偿重推、重试回滚、删除缓存 key、用条件更新堵住超卖——也就是本地事务保证 ticket 库内部原子，跨服务一致性交给幂等 + 补偿 + 延迟消息。这是有意的取舍：边界之内能拿到强一致，边界之外只能做到最终一致。至于补偿重试的具体次数与幂等键如何设计，从现有证据无法确认。
+
+## 失败、超时与取消：兜底路径和它的边界
+
+正常路径之外，失败、超时与取消才是这条写链路一致性的压力测试。正常状态下，占座链路在本地事务提交时落库的是“座位被占 + 车票已写”，订单此刻还不存在；E12 的 afterCommit 语义侧面印证了这一点——延迟关单消息只在事务同步激活时才注册到提交之后发送，无事务则直接发 [E12]。所以“有占用必有订单”不是由那次本地提交兑现的，而是靠提交之后的建单动作加上失败时的补偿共同维持的最终效果。故障，就是从提交之后的这段链路上某一环断掉开始的。
+
+第一类故障：本地占座事务已提交，但远程建单明确失败。此时状态是座位被占、车票已写、订单不存在，业务上正确的结局是整单失败、座位回到可售。系统做的是同步兜底：compensateKnownFailure 调用 ticketCallbackService.cancelCallback(...) 释放座位，成功则 my12306.purchase.compensation.success 计数加一；一旦抛错，计数打到 my12306.purchase.compensation.fail，日志写明“等待恢复任务” [E14]。这说明补偿本身是一次尽力而为的尝试而非保证——它把“没补成功”这件事转成显式的待恢复信号，由外部恢复任务接手。还要注意，cancelCallback 在这里只是接口声明 [E13]，它是否幂等、被重复调用会不会二次释放，从现有证据看不出来。
+
+第二类故障：建单成功但用户不付款或主动取消。这条路径不靠同步补偿，而靠延迟消息推进。关单消息在事务提交时才真正投递（afterCommit 里执行 doSend，若当前没有事务同步则直接发）[E12]，这避免了“订单还没落库就先去关单”的时序倒置。超时触发关单后，订单侧先按 orderSn 查订单明细，若明细为空则只打日志告警、不发起远程调用 [E15]；有明细才把车厢号、座位号、席别组装成 OrderCancelSeatRemoteDTO，远程调 ticketRemoteService.cancelCallback 回滚座位，返回码非成功或抛异常都统一转成 ServiceException 并记录“等待重投” [E15]。因此超时回滚同样依赖重投：一次失败不会让座位永久丢失，但也不会当场回滚。
+
+第三类故障最轻：主流程已提交，只是余票缓存删不掉。evictRemainingTicketCacheSafely 捕获 RuntimeException，只 warn 并注明“等待缓存过期”，不向上抛 [E5]。也就是说余票这个展示口径允许短暂偏旧，靠 TTL 收敛——这和“余票由座位状态派生”的定位是自洽的，缓存不属于一致性义务的承担者。
+
+边界必须说清。以上证据能证明的是三条兜底动作存在及其语义：同步补偿加计数、提交后延迟关单加远程回滚加重投、缓存删除失败降级。证明不了的是更难的重复性问题：历史文档把“服务调用超时但订单实际已创建”和“用户重复提交导致部分数据重复”统一归到幂等键/唯一键与防重提交之下，并标注为“后续技术问题” [E16]——这是计划口径，不是已实现事实。所以只能给条件判断：如果幂等键与唯一约束尚未落地，那么超时重试路径上就存在重复占座的空间，补偿与关单也可能被重复触发，这属于需要进一步确认的区域。换言之，当前兜底保证的是“占用最终会被释放”，而不是“绝不重复占用”。
+
+总体来看，当前购票占座的数据一致性靠的是一条被锁串行化的写链路：它守住“有占用必有订单、没成功必无占用”的不变量，把强一致收在 ticket 库本地事务之内，把跨服务一致性交给提交后动作、补偿、延迟消息与重投，并明确容忍余票缓存的短暂偏旧。
+
+Explanation Strategy:
+EXECUTION_FLOW
+
+Mental Model:
+购票占座的一致性 = 一条被锁串行化的写链路（校验限流 → 用户锁/席别锁 → 本地事务里条件更新座位状态并写车票 → 提交后才做周边动作 → 失败补偿与超时回滚），它守住的不变量是“有占用必有订单、没成功必无占用”，而余票只是座位状态派生出来的展示口径。
+
+Context:
+  Workspace evidence: 18
+  Bound evidence: 16
+  S1 view: 4
+  S2 view: 5
+  S3 view: 6
+  S4 view: 6
+  S5 view: 7
+
+Generation:
+  5 sections
+  1 targeted revision
+  2 review issues
+
+Sources:
+[E17] 0-历史文档/2-车票模块文档/P1购票与选座功能分析与设计（教学版）.md > P1 购票与选座功能分析与设计（教学版） > 七、横向专题：并发、缓存与一致性 > 7.4 一致性：四条核心关系
+[E16] 0-历史文档/2-车票模块文档/P1——购票写链路功能详细分析文档.md > 《P1——购票写链路功能详细分析文档》 > 八、数据一致性问题
+[E18] 0-历史文档/3-订单与支付模块文档/P2支付与超时取消功能分析与设计（教学版）.md > P2 支付与超时取消功能分析与设计（教学版） > 七、横向专题：幂等、事务、缓存与一致性 > 7.4 一致性：一张对照表
+[E2] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/impl/PurchaseTicketServiceImpl.java:64-116 — PurchaseTicketServiceImpl#purchaseTickets
+[E10] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/impl/PurchaseTicketTxService.java:51-197 — PurchaseTicketTxService#PurchaseTicketTxService
+[E5] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/impl/PurchaseTicketServiceImpl.java:214-222 — PurchaseTicketServiceImpl#evictRemainingTicketCacheSafely
+[E1] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/PurchaseTicketService.java:11-11 — PurchaseTicketService#purchaseTickets
+[E4] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/impl/PurchaseTicketServiceImpl.java:118-154 — PurchaseTicketServiceImpl#reserveLocally
+[E3] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/impl/PurchaseTicketTxService.java:69-172 — PurchaseTicketTxService#doPurchaseInTransaction
+[E11] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/dao/entity/SeatDO.java:9-33 — SeatDO#SeatDO
+[E12] services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/mq/OrderDelayCloseProducer.java:41-52 — OrderDelayCloseProducer#send
+[E8] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/impl/TicketCallbackServiceImpl.java:116-131 — TicketCallbackServiceImpl#returnTokensAfterCommit
+[E14] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/impl/PurchaseTicketServiceImpl.java:203-212 — PurchaseTicketServiceImpl#compensateKnownFailure
+[E13] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/TicketCallbackService.java:21-21 — TicketCallbackService#cancelCallback
+[E15] services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/service/impl/OrderServiceImpl.java:312-342 — OrderServiceImpl#rollbackTicketSeats
+
+Trace:
+{
+  "route": {
+    "query_type": "MIXED",
+    "decision_source": "rules",
+    "reason": "union of evidence source requirements",
+    "code_signals": [],
+    "doc_signals": []
+  },
+  "rounds": [
+    {
+      "round_index": 0,
+      "retrieval_query": "购票占座 请求处理链路 入口方法 核心服务方法 调用顺序 数据写入 | 占座 写入 并发控制 锁 粒度 原子操作 CAS 版本号 状态条件更新 数据库行锁 唯一约束 | 占座 数据写入 范围 事务边界 表 集合 实体 事务传播 提交时机 非单机事务 | 占座 失败 超时 取消 回滚 释放 补偿 重复占座 超卖 超占 防护 | 购票占座 数据一致性 设计约定 文档",
+      "retrieval_query_type": "MIXED",
+      "selected_chunks": [
+        {
+          "citation_label": "E1",
+          "chunk_id": 8926,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/PurchaseTicketService.java",
+          "identity": "PurchaseTicketService#purchaseTickets",
+          "retrieval_rank": 1,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1"
+          ]
+        },
+        {
+          "citation_label": "E2",
+          "chunk_id": 8883,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/impl/PurchaseTicketServiceImpl.java",
+          "identity": "PurchaseTicketServiceImpl#purchaseTickets",
+          "retrieval_rank": 2,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1"
+          ]
+        },
+        {
+          "citation_label": "E3",
+          "chunk_id": 8892,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/impl/PurchaseTicketTxService.java",
+          "identity": "PurchaseTicketTxService#doPurchaseInTransaction",
+          "retrieval_rank": 3,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1",
+            "ER3"
+          ]
+        },
+        {
+          "citation_label": "E4",
+          "chunk_id": 8884,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/impl/PurchaseTicketServiceImpl.java",
+          "identity": "PurchaseTicketServiceImpl#reserveLocally",
+          "retrieval_rank": 4,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1",
+            "ER2"
+          ]
+        },
+        {
+          "citation_label": "E5",
+          "chunk_id": 8888,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/impl/PurchaseTicketServiceImpl.java",
+          "identity": "PurchaseTicketServiceImpl#evictRemainingTicketCacheSafely",
+          "retrieval_rank": 5,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1"
+          ]
+        },
+        {
+          "citation_label": "E8",
+          "chunk_id": 8902,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/impl/TicketCallbackServiceImpl.java",
+          "identity": "TicketCallbackServiceImpl#returnTokensAfterCommit",
+          "retrieval_rank": 4,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER2",
+            "ER3"
+          ]
+        },
+        {
+          "citation_label": "E9",
+          "chunk_id": 8666,
+          "source_type": "CODE",
+          "file_path": "services/pay-services/src/main/java/edu/swu/fcj/my12306/biz/payservice/controller/PayController.java",
+          "identity": "PayController#mockCashier",
+          "retrieval_rank": 5,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER2"
+          ]
+        },
+        {
+          "citation_label": "E10",
+          "chunk_id": 8891,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/impl/PurchaseTicketTxService.java",
+          "identity": "PurchaseTicketTxService#PurchaseTicketTxService",
+          "retrieval_rank": 1,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER3"
+          ]
+        },
+        {
+          "citation_label": "E11",
+          "chunk_id": 8797,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/dao/entity/SeatDO.java",
+          "identity": "SeatDO#SeatDO",
+          "retrieval_rank": 3,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER3"
+          ]
+        },
+        {
+          "citation_label": "E12",
+          "chunk_id": 8600,
+          "source_type": "CODE",
+          "file_path": "services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/mq/OrderDelayCloseProducer.java",
+          "identity": "OrderDelayCloseProducer#send",
+          "retrieval_rank": 5,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER3"
+          ]
+        },
+        {
+          "citation_label": "E13",
+          "chunk_id": 8932,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/TicketCallbackService.java",
+          "identity": "TicketCallbackService#cancelCallback",
+          "retrieval_rank": 1,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER4"
+          ]
+        },
+        {
+          "citation_label": "E14",
+          "chunk_id": 8887,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/impl/PurchaseTicketServiceImpl.java",
+          "identity": "PurchaseTicketServiceImpl#compensateKnownFailure",
+          "retrieval_rank": 2,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER4"
+          ]
+        },
+        {
+          "citation_label": "E15",
+          "chunk_id": 8621,
+          "source_type": "CODE",
+          "file_path": "services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/service/impl/OrderServiceImpl.java",
+          "identity": "OrderServiceImpl#rollbackTicketSeats",
+          "retrieval_rank": 3,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER4"
+          ]
+        },
+        {
+          "citation_label": "E16",
+          "chunk_id": 9501,
+          "source_type": "DOCUMENT",
+          "file_path": "0-历史文档/2-车票模块文档/P1——购票写链路功能详细分析文档.md",
+          "identity": "《P1——购票写链路功能详细分析文档》 > 八、数据一致性问题",
+          "retrieval_rank": 1,
+          "source_role": "HISTORICAL_PLAN",
+          "temporal_status": "HISTORICAL",
+          "authority_priority": 35,
+          "sub_question_ids": [
+            "ER5"
+          ]
+        },
+        {
+          "citation_label": "E17",
+          "chunk_id": 9626,
+          "source_type": "DOCUMENT",
+          "file_path": "0-历史文档/2-车票模块文档/P1购票与选座功能分析与设计（教学版）.md",
+          "identity": "P1 购票与选座功能分析与设计（教学版） > 七、横向专题：并发、缓存与一致性 > 7.4 一致性：四条核心关系",
+          "retrieval_rank": 2,
+          "source_role": "HISTORICAL_PLAN",
+          "temporal_status": "HISTORICAL",
+          "authority_priority": 35,
+          "sub_question_ids": [
+            "ER5"
+          ]
+        },
+        {
+          "citation_label": "E18",
+          "chunk_id": 10014,
+          "source_type": "DOCUMENT",
+          "file_path": "0-历史文档/3-订单与支付模块文档/P2支付与超时取消功能分析与设计（教学版）.md",
+          "identity": "P2 支付与超时取消功能分析与设计（教学版） > 七、横向专题：幂等、事务、缓存与一致性 > 7.4 一致性：一张对照表",
+          "retrieval_rank": 3,
+          "source_role": "HISTORICAL_PLAN",
+          "temporal_status": "HISTORICAL",
+          "authority_priority": 35,
+          "sub_question_ids": [
+            "ER5"
+          ]
+        }
+      ],
+      "sufficiency": {
+        "enough": true,
+        "missing_aspects": [
+          {
+            "source_type": "CODE",
+            "description": "尚缺占座失败/超时场景下重复占座与幂等（防重提交、唯一键或幂等键）防护的实现证据",
+            "sub_question_id": "ER4"
+          },
+          {
+            "source_type": "CODE",
+            "description": "尚缺超占/超卖防护在失败恢复路径中的直接证据",
+            "sub_question_id": "ER4"
+          }
+        ],
+        "reason": "all CORE evidence requirements are satisfied",
+        "decision_source": "llm",
+        "statuses": [
+          {
+            "sub_question_id": "ER1",
+            "satisfied": true,
+            "reason": "证据给出接口入口purchaseTickets、实现编排、reserveLocally加锁后调用doPurchaseInTransaction落库的完整顺序，足以还原链路。",
+            "state": "SATISFIED"
+          },
+          {
+            "sub_question_id": "ER2",
+            "satisfied": true,
+            "reason": "证据含Redisson用户锁与席别锁的粒度/作用对象，以及seat_status=AVAILABLE条件更新并校验affectedRows的原子控制。",
+            "state": "SATISFIED"
+          },
+          {
+            "sub_question_id": "ER3",
+            "satisfied": true,
+            "reason": "证据列出t_seat状态更新与t_ticket插入，并说明处于同一@Transactional本地事务、远程调用留在编排层。",
+            "state": "SATISFIED"
+          },
+          {
+            "sub_question_id": "ER4",
+            "satisfied": false,
+            "reason": "证据含cancelCallback补偿、订单侧回滚座位，但缺重复占座与幂等防护证据。",
+            "state": "PARTIAL"
+          },
+          {
+            "sub_question_id": "ER5",
+            "satisfied": true,
+            "reason": "项目文档明确描述购票占座的一致性关系、约束与保证手段，可据以比对实现。",
+            "state": "SATISFIED"
+          }
+        ]
+      },
+      "rewrite": null,
+      "rewrite_error": null,
+      "rewrites": []
+    }
+  ],
+  "retry_count": 0,
+  "final_sufficiency": {
+    "enough": true,
+    "missing_aspects": [
+      {
+        "source_type": "CODE",
+        "description": "尚缺占座失败/超时场景下重复占座与幂等（防重提交、唯一键或幂等键）防护的实现证据",
+        "sub_question_id": "ER4"
+      },
+      {
+        "source_type": "CODE",
+        "description": "尚缺超占/超卖防护在失败恢复路径中的直接证据",
+        "sub_question_id": "ER4"
+      }
+    ],
+    "reason": "all CORE evidence requirements are satisfied",
+    "decision_source": "llm",
+    "statuses": [
+      {
+        "sub_question_id": "ER1",
+        "satisfied": true,
+        "reason": "证据给出接口入口purchaseTickets、实现编排、reserveLocally加锁后调用doPurchaseInTransaction落库的完整顺序，足以还原链路。",
+        "state": "SATISFIED"
+      },
+      {
+        "sub_question_id": "ER2",
+        "satisfied": true,
+        "reason": "证据含Redisson用户锁与席别锁的粒度/作用对象，以及seat_status=AVAILABLE条件更新并校验affectedRows的原子控制。",
+        "state": "SATISFIED"
+      },
+      {
+        "sub_question_id": "ER3",
+        "satisfied": true,
+        "reason": "证据列出t_seat状态更新与t_ticket插入，并说明处于同一@Transactional本地事务、远程调用留在编排层。",
+        "state": "SATISFIED"
+      },
+      {
+        "sub_question_id": "ER4",
+        "satisfied": false,
+        "reason": "证据含cancelCallback补偿、订单侧回滚座位，但缺重复占座与幂等防护证据。",
+        "state": "PARTIAL"
+      },
+      {
+        "sub_question_id": "ER5",
+        "satisfied": true,
+        "reason": "项目文档明确描述购票占座的一致性关系、约束与保证手段，可据以比对实现。",
+        "state": "SATISFIED"
+      }
+    ]
+  },
+  "stop_reason": "ready",
+  "plan": null,
+  "sub_question_traces": [
+    {
+      "sub_question_id": "ER1",
+      "question": "当前项目中购票与占座请求的完整处理链路，包括入口、核心服务方法与最终落库的调用顺序",
+      "purpose": "证据需给出购票占座链路中实际存在的入口方法/接口及其向下调用的方法或组件名称、调用顺序，足以还原一次占座从请求到数据写入的完整路径",
+      "query_type": "CODE",
+      "selected_chunks": [
+        {
+          "citation_label": "C1",
+          "chunk_id": 8926,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/PurchaseTicketService.java",
+          "identity": "PurchaseTicketService#purchaseTickets",
+          "retrieval_rank": 1,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1"
+          ]
+        },
+        {
+          "citation_label": "C6",
+          "chunk_id": 8883,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/impl/PurchaseTicketServiceImpl.java",
+          "identity": "PurchaseTicketServiceImpl#purchaseTickets",
+          "retrieval_rank": 6,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1"
+          ]
+        },
+        {
+          "citation_label": "C7",
+          "chunk_id": 8884,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/impl/PurchaseTicketServiceImpl.java",
+          "identity": "PurchaseTicketServiceImpl#reserveLocally",
+          "retrieval_rank": 7,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1",
+            "ER2"
+          ]
+        },
+        {
+          "citation_label": "C8",
+          "chunk_id": 8892,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/impl/PurchaseTicketTxService.java",
+          "identity": "PurchaseTicketTxService#doPurchaseInTransaction",
+          "retrieval_rank": 8,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1",
+            "ER3"
+          ]
+        }
+      ]
+    },
+    {
+      "sub_question_id": "ER2",
+      "question": "占座写入时对座位或票量状态的并发控制手段",
+      "purpose": "证据需包含占座写操作处对共享状态的并发控制实现，明确其具体形式（例如锁的粒度与范围、原子操作或比较交换、版本号或状态条件更新、数据库行锁或唯一约束等）以及作用对象",
+      "query_type": "CODE",
+      "selected_chunks": [
+        {
+          "citation_label": "C3",
+          "chunk_id": 8697,
+          "source_type": "CODE",
+          "file_path": "services/pay-services/src/main/java/edu/swu/fcj/my12306/biz/payservice/service/channel/PayChannelHandler.java",
+          "identity": "PayChannelHandler#buildCashierUrl",
+          "retrieval_rank": 2,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER2"
+          ]
+        },
+        {
+          "citation_label": "C7",
+          "chunk_id": 8884,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/impl/PurchaseTicketServiceImpl.java",
+          "identity": "PurchaseTicketServiceImpl#reserveLocally",
+          "retrieval_rank": 7,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1",
+            "ER2"
+          ]
+        },
+        {
+          "citation_label": "C10",
+          "chunk_id": 8691,
+          "source_type": "CODE",
+          "file_path": "services/pay-services/src/main/java/edu/swu/fcj/my12306/biz/payservice/service/channel/MockPayChannelHandler.java",
+          "identity": "MockPayChannelHandler#buildCashierUrl",
+          "retrieval_rank": 10,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER2"
+          ]
+        }
+      ]
+    },
+    {
+      "sub_question_id": "ER3",
+      "question": "购票占座涉及的数据写入范围与其事务边界",
+      "purpose": "证据需列出占座过程中被写入或更新的数据对象（表、集合或实体），并说明这些写入是否处于同一事务、事务的传播与提交时机，或是否采用非单机事务机制来保证整体一致",
+      "query_type": "CODE",
+      "selected_chunks": [
+        {
+          "citation_label": "C4",
+          "chunk_id": 8891,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/impl/PurchaseTicketTxService.java",
+          "identity": "PurchaseTicketTxService#PurchaseTicketTxService",
+          "retrieval_rank": 3,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER3"
+          ]
+        },
+        {
+          "citation_label": "C8",
+          "chunk_id": 8892,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/impl/PurchaseTicketTxService.java",
+          "identity": "PurchaseTicketTxService#doPurchaseInTransaction",
+          "retrieval_rank": 8,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1",
+            "ER3"
+          ]
+        },
+        {
+          "citation_label": "C11",
+          "chunk_id": 8797,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/dao/entity/SeatDO.java",
+          "identity": "SeatDO#SeatDO",
+          "retrieval_rank": 11,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER3"
+          ]
+        }
+      ]
+    },
+    {
+      "sub_question_id": "ER4",
+      "question": "占座失败、超时或取消时的一致性兜底处理",
+      "purpose": "证据需包含占座未成功、支付未完成或用户取消等场景下的处理逻辑，说明占座数据如何回滚、释放或补偿，以及是否存在重复占座与超卖/超占的防护",
+      "query_type": "CODE",
+      "selected_chunks": [
+        {
+          "citation_label": "C5",
+          "chunk_id": 8932,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/TicketCallbackService.java",
+          "identity": "TicketCallbackService#cancelCallback",
+          "retrieval_rank": 4,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER4"
+          ]
+        },
+        {
+          "citation_label": "C9",
+          "chunk_id": 8887,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/impl/PurchaseTicketServiceImpl.java",
+          "identity": "PurchaseTicketServiceImpl#compensateKnownFailure",
+          "retrieval_rank": 9,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER4"
+          ]
+        },
+        {
+          "citation_label": "C12",
+          "chunk_id": 8621,
+          "source_type": "CODE",
+          "file_path": "services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/service/impl/OrderServiceImpl.java",
+          "identity": "OrderServiceImpl#rollbackTicketSeats",
+          "retrieval_rank": 12,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER4"
+          ]
+        }
+      ]
+    },
+    {
+      "sub_question_id": "ER5",
+      "question": "项目文档中对购票占座数据一致性方案的设计约定",
+      "purpose": "证据需为项目内文档，包含对购票占座一致性目标、约束或实现约定的描述，可据此判断代码实现与设计说明是否一致",
+      "query_type": "DOC",
+      "selected_chunks": [
+        {
+          "citation_label": "C2",
+          "chunk_id": 9501,
+          "source_type": "DOCUMENT",
+          "file_path": "0-历史文档/2-车票模块文档/P1——购票写链路功能详细分析文档.md",
+          "identity": "《P1——购票写链路功能详细分析文档》 > 八、数据一致性问题",
+          "retrieval_rank": 5,
+          "source_role": "HISTORICAL_PLAN",
+          "temporal_status": "HISTORICAL",
+          "authority_priority": 35,
+          "sub_question_ids": [
+            "ER5"
+          ]
+        }
+      ]
+    }
+  ],
+  "citations": {
+    "used_labels": [
+      "E17",
+      "E16",
+      "E18",
+      "E2",
+      "E10",
+      "E5",
+      "E1",
+      "E4",
+      "E3",
+      "E11",
+      "E12",
+      "E8",
+      "E14",
+      "E13",
+      "E15"
+    ],
+    "invalid_labels": [],
+    "zero_valid": false,
+    "sources": [
+      "[E17] 0-历史文档/2-车票模块文档/P1购票与选座功能分析与设计（教学版）.md > P1 购票与选座功能分析与设计（教学版） > 七、横向专题：并发、缓存与一致性 > 7.4 一致性：四条核心关系",
+      "[E16] 0-历史文档/2-车票模块文档/P1——购票写链路功能详细分析文档.md > 《P1——购票写链路功能详细分析文档》 > 八、数据一致性问题",
+      "[E18] 0-历史文档/3-订单与支付模块文档/P2支付与超时取消功能分析与设计（教学版）.md > P2 支付与超时取消功能分析与设计（教学版） > 七、横向专题：幂等、事务、缓存与一致性 > 7.4 一致性：一张对照表",
+      "[E2] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/impl/PurchaseTicketServiceImpl.java:64-116 — PurchaseTicketServiceImpl#purchaseTickets",
+      "[E10] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/impl/PurchaseTicketTxService.java:51-197 — PurchaseTicketTxService#PurchaseTicketTxService",
+      "[E5] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/impl/PurchaseTicketServiceImpl.java:214-222 — PurchaseTicketServiceImpl#evictRemainingTicketCacheSafely",
+      "[E1] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/PurchaseTicketService.java:11-11 — PurchaseTicketService#purchaseTickets",
+      "[E4] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/impl/PurchaseTicketServiceImpl.java:118-154 — PurchaseTicketServiceImpl#reserveLocally",
+      "[E3] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/impl/PurchaseTicketTxService.java:69-172 — PurchaseTicketTxService#doPurchaseInTransaction",
+      "[E11] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/dao/entity/SeatDO.java:9-33 — SeatDO#SeatDO",
+      "[E12] services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/mq/OrderDelayCloseProducer.java:41-52 — OrderDelayCloseProducer#send",
+      "[E8] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/impl/TicketCallbackServiceImpl.java:116-131 — TicketCallbackServiceImpl#returnTokensAfterCommit",
+      "[E14] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/impl/PurchaseTicketServiceImpl.java:203-212 — PurchaseTicketServiceImpl#compensateKnownFailure",
+      "[E13] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/TicketCallbackService.java:21-21 — TicketCallbackService#cancelCallback",
+      "[E15] services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/service/impl/OrderServiceImpl.java:312-342 — OrderServiceImpl#rollbackTicketSeats"
+    ]
+  },
+  "sections": {
+    "count": 5,
+    "lengths": [
+      629,
+      978,
+      1438,
+      1245,
+      1557
+    ],
+    "max_chars": 1557,
+    "over_budget": 5
+  },
+  "answer_plan": null,
+  "source_conflicts": [],
+  "review": null,
+  "stage_usage": [
+    {
+      "stage": "evidence_planning",
+      "latency_ms": 4685.129899997264,
+      "decision_source": "llm",
+      "model": "deepseek-flash",
+      "reasoning_effort": "high",
+      "input_tokens": 480,
+      "output_tokens": 902,
+      "round_index": null
+    },
+    {
+      "stage": "search_action_planning",
+      "latency_ms": 3684.9334000144154,
+      "decision_source": "llm",
+      "model": "deepseek-flash",
+      "reasoning_effort": "low",
+      "input_tokens": 827,
+      "output_tokens": 779,
+      "round_index": 0
+    },
+    {
+      "stage": "evidence_retrieval",
+      "latency_ms": 3119.3160000257194,
+      "decision_source": "policy",
+      "model": null,
+      "reasoning_effort": null,
+      "input_tokens": null,
+      "output_tokens": null,
+      "round_index": 0
+    },
+    {
+      "stage": "coverage_check",
+      "latency_ms": 4866.141900012735,
+      "decision_source": "llm",
+      "model": "deepseek-flash",
+      "reasoning_effort": "low",
+      "input_tokens": 9677,
+      "output_tokens": 983,
+      "round_index": 0
+    },
+    {
+      "stage": "explanation_planning",
+      "latency_ms": 17212.02949999133,
+      "decision_source": "llm",
+      "model": "deepseek-flash",
+      "reasoning_effort": "high",
+      "input_tokens": 6189,
+      "output_tokens": 3580,
+      "round_index": null
+    },
+    {
+      "stage": "teaching_draft",
+      "latency_ms": 41592.44649996981,
+      "decision_source": "llm",
+      "model": null,
+      "reasoning_effort": "high",
+      "input_tokens": null,
+      "output_tokens": null,
+      "round_index": null
+    },
+    {
+      "stage": "teaching_review",
+      "latency_ms": 39513.7407000293,
+      "decision_source": "llm",
+      "model": "deepseek-flash",
+      "reasoning_effort": "high",
+      "input_tokens": 4368,
+      "output_tokens": 8864,
+      "round_index": null
+    },
+    {
+      "stage": "teaching_revision",
+      "latency_ms": 36823.01340001868,
+      "decision_source": "llm",
+      "model": null,
+      "reasoning_effort": "high",
+      "input_tokens": null,
+      "output_tokens": null,
+      "round_index": null
+    }
+  ],
+  "evidence_plan": {
+    "schema_version": 2,
+    "original_query": "详细解释当前购票占座的数据一致性是如何保证的",
+    "requirements": [
+      {
+        "id": "ER1",
+        "target": "当前项目中购票与占座请求的完整处理链路，包括入口、核心服务方法与最终落库的调用顺序",
+        "success_criteria": "证据需给出购票占座链路中实际存在的入口方法/接口及其向下调用的方法或组件名称、调用顺序，足以还原一次占座从请求到数据写入的完整路径",
+        "priority": "CORE",
+        "temporal_scope": "CURRENT",
+        "source_requirement": "CODE"
+      },
+      {
+        "id": "ER2",
+        "target": "占座写入时对座位或票量状态的并发控制手段",
+        "success_criteria": "证据需包含占座写操作处对共享状态的并发控制实现，明确其具体形式（例如锁的粒度与范围、原子操作或比较交换、版本号或状态条件更新、数据库行锁或唯一约束等）以及作用对象",
+        "priority": "CORE",
+        "temporal_scope": "CURRENT",
+        "source_requirement": "CODE"
+      },
+      {
+        "id": "ER3",
+        "target": "购票占座涉及的数据写入范围与其事务边界",
+        "success_criteria": "证据需列出占座过程中被写入或更新的数据对象（表、集合或实体），并说明这些写入是否处于同一事务、事务的传播与提交时机，或是否采用非单机事务机制来保证整体一致",
+        "priority": "CORE",
+        "temporal_scope": "CURRENT",
+        "source_requirement": "CODE"
+      },
+      {
+        "id": "ER4",
+        "target": "占座失败、超时或取消时的一致性兜底处理",
+        "success_criteria": "证据需包含占座未成功、支付未完成或用户取消等场景下的处理逻辑，说明占座数据如何回滚、释放或补偿，以及是否存在重复占座与超卖/超占的防护",
+        "priority": "SUPPORTING",
+        "temporal_scope": "CURRENT",
+        "source_requirement": "CODE"
+      },
+      {
+        "id": "ER5",
+        "target": "项目文档中对购票占座数据一致性方案的设计约定",
+        "success_criteria": "证据需为项目内文档，包含对购票占座一致性目标、约束或实现约定的描述，可据此判断代码实现与设计说明是否一致",
+        "priority": "SUPPORTING",
+        "temporal_scope": "CURRENT",
+        "source_requirement": "DOCUMENT"
+      }
+    ],
+    "decision_source": "llm"
+  },
+  "requirement_traces": [
+    {
+      "requirement_id": "ER1",
+      "target": "当前项目中购票与占座请求的完整处理链路，包括入口、核心服务方法与最终落库的调用顺序",
+      "search_history": [
+        {
+          "action_id": "SA1",
+          "requirement_id": "ER1",
+          "round_index": 0,
+          "query": "购票占座 请求处理链路 入口方法 核心服务方法 调用顺序 数据写入",
+          "source_scope": "CODE",
+          "reason": "还原从请求入口到落库的完整调用路径",
+          "decision_source": "llm",
+          "error": null
+        }
+      ],
+      "evidence_ids": [
+        8926,
+        8883,
+        8884,
+        8892,
+        8888
+      ],
+      "coverage_history": [
+        {
+          "requirement_id": "ER1",
+          "state": "SATISFIED",
+          "evidence_ids": [
+            8926,
+            8883,
+            8884,
+            8892,
+            8888
+          ],
+          "missing_criteria": [],
+          "reason": "证据给出接口入口purchaseTickets、实现编排、reserveLocally加锁后调用doPurchaseInTransaction落库的完整顺序，足以还原链路。",
+          "decision_source": "llm",
+          "check_error": null
+        }
+      ],
+      "final_state": "SATISFIED"
+    },
+    {
+      "requirement_id": "ER2",
+      "target": "占座写入时对座位或票量状态的并发控制手段",
+      "search_history": [
+        {
+          "action_id": "SA2",
+          "requirement_id": "ER2",
+          "round_index": 0,
+          "query": "占座 写入 并发控制 锁 粒度 原子操作 CAS 版本号 状态条件更新 数据库行锁 唯一约束",
+          "source_scope": "CODE",
+          "reason": "查找占座写操作中对共享状态的并发控制手段",
+          "decision_source": "llm",
+          "error": null
+        }
+      ],
+      "evidence_ids": [
+        8884
+      ],
+      "coverage_history": [
+        {
+          "requirement_id": "ER2",
+          "state": "SATISFIED",
+          "evidence_ids": [
+            8884
+          ],
+          "missing_criteria": [],
+          "reason": "证据含Redisson用户锁与席别锁的粒度/作用对象，以及seat_status=AVAILABLE条件更新并校验affectedRows的原子控制。",
+          "decision_source": "llm",
+          "check_error": null
+        }
+      ],
+      "final_state": "SATISFIED"
+    },
+    {
+      "requirement_id": "ER3",
+      "target": "购票占座涉及的数据写入范围与其事务边界",
+      "search_history": [
+        {
+          "action_id": "SA3",
+          "requirement_id": "ER3",
+          "round_index": 0,
+          "query": "占座 数据写入 范围 事务边界 表 集合 实体 事务传播 提交时机 非单机事务",
+          "source_scope": "CODE",
+          "reason": "确定写入的数据对象及事务边界",
+          "decision_source": "llm",
+          "error": null
+        }
+      ],
+      "evidence_ids": [
+        8891,
+        8892,
+        8797
+      ],
+      "coverage_history": [
+        {
+          "requirement_id": "ER3",
+          "state": "SATISFIED",
+          "evidence_ids": [
+            8891,
+            8892,
+            8797
+          ],
+          "missing_criteria": [],
+          "reason": "证据列出t_seat状态更新与t_ticket插入，并说明处于同一@Transactional本地事务、远程调用留在编排层。",
+          "decision_source": "llm",
+          "check_error": null
+        }
+      ],
+      "final_state": "SATISFIED"
+    },
+    {
+      "requirement_id": "ER4",
+      "target": "占座失败、超时或取消时的一致性兜底处理",
+      "search_history": [
+        {
+          "action_id": "SA4",
+          "requirement_id": "ER4",
+          "round_index": 0,
+          "query": "占座 失败 超时 取消 回滚 释放 补偿 重复占座 超卖 超占 防护",
+          "source_scope": "CODE",
+          "reason": "查找异常场景下的兜底处理与防重防超卖逻辑",
+          "decision_source": "llm",
+          "error": null
+        }
+      ],
+      "evidence_ids": [
+        8887,
+        8621,
+        8932
+      ],
+      "coverage_history": [
+        {
+          "requirement_id": "ER4",
+          "state": "PARTIAL",
+          "evidence_ids": [
+            8887,
+            8621,
+            8932
+          ],
+          "missing_criteria": [
+            "尚缺占座失败/超时场景下重复占座与幂等（防重提交、唯一键或幂等键）防护的实现证据",
+            "尚缺超占/超卖防护在失败恢复路径中的直接证据"
+          ],
+          "reason": "证据含cancelCallback补偿、订单侧回滚座位，但缺重复占座与幂等防护证据。",
+          "decision_source": "llm",
+          "check_error": null
+        }
+      ],
+      "final_state": "PARTIAL"
+    },
+    {
+      "requirement_id": "ER5",
+      "target": "项目文档中对购票占座数据一致性方案的设计约定",
+      "search_history": [
+        {
+          "action_id": "SA5",
+          "requirement_id": "ER5",
+          "round_index": 0,
+          "query": "购票占座 数据一致性 设计约定 文档",
+          "source_scope": "DOCUMENT",
+          "reason": "定位项目文档中对一致性方案的设计约定",
+          "decision_source": "llm",
+          "error": null
+        }
+      ],
+      "evidence_ids": [
+        9501,
+        9626,
+        10014
+      ],
+      "coverage_history": [
+        {
+          "requirement_id": "ER5",
+          "state": "SATISFIED",
+          "evidence_ids": [
+            9501,
+            9626,
+            10014
+          ],
+          "missing_criteria": [],
+          "reason": "项目文档明确描述购票占座的一致性关系、约束与保证手段，可据以比对实现。",
+          "decision_source": "llm",
+          "check_error": null
+        }
+      ],
+      "final_state": "SATISFIED"
+    }
+  ],
+  "search_actions": [
+    {
+      "action_id": "SA1",
+      "requirement_id": "ER1",
+      "round_index": 0,
+      "query": "购票占座 请求处理链路 入口方法 核心服务方法 调用顺序 数据写入",
+      "source_scope": "CODE",
+      "reason": "还原从请求入口到落库的完整调用路径",
+      "decision_source": "llm",
+      "error": null
+    },
+    {
+      "action_id": "SA2",
+      "requirement_id": "ER2",
+      "round_index": 0,
+      "query": "占座 写入 并发控制 锁 粒度 原子操作 CAS 版本号 状态条件更新 数据库行锁 唯一约束",
+      "source_scope": "CODE",
+      "reason": "查找占座写操作中对共享状态的并发控制手段",
+      "decision_source": "llm",
+      "error": null
+    },
+    {
+      "action_id": "SA3",
+      "requirement_id": "ER3",
+      "round_index": 0,
+      "query": "占座 数据写入 范围 事务边界 表 集合 实体 事务传播 提交时机 非单机事务",
+      "source_scope": "CODE",
+      "reason": "确定写入的数据对象及事务边界",
+      "decision_source": "llm",
+      "error": null
+    },
+    {
+      "action_id": "SA4",
+      "requirement_id": "ER4",
+      "round_index": 0,
+      "query": "占座 失败 超时 取消 回滚 释放 补偿 重复占座 超卖 超占 防护",
+      "source_scope": "CODE",
+      "reason": "查找异常场景下的兜底处理与防重防超卖逻辑",
+      "decision_source": "llm",
+      "error": null
+    },
+    {
+      "action_id": "SA5",
+      "requirement_id": "ER5",
+      "round_index": 0,
+      "query": "购票占座 数据一致性 设计约定 文档",
+      "source_scope": "DOCUMENT",
+      "reason": "定位项目文档中对一致性方案的设计约定",
+      "decision_source": "llm",
+      "error": null
+    }
+  ],
+  "coverage_rounds": [
+    {
+      "round_index": 0,
+      "statuses": [
+        {
+          "requirement_id": "ER1",
+          "state": "SATISFIED",
+          "evidence_ids": [
+            8926,
+            8883,
+            8884,
+            8892,
+            8888
+          ],
+          "missing_criteria": [],
+          "reason": "证据给出接口入口purchaseTickets、实现编排、reserveLocally加锁后调用doPurchaseInTransaction落库的完整顺序，足以还原链路。",
+          "decision_source": "llm",
+          "check_error": null
+        },
+        {
+          "requirement_id": "ER2",
+          "state": "SATISFIED",
+          "evidence_ids": [
+            8884
+          ],
+          "missing_criteria": [],
+          "reason": "证据含Redisson用户锁与席别锁的粒度/作用对象，以及seat_status=AVAILABLE条件更新并校验affectedRows的原子控制。",
+          "decision_source": "llm",
+          "check_error": null
+        },
+        {
+          "requirement_id": "ER3",
+          "state": "SATISFIED",
+          "evidence_ids": [
+            8891,
+            8892,
+            8797
+          ],
+          "missing_criteria": [],
+          "reason": "证据列出t_seat状态更新与t_ticket插入，并说明处于同一@Transactional本地事务、远程调用留在编排层。",
+          "decision_source": "llm",
+          "check_error": null
+        },
+        {
+          "requirement_id": "ER4",
+          "state": "PARTIAL",
+          "evidence_ids": [
+            8887,
+            8621,
+            8932
+          ],
+          "missing_criteria": [
+            "尚缺占座失败/超时场景下重复占座与幂等（防重提交、唯一键或幂等键）防护的实现证据",
+            "尚缺超占/超卖防护在失败恢复路径中的直接证据"
+          ],
+          "reason": "证据含cancelCallback补偿、订单侧回滚座位，但缺重复占座与幂等防护证据。",
+          "decision_source": "llm",
+          "check_error": null
+        },
+        {
+          "requirement_id": "ER5",
+          "state": "SATISFIED",
+          "evidence_ids": [
+            9501,
+            9626,
+            10014
+          ],
+          "missing_criteria": [],
+          "reason": "项目文档明确描述购票占座的一致性关系、约束与保证手段，可据以比对实现。",
+          "decision_source": "llm",
+          "check_error": null
+        }
+      ]
+    }
+  ],
+  "final_coverage": [
+    {
+      "requirement_id": "ER1",
+      "state": "SATISFIED",
+      "evidence_ids": [
+        8926,
+        8883,
+        8884,
+        8892,
+        8888
+      ],
+      "missing_criteria": [],
+      "reason": "证据给出接口入口purchaseTickets、实现编排、reserveLocally加锁后调用doPurchaseInTransaction落库的完整顺序，足以还原链路。",
+      "decision_source": "llm",
+      "check_error": null
+    },
+    {
+      "requirement_id": "ER2",
+      "state": "SATISFIED",
+      "evidence_ids": [
+        8884
+      ],
+      "missing_criteria": [],
+      "reason": "证据含Redisson用户锁与席别锁的粒度/作用对象，以及seat_status=AVAILABLE条件更新并校验affectedRows的原子控制。",
+      "decision_source": "llm",
+      "check_error": null
+    },
+    {
+      "requirement_id": "ER3",
+      "state": "SATISFIED",
+      "evidence_ids": [
+        8891,
+        8892,
+        8797
+      ],
+      "missing_criteria": [],
+      "reason": "证据列出t_seat状态更新与t_ticket插入，并说明处于同一@Transactional本地事务、远程调用留在编排层。",
+      "decision_source": "llm",
+      "check_error": null
+    },
+    {
+      "requirement_id": "ER4",
+      "state": "PARTIAL",
+      "evidence_ids": [
+        8887,
+        8621,
+        8932
+      ],
+      "missing_criteria": [
+        "尚缺占座失败/超时场景下重复占座与幂等（防重提交、唯一键或幂等键）防护的实现证据",
+        "尚缺超占/超卖防护在失败恢复路径中的直接证据"
+      ],
+      "reason": "证据含cancelCallback补偿、订单侧回滚座位，但缺重复占座与幂等防护证据。",
+      "decision_source": "llm",
+      "check_error": null
+    },
+    {
+      "requirement_id": "ER5",
+      "state": "SATISFIED",
+      "evidence_ids": [
+        9501,
+        9626,
+        10014
+      ],
+      "missing_criteria": [],
+      "reason": "项目文档明确描述购票占座的一致性关系、约束与保证手段，可据以比对实现。",
+      "decision_source": "llm",
+      "check_error": null
+    }
+  ],
+  "evidence_package_state": "READY",
+  "explanation_plan": {
+    "answer_goal": "读者能完整复述一次购票占座从请求到落库的写链路，并说明每一层机制分别守住了哪条一致性不变量，以及在失败、超时、取消三种异常路径下数据如何被兜底，同时知道当前方案在幂等/防重方面的证据边界。",
+    "direct_answer": "当前实现并不依赖分布式事务或一把大锁，而是靠“入口限流 + 按用户/席别加 Redis 锁串行化 + 只操作 ticket 库的本地事务原子地条件更新座位状态并写车票记录 + 事务提交后再做缓存失效、延迟关单与令牌归还 + 失败补偿与取消回滚”这一整套写链路，把“有占用必有订单、没成功必无占用”这条不变量守住，余票则由座位状态派生。",
+    "audience_model": "熟悉 Java，但需要建立当前项目的实现模型",
+    "core_mental_model": "购票占座的一致性 = 一条被锁串行化的写链路（校验限流 → 用户锁/席别锁 → 本地事务里条件更新座位状态并写车票 → 提交后才做周边动作 → 失败补偿与超时回滚），它守住的不变量是“有占用必有订单、没成功必无占用”，而余票只是座位状态派生出来的展示口径。",
+    "primary_strategy": "EXECUTION_FLOW",
+    "secondary_strategies": [],
+    "prerequisite_concepts": [],
+    "likely_misconceptions": [],
+    "sections": [
+      {
+        "id": "S1",
+        "title": "一句话结论：一致性由一条写链路串起四份数据",
+        "section_type": "DIRECT_ANSWER",
+        "teaching_goal": "让读者先拿到可直接复述的结论：一致性不是某个单点机制，而是一条写链路加一条不变量；并明确要一致的四份数据分别是什么。",
+        "key_points": [
+          "要同时对齐的四份数据：座位状态、余票数量、车票记录、订单结果",
+          "核心不变量：有占用必然对应一笔订单；本次请求没成功就必须不留下任何占用",
+          "余票不是独立数据源，它是座位状态（可售）的派生物，所以一致性的真正锚点是座位状态",
+          "保证手段分三层：入口限流、Redis 锁串行化、单库本地事务 + 提交后动作 + 补偿回滚"
+        ],
+        "claim_plans": [
+          {
+            "claim_goal": "让读者先拿到可直接复述的结论：一致性不是某个单点机制，而是一条写链路加一条不变量；并明确要一致的四份数据分别是什么。",
+            "claim_type": "PROJECT_FACT",
+            "evidence_labels": [
+              "E16",
+              "E17",
+              "E18",
+              "E2"
+            ],
+            "confidence": "CONFIRMED",
+            "assumptions": [],
+            "conditional": false
+          }
+        ],
+        "evidence_labels": [
+          "E16",
+          "E17",
+          "E18",
+          "E2"
+        ],
+        "teaching_devices": [
+          "NONE"
+        ],
+        "depends_on": [],
+        "evidence_state": "CONFIRMED",
+        "target_tokens": 300
+      },
+      {
+        "id": "S2",
+        "title": "为什么占座是个一致性问题：四条关系与三道裂缝",
+        "section_type": "PROBLEM_SETUP",
+        "teaching_goal": "让读者理解为什么不能只写一条 UPDATE 就完事：一次占座要同时改动多份数据，还要跨越本地事务管不到的服务边界。",
+        "key_points": [
+          "四条关系：座位状态 ↔ 余票数量、座位占用 ↔ 购票结果、购票结果 ↔ 订单结果、支付/取消结果 → 座位状态",
+          "第一道裂缝：一次购票要写座位状态、车票记录、订单明细三处，必须同生同死",
+          "第二道裂缝：订单创建、通知下游属于远程调用，本地数据库事务覆盖不到，网络等待若放在事务内会拉长行锁持有时间",
+          "第三道裂缝：余票是缓存口径，数据库改了缓存未必同步，缓存不一致只会少卖，但座位被错误改回可售会造成超卖——这是设计要彻底堵死的最严重情形"
+        ],
+        "claim_plans": [
+          {
+            "claim_goal": "让读者理解为什么不能只写一条 UPDATE 就完事：一次占座要同时改动多份数据，还要跨越本地事务管不到的服务边界。",
+            "claim_type": "PROJECT_FACT",
+            "evidence_labels": [
+              "E16",
+              "E17",
+              "E18",
+              "E10",
+              "E5"
+            ],
+            "confidence": "CONFIRMED",
+            "assumptions": [],
+            "conditional": false
+          }
+        ],
+        "evidence_labels": [
+          "E16",
+          "E17",
+          "E18",
+          "E10",
+          "E5"
+        ],
+        "teaching_devices": [
+          "NONE"
+        ],
+        "depends_on": [
+          "S1"
+        ],
+        "evidence_state": "CONFIRMED",
+        "target_tokens": 450
+      },
+      {
+        "id": "S3",
+        "title": "从请求到落库：占座写链路的执行顺序",
+        "section_type": "EXECUTION_FLOW",
+        "teaching_goal": "让读者能在脑内走一遍调用栈：入口做什么、锁在哪里加、事务在哪里开始、哪些动作在事务之外。",
+        "key_points": [
+          "入口为 PurchaseTicketService.purchaseTickets，先跑责任链 TRAIN_PURCHASE_TICKET_FILTER 做前置过滤，再做登录态与乘车人数量（≤5）校验，并按席别聚合出 seatTypeCounts",
+          "入口限流：按车次+出发站做令牌桶 takeToken，拿不到令牌直接拒绝，把并发挡在写链路之外",
+          "reserveLocally 是锁的所在：先按 username+trainId 获取用户锁，再对本次涉及的每个席别逐个获取席别锁，锁范围覆盖整个占座写过程",
+          "锁内调用 PurchaseTicketTxService.doPurchaseInTransaction（@Transactional(rollbackFor = Exception.class)），事务内加载车次/区间关系/票价，由 SeatAllocator 选座并写座位与车票记录",
+          "事务提交之后才做余票缓存失效，且缓存删除失败只记警告、依赖缓存过期兜底，不把失败反灌回已提交的占座结果"
+        ],
+        "claim_plans": [
+          {
+            "claim_goal": "让读者能在脑内走一遍调用栈：入口做什么、锁在哪里加、事务在哪里开始、哪些动作在事务之外。",
+            "claim_type": "PROJECT_FACT",
+            "evidence_labels": [
+              "E1",
+              "E2",
+              "E4",
+              "E3",
+              "E10",
+              "E5"
+            ],
+            "confidence": "CONFIRMED",
+            "assumptions": [],
+            "conditional": false
+          }
+        ],
+        "evidence_labels": [
+          "E1",
+          "E2",
+          "E4",
+          "E3",
+          "E10",
+          "E5"
+        ],
+        "teaching_devices": [
+          "NONE"
+        ],
+        "depends_on": [
+          "S2"
+        ],
+        "evidence_state": "CONFIRMED",
+        "target_tokens": 600
+      },
+      {
+        "id": "S4",
+        "title": "原子性与时序：事务边界、锁粒度和提交后动作",
+        "section_type": "MECHANISM",
+        "teaching_goal": "让读者说清楚“原子性由谁提供、为什么要这样切边界”，以及为什么很多副作用必须等到提交之后才允许发生。",
+        "key_points": [
+          "事务边界是被刻意收窄的：PurchaseTicketTxService 只操作 ticket 库，远程调用留在编排层，避免网络等待延长行锁持有时间",
+          "锁的粒度是“用户 × 车次”加“席别”，含义是同一用户同一车次串行、同一席别串行，不同席别之间可以并行——锁解决的是并发进入，事务解决的是写入原子",
+          "座位使用状态机表达：0 可售 / 1 已锁定 / 2 已出售，占座是把可售改为已锁定，回滚时只允许把已锁定改回可售，用条件更新从语义上杜绝“把已售座位改回可售”造成的超卖",
+          "提交后才动作：延迟关单消息在 afterCommit 里发送，令牌归还同样注册在事务同步的 afterCommit 中，保证事务回滚时这些副作用不会外泄",
+          "跨服务不靠分布式事务：本地事务保证 ticket 库内部原子，跨服务一致性交给幂等 + 补偿 + 延迟消息"
+        ],
+        "claim_plans": [
+          {
+            "claim_goal": "让读者说清楚“原子性由谁提供、为什么要这样切边界”，以及为什么很多副作用必须等到提交之后才允许发生。",
+            "claim_type": "PROJECT_FACT",
+            "evidence_labels": [
+              "E10",
+              "E11",
+              "E4",
+              "E12",
+              "E8",
+              "E18"
+            ],
+            "confidence": "CONFIRMED",
+            "assumptions": [],
+            "conditional": false
+          }
+        ],
+        "evidence_labels": [
+          "E10",
+          "E11",
+          "E4",
+          "E12",
+          "E8",
+          "E18"
+        ],
+        "teaching_devices": [
+          "NONE"
+        ],
+        "depends_on": [
+          "S3"
+        ],
+        "evidence_state": "CONFIRMED",
+        "target_tokens": 600
+      },
+      {
+        "id": "S5",
+        "title": "失败、超时与取消：兜底路径和它的边界",
+        "section_type": "FAILURE_SCENARIO",
+        "teaching_goal": "让读者掌握三条异常路径各自的兜底动作，并知道当前证据能证明什么、还证明不了什么。",
+        "key_points": [
+          "建单明确失败的路径：本地事务已提交但订单创建失败时，调用 compensateKnownFailure 触发 cancelCallback 释放座位，成功与失败分别打点计数，失败则留给恢复任务兜底",
+          "支付超时/用户取消的路径：下单后在事务提交时发出延迟关单消息，超时后由订单侧收集订单明细并远程回滚座位，形成“座位占用最终会被释放”的闭环",
+          "缓存与外部依赖的降级：余票缓存删除失败不阻断主流程，靠过期兜底；支付侧通过模拟收银台回调推进支付与下游通知",
+          "边界：座位状态的条件更新与锁串行化防住了超卖，但幂等键/唯一键、重复提交防护与超时场景下的重复占座控制在现有证据中尚不完整，属于需要进一步确认的区域"
+        ],
+        "claim_plans": [
+          {
+            "claim_goal": "让读者掌握三条异常路径各自的兜底动作，并知道当前证据能证明什么、还证明不了什么。",
+            "claim_type": "PROJECT_FACT",
+            "evidence_labels": [
+              "E14",
+              "E13",
+              "E12",
+              "E15",
+              "E5",
+              "E9",
+              "E16"
+            ],
+            "confidence": "PARTIAL",
+            "assumptions": [],
+            "conditional": false
+          }
+        ],
+        "evidence_labels": [
+          "E14",
+          "E13",
+          "E12",
+          "E15",
+          "E5",
+          "E9",
+          "E16"
+        ],
+        "teaching_devices": [
+          "NONE"
+        ],
+        "depends_on": [
+          "S4"
+        ],
+        "evidence_state": "PARTIAL",
+        "target_tokens": 600
+      }
+    ],
+    "unresolved_gaps": [
+      "ER4"
+    ],
+    "conflicts": [],
+    "answer_depth": "detailed",
+    "decision_source": "llm"
+  },
+  "teaching": {
+    "decision_source": "llm",
+    "planning_error": null,
+    "primary_strategy": "EXECUTION_FLOW",
+    "secondary_strategies": [],
+    "core_mental_model": "购票占座的一致性 = 一条被锁串行化的写链路（校验限流 → 用户锁/席别锁 → 本地事务里条件更新座位状态并写车票 → 提交后才做周边动作 → 失败补偿与超时回滚），它守住的不变量是“有占用必有订单、没成功必无占用”，而余票只是座位状态派生出来的展示口径。",
+    "context_views": {
+      "workspace_evidence": 18,
+      "bound_evidence": 16,
+      "per_section": {
+        "S1": 4,
+        "S2": 5,
+        "S3": 6,
+        "S4": 6,
+        "S5": 7
+      }
+    },
+    "section_drafts": [
+      {
+        "id": "S1",
+        "title": "一句话结论：一致性由一条写链路串起四份数据",
+        "evidence_state": "CONFIRMED",
+        "used_citations": [
+          "E17",
+          "E16",
+          "E18",
+          "E2"
+        ],
+        "invalid_citations": [],
+        "chars": 606
+      },
+      {
+        "id": "S2",
+        "title": "为什么占座是个一致性问题：四条关系与三道裂缝",
+        "evidence_state": "CONFIRMED",
+        "used_citations": [
+          "E17",
+          "E18",
+          "E16",
+          "E10",
+          "E5"
+        ],
+        "invalid_citations": [],
+        "chars": 915
+      },
+      {
+        "id": "S3",
+        "title": "从请求到落库：占座写链路的执行顺序",
+        "evidence_state": "CONFIRMED",
+        "used_citations": [
+          "E1",
+          "E2",
+          "E4",
+          "E3",
+          "E10",
+          "E5"
+        ],
+        "invalid_citations": [],
+        "chars": 1391
+      },
+      {
+        "id": "S4",
+        "title": "原子性与时序：事务边界、锁粒度和提交后动作",
+        "evidence_state": "CONFIRMED",
+        "used_citations": [
+          "E4",
+          "E10",
+          "E11",
+          "E18",
+          "E12",
+          "E8"
+        ],
+        "invalid_citations": [],
+        "chars": 1194
+      },
+      {
+        "id": "S5",
+        "title": "失败、超时与取消：兜底路径和它的边界",
+        "evidence_state": "PARTIAL",
+        "used_citations": [
+          "E12",
+          "E14",
+          "E13",
+          "E15",
+          "E5",
+          "E16"
+        ],
+        "invalid_citations": [],
+        "chars": 1381
+      }
+    ],
+    "section_citations": {
+      "S1": [
+        "E17",
+        "E16",
+        "E18",
+        "E2"
+      ],
+      "S2": [
+        "E17",
+        "E18",
+        "E16",
+        "E10",
+        "E5"
+      ],
+      "S3": [
+        "E1",
+        "E2",
+        "E4",
+        "E3",
+        "E10",
+        "E5"
+      ],
+      "S4": [
+        "E4",
+        "E10",
+        "E11",
+        "E18",
+        "E12",
+        "E8"
+      ],
+      "S5": [
+        "E12",
+        "E14",
+        "E13",
+        "E15",
+        "E5",
+        "E16"
+      ]
+    },
+    "section_execution": [
+      {
+        "section_id": "S1",
+        "title": "一句话结论：一致性由一条写链路串起四份数据",
+        "section_type": "DIRECT_ANSWER",
+        "latency_ms": 8118.044400005601,
+        "started_offset_ms": 33573.68480000878,
+        "ended_offset_ms": 41691.70680001844,
+        "evidence_count": 4,
+        "context_chars": 5392,
+        "target_tokens": 300,
+        "revision": false,
+        "revision_notes_count": 0,
+        "input_tokens": 3088,
+        "output_tokens": 1630,
+        "success": true,
+        "error": null,
+        "llm_call_ids": [
+          5
+        ],
+        "attempt_count": 1
+      },
+      {
+        "section_id": "S2",
+        "title": "为什么占座是个一致性问题：四条关系与三道裂缝",
+        "section_type": "PROBLEM_SETUP",
+        "latency_ms": 10055.542699992657,
+        "started_offset_ms": 33574.66949999798,
+        "ended_offset_ms": 43630.19870000426,
+        "evidence_count": 5,
+        "context_chars": 4223,
+        "target_tokens": 450,
+        "revision": false,
+        "revision_notes_count": 0,
+        "input_tokens": 2929,
+        "output_tokens": 2001,
+        "success": true,
+        "error": null,
+        "llm_call_ids": [
+          6
+        ],
+        "attempt_count": 1
+      },
+      {
+        "section_id": "S3",
+        "title": "从请求到落库：占座写链路的执行顺序",
+        "section_type": "EXECUTION_FLOW",
+        "latency_ms": 8792.57140000118,
+        "started_offset_ms": 33575.73420001427,
+        "ended_offset_ms": 42368.285300035495,
+        "evidence_count": 6,
+        "context_chars": 15232,
+        "target_tokens": 600,
+        "revision": false,
+        "revision_notes_count": 0,
+        "input_tokens": 5056,
+        "output_tokens": 1647,
+        "success": true,
+        "error": null,
+        "llm_call_ids": [
+          7
+        ],
+        "attempt_count": 1
+      },
+      {
+        "section_id": "S4",
+        "title": "原子性与时序：事务边界、锁粒度和提交后动作",
+        "section_type": "MECHANISM",
+        "latency_ms": 8723.413800005801,
+        "started_offset_ms": 41699.19830001891,
+        "ended_offset_ms": 50422.5953000132,
+        "evidence_count": 6,
+        "context_chars": 6994,
+        "target_tokens": 600,
+        "revision": false,
+        "revision_notes_count": 0,
+        "input_tokens": 3259,
+        "output_tokens": 1852,
+        "success": true,
+        "error": null,
+        "llm_call_ids": [
+          8
+        ],
+        "attempt_count": 1
+      },
+      {
+        "section_id": "S5",
+        "title": "失败、超时与取消：兜底路径和它的边界",
+        "section_type": "FAILURE_SCENARIO",
+        "latency_ms": 10026.48699999554,
+        "started_offset_ms": 42368.41330002062,
+        "ended_offset_ms": 52394.88400000846,
+        "evidence_count": 7,
+        "context_chars": 6446,
+        "target_tokens": 600,
+        "revision": false,
+        "revision_notes_count": 0,
+        "input_tokens": 3207,
+        "output_tokens": 1819,
+        "success": true,
+        "error": null,
+        "llm_call_ids": [
+          9
+        ],
+        "attempt_count": 1
+      },
+      {
+        "section_id": "S5",
+        "title": "失败、超时与取消：兜底路径和它的边界",
+        "section_type": "FAILURE_SCENARIO",
+        "latency_ms": 10214.698600000702,
+        "started_offset_ms": 114679.02939999476,
+        "ended_offset_ms": 124893.71570001822,
+        "evidence_count": 7,
+        "context_chars": 6446,
+        "target_tokens": 600,
+        "revision": true,
+        "revision_notes_count": 2,
+        "input_tokens": 3425,
+        "output_tokens": 2020,
+        "success": true,
+        "error": null,
+        "llm_call_ids": [
+          12
+        ],
+        "attempt_count": 1
+      }
+    ],
+    "section_confidence": {
+      "S1": "CONFIRMED",
+      "S2": "CONFIRMED",
+      "S3": "CONFIRMED",
+      "S4": "CONFIRMED",
+      "S5": "PARTIAL"
+    },
+    "compression_events": [],
+    "revision_trace": {
+      "accepted": false,
+      "global_issues": [],
+      "section_issues": [
+        {
+          "section_id": "S5",
+          "issue_type": "OVERCLAIM",
+          "description": "S5 开头称“‘有占用必有订单’是由一次本地提交保证的”，这与 S3 明确写出的“事务提交的那一刻，落库的只有座位被占 + 车票已写，订单还没创建”相矛盾。本地事务至多保证座位占用与车票记录同生同死；订单创建在提交后远程执行，只能靠建单成功或失败补偿来维持“有占用必有订单”的最终效果。应改为：正常路径下由提交后建单加失败补偿共同维持该不变量，本地提交本身并不保证订单已存在。"
+        },
+        {
+          "section_id": "S5",
+          "issue_type": "UNHELPFUL_DETAIL",
+          "description": "“支付侧同理”一段引入 PayController#mockCashier 与模拟收银台的流程，但该细节只说明支付支线可被模拟触发，并未解释它如何影响占座失败、超时或取消场景下的一致性兜底，对理解当前占座数据一致性如何保证没有直接帮助，属于堆砌细节。"
+        }
+      ],
+      "revision_required": [
+        "S5"
+      ],
+      "decision_source": "llm",
+      "error": null
+    },
+    "output_budget": {
+      "max_output_tokens": 4550,
+      "preferred_sections": 5,
+      "allow_multi_pass": true,
+      "reason": "sized from the explanation plan"
+    },
+    "failed_section_ids": [],
+    "partial_answer": false,
+    "writer_reasoning_reserve": {
+      "tokens": 4352,
+      "estimated": false,
+      "reason": "rounded reasoning_tokens p95 from 64 live high-effort writer calls"
+    },
+    "depth_decision": {
+      "answer_depth": "detailed",
+      "decision_source": "detail_hint",
+      "preferred_sections": 5,
+      "hard_max_sections": 6
+    },
+    "section_budget": {
+      "preferred_sections": 5,
+      "hard_max_sections": 6,
+      "evidence_backed_requirement_ids": [
+        "ER1",
+        "ER2",
+        "ER3",
+        "ER4",
+        "ER5"
+      ],
+      "target_sections": 5,
+      "gap_code": null,
+      "gap_reason": null,
+      "unsupported_requirement_ids": []
+    },
+    "locate": {
+      "locate_requirement_ids": [],
+      "locate_evidence_labels": [],
+      "locate_fast_path_used": false,
+      "locate_fast_path_skip_reason": "not a deterministic locate request"
+    }
+  }
+}
+
+================ DevContext Performance ================
+
+Query:            详细解释当前购票占座的数据一致性是如何保证的
+Mode / depth:     teach / None
+Sample:           first_sample
+Total latency:    151.5 s
+
+LLM calls:        13   (output tokens: 38775)
+Embedding calls:  5
+Retrieval actions:  5
+Sections:         5   (revisions: 1)
+
+--------------------------------------------------------
+Stage                          Round        Time       %
+--------------------------------------------------------
+evidence_planning                           4.7s    3.1%
+search_action_planning             0        3.7s    2.4%
+evidence_retrieval                 0        3.1s    2.1%
+coverage_check                     0        4.9s    3.2%
+explanation_planning                       17.2s   11.4%
+teaching_draft                             41.6s   27.5%
+teaching_review                            39.5s   26.1%
+teaching_revision                          36.8s   24.3%
+--------------------------------------------------------
+attributed                                151.5s
+unattributed                                0.0s    0.0%
+
+Top bottlenecks:
+  1. teaching_draft                  41.6s   27.5%
+  2. teaching_review                 39.5s   26.1%
+  3. teaching_revision               36.8s   24.3%
+  4. explanation_planning            17.2s   11.4%
+  5. coverage_check                   4.9s    3.2%
+
+========================================================
+Performance report written to artifacts\perf-fullchain2\q1.json

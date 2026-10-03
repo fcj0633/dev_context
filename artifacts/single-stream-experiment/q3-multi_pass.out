@@ -1,0 +1,1767 @@
+Question:
+详细解释当前订单和支付链路是如何保证幂等的
+
+Evidence Plan: llm
+  ER1. 当前订单链路中实现幂等控制的具体代码位置、触发入口和判定逻辑 — CODE
+  ER2. 当前支付链路中实现幂等控制的具体代码位置、触发入口和判定逻辑 — CODE
+  ER3. 订单与支付链路之间幂等标识和状态变化的关联方式 — CODE
+  ER4. 幂等判定依赖的持久化结构、唯一性约束或原子操作 — CODE
+  ER5. 项目文档中关于订单和支付链路幂等设计的既有说明 — DOCUMENT
+
+Route: MIXED (rules)
+Sufficiency: insufficient
+Requirements: ER1 SATISFIED, ER2 MISSING, ER3 SATISFIED, ER4 SATISFIED, ER5 SATISFIED
+Retries: 1
+
+Answer:
+当前没有检索到足够的项目上下文，无法可靠回答该问题。
+
+Explanation Strategy:
+PROBLEM_SOLUTION
+
+Mental Model:
+按证据逐条说明，不额外推断
+
+Context:
+  Workspace evidence: 30
+  Bound evidence: 9
+  S1 view: 9
+
+Generation:
+  0 sections
+  0 targeted revision
+
+Sources:
+(none)
+
+Trace:
+{
+  "route": {
+    "query_type": "MIXED",
+    "decision_source": "rules",
+    "reason": "union of evidence source requirements",
+    "code_signals": [],
+    "doc_signals": []
+  },
+  "rounds": [
+    {
+      "round_index": 0,
+      "retrieval_query": "订单链路 幂等控制 入口 幂等标识 重复请求 识别 处理结果 代码 | 支付链路 幂等控制 入口 幂等标识 重复请求 重复业务事件 识别 处理结果 代码 | 订单 支付 幂等标识 关联 状态流转 业务标识 共享 重复处理 避免 代码 | 幂等 持久化 唯一约束 去重 状态判定 条件更新 事务边界 存储层 代码 | 订单 支付 幂等 设计 文档 说明",
+      "retrieval_query_type": "MIXED",
+      "selected_chunks": [
+        {
+          "citation_label": "E1",
+          "chunk_id": 8624,
+          "source_type": "CODE",
+          "file_path": "services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/service/impl/OrderServiceImpl.java",
+          "identity": "OrderServiceImpl#assertSameCreateRequest",
+          "retrieval_rank": 1,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1"
+          ]
+        },
+        {
+          "citation_label": "E2",
+          "chunk_id": 8947,
+          "source_type": "CODE",
+          "file_path": "services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/common/chain/AbstractChainHandler.java",
+          "identity": "AbstractChainHandler#handler",
+          "retrieval_rank": 2,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1",
+            "ER2"
+          ]
+        },
+        {
+          "citation_label": "E3",
+          "chunk_id": 8742,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/common/chain/AbstractChainHandler.java",
+          "identity": "AbstractChainHandler#handler",
+          "retrieval_rank": 3,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1",
+            "ER2"
+          ]
+        },
+        {
+          "citation_label": "E4",
+          "chunk_id": 8858,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/handler/ticket/filter/purchase/TrainPurchaseTicketRepeatChainFilter.java",
+          "identity": "TrainPurchaseTicketRepeatChainFilter#handler",
+          "retrieval_rank": 4,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1",
+            "ER2"
+          ]
+        },
+        {
+          "citation_label": "E5",
+          "chunk_id": 9029,
+          "source_type": "CODE",
+          "file_path": "services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/service/handler/filter/user/UserRegisterCheckDeletionChainHandler.java",
+          "identity": "UserRegisterCheckDeletionChainHandler#UserRegisterCheckDeletionChainHandler",
+          "retrieval_rank": 5,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1",
+            "ER2"
+          ]
+        },
+        {
+          "citation_label": "E19",
+          "chunk_id": 8586,
+          "source_type": "CODE",
+          "file_path": "services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/dto/req/TicketOrderCreateReqDTO.java",
+          "identity": "TicketOrderCreateReqDTO#TicketOrderCreateReqDTO",
+          "retrieval_rank": 1,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1"
+          ]
+        },
+        {
+          "citation_label": "E20",
+          "chunk_id": 8613,
+          "source_type": "CODE",
+          "file_path": "services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/service/impl/OrderServiceImpl.java",
+          "identity": "OrderServiceImpl#OrderServiceImpl",
+          "retrieval_rank": 3,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1"
+          ]
+        },
+        {
+          "citation_label": "E21",
+          "chunk_id": 8614,
+          "source_type": "CODE",
+          "file_path": "services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/service/impl/OrderServiceImpl.java",
+          "identity": "OrderServiceImpl#createTicketOrder",
+          "retrieval_rank": 4,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1"
+          ]
+        },
+        {
+          "citation_label": "E22",
+          "chunk_id": 8623,
+          "source_type": "CODE",
+          "file_path": "services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/service/impl/OrderServiceImpl.java",
+          "identity": "OrderServiceImpl#selectByOrderSn",
+          "retrieval_rank": 5,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1"
+          ]
+        }
+      ],
+      "sufficiency": {
+        "enough": false,
+        "missing_aspects": [
+          {
+            "source_type": "CODE",
+            "description": "支付侧参与幂等控制的入口方法",
+            "sub_question_id": "ER2"
+          },
+          {
+            "source_type": "CODE",
+            "description": "支付侧幂等标识来源",
+            "sub_question_id": "ER2"
+          },
+          {
+            "source_type": "CODE",
+            "description": "支付侧重复请求识别方式及处理结果",
+            "sub_question_id": "ER2"
+          }
+        ],
+        "reason": "some CORE evidence requirements remain unresolved",
+        "decision_source": "llm",
+        "statuses": [
+          {
+            "sub_question_id": "ER1",
+            "satisfied": true,
+            "reason": "包含订单创建入口、orderSn 幂等标识、重复请求识别与处理逻辑",
+            "state": "SATISFIED"
+          },
+          {
+            "sub_question_id": "ER2",
+            "satisfied": false,
+            "reason": "证据均为用户/票务链抽象或占位，无支付侧幂等控制内容",
+            "state": "MISSING"
+          },
+          {
+            "sub_question_id": "ER3",
+            "satisfied": true,
+            "reason": "包含订单与支付通过 orderSn 关联、状态流转条件及双方防重复处理",
+            "state": "SATISFIED"
+          },
+          {
+            "sub_question_id": "ER4",
+            "satisfied": true,
+            "reason": "包含条件更新与事务边界等原子操作证据",
+            "state": "SATISFIED"
+          },
+          {
+            "sub_question_id": "ER5",
+            "satisfied": true,
+            "reason": "文档明确描述了订单与支付链路的幂等设计",
+            "state": "SATISFIED"
+          }
+        ]
+      },
+      "rewrite": null,
+      "rewrite_error": null,
+      "rewrites": []
+    },
+    {
+      "round_index": 1,
+      "retrieval_query": "OrderServiceImpl assertSameCreateRequest 调用入口 TicketOrderCreateReqDTO 订单号 生成 传递 | 支付链路 幂等控制 入口 幂等标识 重复支付 识别 处理结果 AbstractChainHandler | 订单 支付 唯一性约束 去重记录 幂等 判定 OrderStateService UserReuseDO",
+      "retrieval_query_type": "MIXED",
+      "selected_chunks": [
+        {
+          "citation_label": "E1",
+          "chunk_id": 8624,
+          "source_type": "CODE",
+          "file_path": "services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/service/impl/OrderServiceImpl.java",
+          "identity": "OrderServiceImpl#assertSameCreateRequest",
+          "retrieval_rank": 1,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1"
+          ]
+        },
+        {
+          "citation_label": "E2",
+          "chunk_id": 8947,
+          "source_type": "CODE",
+          "file_path": "services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/common/chain/AbstractChainHandler.java",
+          "identity": "AbstractChainHandler#handler",
+          "retrieval_rank": 2,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1",
+            "ER2"
+          ]
+        },
+        {
+          "citation_label": "E3",
+          "chunk_id": 8742,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/common/chain/AbstractChainHandler.java",
+          "identity": "AbstractChainHandler#handler",
+          "retrieval_rank": 3,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1",
+            "ER2"
+          ]
+        },
+        {
+          "citation_label": "E4",
+          "chunk_id": 8858,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/handler/ticket/filter/purchase/TrainPurchaseTicketRepeatChainFilter.java",
+          "identity": "TrainPurchaseTicketRepeatChainFilter#handler",
+          "retrieval_rank": 4,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1",
+            "ER2"
+          ]
+        },
+        {
+          "citation_label": "E5",
+          "chunk_id": 9029,
+          "source_type": "CODE",
+          "file_path": "services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/service/handler/filter/user/UserRegisterCheckDeletionChainHandler.java",
+          "identity": "UserRegisterCheckDeletionChainHandler#UserRegisterCheckDeletionChainHandler",
+          "retrieval_rank": 5,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1",
+            "ER2"
+          ]
+        },
+        {
+          "citation_label": "E19",
+          "chunk_id": 8586,
+          "source_type": "CODE",
+          "file_path": "services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/dto/req/TicketOrderCreateReqDTO.java",
+          "identity": "TicketOrderCreateReqDTO#TicketOrderCreateReqDTO",
+          "retrieval_rank": 1,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1"
+          ]
+        },
+        {
+          "citation_label": "E20",
+          "chunk_id": 8613,
+          "source_type": "CODE",
+          "file_path": "services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/service/impl/OrderServiceImpl.java",
+          "identity": "OrderServiceImpl#OrderServiceImpl",
+          "retrieval_rank": 3,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1"
+          ]
+        },
+        {
+          "citation_label": "E21",
+          "chunk_id": 8614,
+          "source_type": "CODE",
+          "file_path": "services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/service/impl/OrderServiceImpl.java",
+          "identity": "OrderServiceImpl#createTicketOrder",
+          "retrieval_rank": 4,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1"
+          ]
+        },
+        {
+          "citation_label": "E22",
+          "chunk_id": 8623,
+          "source_type": "CODE",
+          "file_path": "services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/service/impl/OrderServiceImpl.java",
+          "identity": "OrderServiceImpl#selectByOrderSn",
+          "retrieval_rank": 5,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1"
+          ]
+        }
+      ],
+      "sufficiency": {
+        "enough": false,
+        "missing_aspects": [
+          {
+            "source_type": "CODE",
+            "description": "支付侧参与幂等控制的入口方法",
+            "sub_question_id": "ER2"
+          },
+          {
+            "source_type": "CODE",
+            "description": "支付侧幂等标识来源",
+            "sub_question_id": "ER2"
+          },
+          {
+            "source_type": "CODE",
+            "description": "支付侧重复请求识别方式及处理结果",
+            "sub_question_id": "ER2"
+          }
+        ],
+        "reason": "some CORE evidence requirements remain unresolved",
+        "decision_source": "llm",
+        "statuses": [
+          {
+            "sub_question_id": "ER1",
+            "satisfied": true,
+            "reason": "包含订单创建入口、orderSn 幂等标识、重复请求识别与处理逻辑",
+            "state": "SATISFIED"
+          },
+          {
+            "sub_question_id": "ER2",
+            "satisfied": false,
+            "reason": "证据均为用户/票务链抽象或占位，无支付侧幂等控制内容",
+            "state": "MISSING"
+          },
+          {
+            "sub_question_id": "ER3",
+            "satisfied": true,
+            "reason": "包含订单与支付通过 orderSn 关联、状态流转条件及双方防重复处理",
+            "state": "SATISFIED"
+          },
+          {
+            "sub_question_id": "ER4",
+            "satisfied": true,
+            "reason": "包含条件更新与事务边界等原子操作证据",
+            "state": "SATISFIED"
+          },
+          {
+            "sub_question_id": "ER5",
+            "satisfied": true,
+            "reason": "文档明确描述了订单与支付链路的幂等设计",
+            "state": "SATISFIED"
+          }
+        ]
+      },
+      "rewrite": null,
+      "rewrite_error": null,
+      "rewrites": []
+    }
+  ],
+  "retry_count": 1,
+  "final_sufficiency": {
+    "enough": false,
+    "missing_aspects": [
+      {
+        "source_type": "CODE",
+        "description": "支付侧参与幂等控制的入口方法",
+        "sub_question_id": "ER2"
+      },
+      {
+        "source_type": "CODE",
+        "description": "支付侧幂等标识来源",
+        "sub_question_id": "ER2"
+      },
+      {
+        "source_type": "CODE",
+        "description": "支付侧重复请求识别方式及处理结果",
+        "sub_question_id": "ER2"
+      }
+    ],
+    "reason": "some CORE evidence requirements remain unresolved",
+    "decision_source": "llm",
+    "statuses": [
+      {
+        "sub_question_id": "ER1",
+        "satisfied": true,
+        "reason": "包含订单创建入口、orderSn 幂等标识、重复请求识别与处理逻辑",
+        "state": "SATISFIED"
+      },
+      {
+        "sub_question_id": "ER2",
+        "satisfied": false,
+        "reason": "证据均为用户/票务链抽象或占位，无支付侧幂等控制内容",
+        "state": "MISSING"
+      },
+      {
+        "sub_question_id": "ER3",
+        "satisfied": true,
+        "reason": "包含订单与支付通过 orderSn 关联、状态流转条件及双方防重复处理",
+        "state": "SATISFIED"
+      },
+      {
+        "sub_question_id": "ER4",
+        "satisfied": true,
+        "reason": "包含条件更新与事务边界等原子操作证据",
+        "state": "SATISFIED"
+      },
+      {
+        "sub_question_id": "ER5",
+        "satisfied": true,
+        "reason": "文档明确描述了订单与支付链路的幂等设计",
+        "state": "SATISFIED"
+      }
+    ]
+  },
+  "stop_reason": "partial",
+  "plan": null,
+  "sub_question_traces": [
+    {
+      "sub_question_id": "ER1",
+      "question": "当前订单链路中实现幂等控制的具体代码位置、触发入口和判定逻辑",
+      "purpose": "证据必须包含订单侧参与幂等控制的入口、幂等标识来源、重复请求识别方式以及重复请求的处理结果",
+      "query_type": "CODE",
+      "selected_chunks": [
+        {
+          "citation_label": "C1",
+          "chunk_id": 8624,
+          "source_type": "CODE",
+          "file_path": "services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/service/impl/OrderServiceImpl.java",
+          "identity": "OrderServiceImpl#assertSameCreateRequest",
+          "retrieval_rank": 1,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1"
+          ]
+        },
+        {
+          "citation_label": "C3",
+          "chunk_id": 8947,
+          "source_type": "CODE",
+          "file_path": "services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/common/chain/AbstractChainHandler.java",
+          "identity": "AbstractChainHandler#handler",
+          "retrieval_rank": 2,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1",
+            "ER2"
+          ]
+        },
+        {
+          "citation_label": "C6",
+          "chunk_id": 8742,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/common/chain/AbstractChainHandler.java",
+          "identity": "AbstractChainHandler#handler",
+          "retrieval_rank": 6,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1",
+            "ER2"
+          ]
+        },
+        {
+          "citation_label": "C9",
+          "chunk_id": 8858,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/handler/ticket/filter/purchase/TrainPurchaseTicketRepeatChainFilter.java",
+          "identity": "TrainPurchaseTicketRepeatChainFilter#handler",
+          "retrieval_rank": 9,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1",
+            "ER2"
+          ]
+        },
+        {
+          "citation_label": "C12",
+          "chunk_id": 9029,
+          "source_type": "CODE",
+          "file_path": "services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/service/handler/filter/user/UserRegisterCheckDeletionChainHandler.java",
+          "identity": "UserRegisterCheckDeletionChainHandler#UserRegisterCheckDeletionChainHandler",
+          "retrieval_rank": 12,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1",
+            "ER2"
+          ]
+        }
+      ]
+    },
+    {
+      "sub_question_id": "ER2",
+      "question": "当前支付链路中实现幂等控制的具体代码位置、触发入口和判定逻辑",
+      "purpose": "证据必须包含支付侧参与幂等控制的入口、幂等标识来源、重复请求或重复业务事件的识别方式以及重复处理结果",
+      "query_type": "CODE",
+      "selected_chunks": [
+        {
+          "citation_label": "C3",
+          "chunk_id": 8947,
+          "source_type": "CODE",
+          "file_path": "services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/common/chain/AbstractChainHandler.java",
+          "identity": "AbstractChainHandler#handler",
+          "retrieval_rank": 2,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1",
+            "ER2"
+          ]
+        },
+        {
+          "citation_label": "C6",
+          "chunk_id": 8742,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/common/chain/AbstractChainHandler.java",
+          "identity": "AbstractChainHandler#handler",
+          "retrieval_rank": 6,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1",
+            "ER2"
+          ]
+        },
+        {
+          "citation_label": "C9",
+          "chunk_id": 8858,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/handler/ticket/filter/purchase/TrainPurchaseTicketRepeatChainFilter.java",
+          "identity": "TrainPurchaseTicketRepeatChainFilter#handler",
+          "retrieval_rank": 9,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1",
+            "ER2"
+          ]
+        },
+        {
+          "citation_label": "C12",
+          "chunk_id": 9029,
+          "source_type": "CODE",
+          "file_path": "services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/service/handler/filter/user/UserRegisterCheckDeletionChainHandler.java",
+          "identity": "UserRegisterCheckDeletionChainHandler#UserRegisterCheckDeletionChainHandler",
+          "retrieval_rank": 12,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1",
+            "ER2"
+          ]
+        }
+      ]
+    },
+    {
+      "sub_question_id": "ER3",
+      "question": "订单与支付链路之间幂等标识和状态变化的关联方式",
+      "purpose": "证据必须包含订单与支付如何传递或共享同一业务标识、状态流转条件以及双方如何避免对同一订单或支付重复处理",
+      "query_type": "CODE",
+      "selected_chunks": [
+        {
+          "citation_label": "C4",
+          "chunk_id": 8618,
+          "source_type": "CODE",
+          "file_path": "services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/service/impl/OrderServiceImpl.java",
+          "identity": "OrderServiceImpl#payCallbackOrder",
+          "retrieval_rank": 3,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER3"
+          ]
+        },
+        {
+          "citation_label": "C5",
+          "chunk_id": 8632,
+          "source_type": "CODE",
+          "file_path": "services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/service/OrderStateService.java",
+          "identity": "OrderStateService#OrderStateService",
+          "retrieval_rank": 4,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER3",
+            "ER4"
+          ]
+        },
+        {
+          "citation_label": "C7",
+          "chunk_id": 8698,
+          "source_type": "CODE",
+          "file_path": "services/pay-services/src/main/java/edu/swu/fcj/my12306/biz/payservice/service/impl/PayServiceImpl.java",
+          "identity": "PayServiceImpl#PayServiceImpl",
+          "retrieval_rank": 7,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER3"
+          ]
+        },
+        {
+          "citation_label": "C10",
+          "chunk_id": 8706,
+          "source_type": "CODE",
+          "file_path": "services/pay-services/src/main/java/edu/swu/fcj/my12306/biz/payservice/service/impl/PayServiceImpl.java",
+          "identity": "PayServiceImpl#checkOrderCanPay",
+          "retrieval_rank": 10,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER3"
+          ]
+        }
+      ]
+    },
+    {
+      "sub_question_id": "ER4",
+      "question": "幂等判定依赖的持久化结构、唯一性约束或原子操作",
+      "purpose": "证据必须包含在存储层用于去重或状态判定的约束、记录、条件更新或事务边界",
+      "query_type": "CODE",
+      "selected_chunks": [
+        {
+          "citation_label": "C5",
+          "chunk_id": 8632,
+          "source_type": "CODE",
+          "file_path": "services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/service/OrderStateService.java",
+          "identity": "OrderStateService#OrderStateService",
+          "retrieval_rank": 4,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER3",
+            "ER4"
+          ]
+        },
+        {
+          "citation_label": "C8",
+          "chunk_id": 9009,
+          "source_type": "CODE",
+          "file_path": "services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/dao/entity/UserReuseDO.java",
+          "identity": "UserReuseDO#UserReuseDO",
+          "retrieval_rank": 8,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER4"
+          ]
+        },
+        {
+          "citation_label": "C11",
+          "chunk_id": 9055,
+          "source_type": "CODE",
+          "file_path": "services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/service/impl/UserLoginServiceImpl.java",
+          "identity": "UserLoginServiceImpl#register",
+          "retrieval_rank": 11,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER4"
+          ]
+        }
+      ]
+    },
+    {
+      "sub_question_id": "ER5",
+      "question": "项目文档中关于订单和支付链路幂等设计的既有说明",
+      "purpose": "证据必须包含对订单链路、支付链路或二者协同幂等策略的文档化描述",
+      "query_type": "DOC",
+      "selected_chunks": [
+        {
+          "citation_label": "C2",
+          "chunk_id": 11371,
+          "source_type": "DOCUMENT",
+          "file_path": "7-模块设计文档/3-订单支付-支付.md",
+          "identity": "三十一、面试官问“支付模块怎么设计”，推荐这样答",
+          "retrieval_rank": 5,
+          "source_role": "CURRENT_DESIGN",
+          "temporal_status": "UNKNOWN",
+          "authority_priority": 70,
+          "sub_question_ids": [
+            "ER5"
+          ]
+        }
+      ]
+    }
+  ],
+  "citations": {
+    "used_labels": [],
+    "invalid_labels": [],
+    "zero_valid": true,
+    "sources": []
+  },
+  "sections": {
+    "count": 0,
+    "lengths": [],
+    "max_chars": 0,
+    "over_budget": 0
+  },
+  "answer_plan": null,
+  "source_conflicts": [],
+  "review": null,
+  "stage_usage": [
+    {
+      "stage": "evidence_planning",
+      "latency_ms": 8011.643900012132,
+      "decision_source": "llm",
+      "model": "deepseek-flash",
+      "reasoning_effort": "high",
+      "input_tokens": 479,
+      "output_tokens": 1582,
+      "round_index": null
+    },
+    {
+      "stage": "search_action_planning",
+      "latency_ms": 5939.911899971776,
+      "decision_source": "llm",
+      "model": "deepseek-flash",
+      "reasoning_effort": "low",
+      "input_tokens": 734,
+      "output_tokens": 1411,
+      "round_index": 0
+    },
+    {
+      "stage": "evidence_retrieval",
+      "latency_ms": 2845.288799959235,
+      "decision_source": "policy",
+      "model": null,
+      "reasoning_effort": null,
+      "input_tokens": null,
+      "output_tokens": null,
+      "round_index": 0
+    },
+    {
+      "stage": "coverage_check",
+      "latency_ms": 8013.08980002068,
+      "decision_source": "llm",
+      "model": "deepseek-flash",
+      "reasoning_effort": "low",
+      "input_tokens": 6155,
+      "output_tokens": 1490,
+      "round_index": 0
+    },
+    {
+      "stage": "search_action_planning",
+      "latency_ms": 13961.62399998866,
+      "decision_source": "llm",
+      "model": "deepseek-flash",
+      "reasoning_effort": "low",
+      "input_tokens": 1065,
+      "output_tokens": 3376,
+      "round_index": 1
+    },
+    {
+      "stage": "evidence_retrieval",
+      "latency_ms": 421.5264999656938,
+      "decision_source": "policy",
+      "model": null,
+      "reasoning_effort": null,
+      "input_tokens": null,
+      "output_tokens": null,
+      "round_index": 1
+    },
+    {
+      "stage": "coverage_check",
+      "latency_ms": 12620.573199994396,
+      "decision_source": "llm",
+      "model": "deepseek-flash",
+      "reasoning_effort": "low",
+      "input_tokens": 9291,
+      "output_tokens": 3111,
+      "round_index": 1
+    },
+    {
+      "stage": "explanation_planning",
+      "latency_ms": 554.0585999842733,
+      "decision_source": "fallback",
+      "model": "deepseek-flash",
+      "reasoning_effort": "high",
+      "input_tokens": null,
+      "output_tokens": null,
+      "round_index": null
+    },
+    {
+      "stage": "teaching_draft",
+      "latency_ms": 563.9922000118531,
+      "decision_source": "fallback",
+      "model": "deepseek-flash",
+      "reasoning_effort": "high",
+      "input_tokens": null,
+      "output_tokens": null,
+      "round_index": null
+    }
+  ],
+  "evidence_plan": {
+    "schema_version": 2,
+    "original_query": "详细解释当前订单和支付链路是如何保证幂等的",
+    "requirements": [
+      {
+        "id": "ER1",
+        "target": "当前订单链路中实现幂等控制的具体代码位置、触发入口和判定逻辑",
+        "success_criteria": "证据必须包含订单侧参与幂等控制的入口、幂等标识来源、重复请求识别方式以及重复请求的处理结果",
+        "priority": "CORE",
+        "temporal_scope": "CURRENT",
+        "source_requirement": "CODE"
+      },
+      {
+        "id": "ER2",
+        "target": "当前支付链路中实现幂等控制的具体代码位置、触发入口和判定逻辑",
+        "success_criteria": "证据必须包含支付侧参与幂等控制的入口、幂等标识来源、重复请求或重复业务事件的识别方式以及重复处理结果",
+        "priority": "CORE",
+        "temporal_scope": "CURRENT",
+        "source_requirement": "CODE"
+      },
+      {
+        "id": "ER3",
+        "target": "订单与支付链路之间幂等标识和状态变化的关联方式",
+        "success_criteria": "证据必须包含订单与支付如何传递或共享同一业务标识、状态流转条件以及双方如何避免对同一订单或支付重复处理",
+        "priority": "CORE",
+        "temporal_scope": "CURRENT",
+        "source_requirement": "CODE"
+      },
+      {
+        "id": "ER4",
+        "target": "幂等判定依赖的持久化结构、唯一性约束或原子操作",
+        "success_criteria": "证据必须包含在存储层用于去重或状态判定的约束、记录、条件更新或事务边界",
+        "priority": "CORE",
+        "temporal_scope": "CURRENT",
+        "source_requirement": "CODE"
+      },
+      {
+        "id": "ER5",
+        "target": "项目文档中关于订单和支付链路幂等设计的既有说明",
+        "success_criteria": "证据必须包含对订单链路、支付链路或二者协同幂等策略的文档化描述",
+        "priority": "SUPPORTING",
+        "temporal_scope": "CURRENT",
+        "source_requirement": "DOCUMENT"
+      }
+    ],
+    "decision_source": "llm"
+  },
+  "requirement_traces": [
+    {
+      "requirement_id": "ER1",
+      "target": "当前订单链路中实现幂等控制的具体代码位置、触发入口和判定逻辑",
+      "search_history": [
+        {
+          "action_id": "SA1",
+          "requirement_id": "ER1",
+          "round_index": 0,
+          "query": "订单链路 幂等控制 入口 幂等标识 重复请求 识别 处理结果 代码",
+          "source_scope": "CODE",
+          "reason": "首次检索订单侧幂等实现入口与判定逻辑",
+          "decision_source": "llm",
+          "error": null
+        },
+        {
+          "action_id": "SA6",
+          "requirement_id": "ER1",
+          "round_index": 1,
+          "query": "OrderServiceImpl assertSameCreateRequest 调用入口 TicketOrderCreateReqDTO 订单号 生成 传递",
+          "source_scope": "CODE",
+          "reason": "针对ER1缺失的调用入口和订单号来源，复用已发现的OrderServiceImpl和assertSameCreateRequest，聚焦查找调用入口及订单号生成传递逻辑。",
+          "decision_source": "llm",
+          "error": null
+        }
+      ],
+      "evidence_ids": [
+        8614,
+        8624,
+        8586
+      ],
+      "coverage_history": [
+        {
+          "requirement_id": "ER1",
+          "state": "PARTIAL",
+          "evidence_ids": [
+            8624
+          ],
+          "missing_criteria": [
+            "订单创建幂等控制的触发入口（调用 assertSameCreateRequest 的入口方法或接口）",
+            "订单幂等标识（订单号）的来源与生成/传递方式"
+          ],
+          "reason": "8624 展示了已有订单与请求的重复识别及不一致时抛异常，但未体现入口与标识来源。",
+          "decision_source": "llm",
+          "check_error": null
+        },
+        {
+          "requirement_id": "ER1",
+          "state": "SATISFIED",
+          "evidence_ids": [
+            8614,
+            8624,
+            8586
+          ],
+          "missing_criteria": [],
+          "reason": "包含订单创建入口、orderSn 幂等标识、重复请求识别与处理逻辑",
+          "decision_source": "llm",
+          "check_error": null
+        }
+      ],
+      "final_state": "SATISFIED"
+    },
+    {
+      "requirement_id": "ER2",
+      "target": "当前支付链路中实现幂等控制的具体代码位置、触发入口和判定逻辑",
+      "search_history": [
+        {
+          "action_id": "SA2",
+          "requirement_id": "ER2",
+          "round_index": 0,
+          "query": "支付链路 幂等控制 入口 幂等标识 重复请求 重复业务事件 识别 处理结果 代码",
+          "source_scope": "CODE",
+          "reason": "首次检索支付侧幂等实现入口与判定逻辑",
+          "decision_source": "llm",
+          "error": null
+        },
+        {
+          "action_id": "SA7",
+          "requirement_id": "ER2",
+          "round_index": 1,
+          "query": "支付链路 幂等控制 入口 幂等标识 重复支付 识别 处理结果 AbstractChainHandler",
+          "source_scope": "CODE",
+          "reason": "针对ER2缺失的支付侧入口、幂等标识和重复识别，复用已发现的责任链抽象类关键词，聚焦支付链路幂等控制。",
+          "decision_source": "llm",
+          "error": null
+        }
+      ],
+      "evidence_ids": [],
+      "coverage_history": [
+        {
+          "requirement_id": "ER2",
+          "state": "MISSING",
+          "evidence_ids": [],
+          "missing_criteria": [
+            "支付侧参与幂等控制的入口代码",
+            "支付幂等标识来源",
+            "支付重复请求/重复事件的识别方式与处理结果"
+          ],
+          "reason": "所提供的支付链路证据仅剩抽象方法或票务/用户侧占位，无支付幂等入口与判定逻辑。",
+          "decision_source": "llm",
+          "check_error": null
+        },
+        {
+          "requirement_id": "ER2",
+          "state": "MISSING",
+          "evidence_ids": [],
+          "missing_criteria": [
+            "支付侧参与幂等控制的入口方法",
+            "支付侧幂等标识来源",
+            "支付侧重复请求识别方式及处理结果"
+          ],
+          "reason": "证据均为用户/票务链抽象或占位，无支付侧幂等控制内容",
+          "decision_source": "llm",
+          "check_error": null
+        }
+      ],
+      "final_state": "MISSING"
+    },
+    {
+      "requirement_id": "ER3",
+      "target": "订单与支付链路之间幂等标识和状态变化的关联方式",
+      "search_history": [
+        {
+          "action_id": "SA3",
+          "requirement_id": "ER3",
+          "round_index": 0,
+          "query": "订单 支付 幂等标识 关联 状态流转 业务标识 共享 重复处理 避免 代码",
+          "source_scope": "CODE",
+          "reason": "首次检索订单与支付间幂等标识与状态关联",
+          "decision_source": "llm",
+          "error": null
+        }
+      ],
+      "evidence_ids": [
+        8618,
+        8706,
+        8632,
+        8698
+      ],
+      "coverage_history": [
+        {
+          "requirement_id": "ER3",
+          "state": "SATISFIED",
+          "evidence_ids": [
+            8618,
+            8698,
+            8706,
+            8632,
+            8720
+          ],
+          "missing_criteria": [],
+          "reason": "以 orderSn 为共享标识，8618/8632/8706/8698 分别给出订单状态检查、条件更新、支付侧拒重复支付与下游通知补偿，覆盖关联与状态流转。",
+          "decision_source": "llm",
+          "check_error": null
+        },
+        {
+          "requirement_id": "ER3",
+          "state": "SATISFIED",
+          "evidence_ids": [
+            8618,
+            8706,
+            8632,
+            8698
+          ],
+          "missing_criteria": [],
+          "reason": "包含订单与支付通过 orderSn 关联、状态流转条件及双方防重复处理",
+          "decision_source": "llm",
+          "check_error": null
+        }
+      ],
+      "final_state": "SATISFIED"
+    },
+    {
+      "requirement_id": "ER4",
+      "target": "幂等判定依赖的持久化结构、唯一性约束或原子操作",
+      "search_history": [
+        {
+          "action_id": "SA4",
+          "requirement_id": "ER4",
+          "round_index": 0,
+          "query": "幂等 持久化 唯一约束 去重 状态判定 条件更新 事务边界 存储层 代码",
+          "source_scope": "CODE",
+          "reason": "首次检索幂等依赖的存储层约束与原子操作",
+          "decision_source": "llm",
+          "error": null
+        },
+        {
+          "action_id": "SA8",
+          "requirement_id": "ER4",
+          "round_index": 1,
+          "query": "订单 支付 唯一性约束 去重记录 幂等 判定 OrderStateService UserReuseDO",
+          "source_scope": "CODE",
+          "reason": "针对ER4缺失的订单/支付表唯一约束或去重记录，复用已发现的OrderStateService和UserReuseDO，聚焦持久化层幂等判定结构。",
+          "decision_source": "llm",
+          "error": null
+        }
+      ],
+      "evidence_ids": [
+        8632,
+        8633,
+        8634
+      ],
+      "coverage_history": [
+        {
+          "requirement_id": "ER4",
+          "state": "PARTIAL",
+          "evidence_ids": [
+            8632
+          ],
+          "missing_criteria": [
+            "订单/支付相关表的唯一性约束或去重记录结构",
+            "持久化层用于幂等判定的具体约束/记录定义"
+          ],
+          "reason": "8632 说明了条件更新加影响行数的原子操作，但缺少存储层唯一约束或去重记录结构证据。",
+          "decision_source": "llm",
+          "check_error": null
+        },
+        {
+          "requirement_id": "ER4",
+          "state": "SATISFIED",
+          "evidence_ids": [
+            8632,
+            8633,
+            8634
+          ],
+          "missing_criteria": [],
+          "reason": "包含条件更新与事务边界等原子操作证据",
+          "decision_source": "llm",
+          "check_error": null
+        }
+      ],
+      "final_state": "SATISFIED"
+    },
+    {
+      "requirement_id": "ER5",
+      "target": "项目文档中关于订单和支付链路幂等设计的既有说明",
+      "search_history": [
+        {
+          "action_id": "SA5",
+          "requirement_id": "ER5",
+          "round_index": 0,
+          "query": "订单 支付 幂等 设计 文档 说明",
+          "source_scope": "DOCUMENT",
+          "reason": "首次检索项目文档中订单支付幂等设计说明",
+          "decision_source": "llm",
+          "error": null
+        }
+      ],
+      "evidence_ids": [
+        11371,
+        11264,
+        11624
+      ],
+      "coverage_history": [
+        {
+          "requirement_id": "ER5",
+          "state": "SATISFIED",
+          "evidence_ids": [
+            11371,
+            11264,
+            11624
+          ],
+          "missing_criteria": [],
+          "reason": "文档 11371 描述支付与订单协同幂等及补偿，11264/11624 描述订单支付回调幂等，覆盖订单与支付链路的文档化说明。",
+          "decision_source": "llm",
+          "check_error": null
+        },
+        {
+          "requirement_id": "ER5",
+          "state": "SATISFIED",
+          "evidence_ids": [
+            11371,
+            11264,
+            11624
+          ],
+          "missing_criteria": [],
+          "reason": "文档明确描述了订单与支付链路的幂等设计",
+          "decision_source": "llm",
+          "check_error": null
+        }
+      ],
+      "final_state": "SATISFIED"
+    }
+  ],
+  "search_actions": [
+    {
+      "action_id": "SA1",
+      "requirement_id": "ER1",
+      "round_index": 0,
+      "query": "订单链路 幂等控制 入口 幂等标识 重复请求 识别 处理结果 代码",
+      "source_scope": "CODE",
+      "reason": "首次检索订单侧幂等实现入口与判定逻辑",
+      "decision_source": "llm",
+      "error": null
+    },
+    {
+      "action_id": "SA2",
+      "requirement_id": "ER2",
+      "round_index": 0,
+      "query": "支付链路 幂等控制 入口 幂等标识 重复请求 重复业务事件 识别 处理结果 代码",
+      "source_scope": "CODE",
+      "reason": "首次检索支付侧幂等实现入口与判定逻辑",
+      "decision_source": "llm",
+      "error": null
+    },
+    {
+      "action_id": "SA3",
+      "requirement_id": "ER3",
+      "round_index": 0,
+      "query": "订单 支付 幂等标识 关联 状态流转 业务标识 共享 重复处理 避免 代码",
+      "source_scope": "CODE",
+      "reason": "首次检索订单与支付间幂等标识与状态关联",
+      "decision_source": "llm",
+      "error": null
+    },
+    {
+      "action_id": "SA4",
+      "requirement_id": "ER4",
+      "round_index": 0,
+      "query": "幂等 持久化 唯一约束 去重 状态判定 条件更新 事务边界 存储层 代码",
+      "source_scope": "CODE",
+      "reason": "首次检索幂等依赖的存储层约束与原子操作",
+      "decision_source": "llm",
+      "error": null
+    },
+    {
+      "action_id": "SA5",
+      "requirement_id": "ER5",
+      "round_index": 0,
+      "query": "订单 支付 幂等 设计 文档 说明",
+      "source_scope": "DOCUMENT",
+      "reason": "首次检索项目文档中订单支付幂等设计说明",
+      "decision_source": "llm",
+      "error": null
+    },
+    {
+      "action_id": "SA6",
+      "requirement_id": "ER1",
+      "round_index": 1,
+      "query": "OrderServiceImpl assertSameCreateRequest 调用入口 TicketOrderCreateReqDTO 订单号 生成 传递",
+      "source_scope": "CODE",
+      "reason": "针对ER1缺失的调用入口和订单号来源，复用已发现的OrderServiceImpl和assertSameCreateRequest，聚焦查找调用入口及订单号生成传递逻辑。",
+      "decision_source": "llm",
+      "error": null
+    },
+    {
+      "action_id": "SA7",
+      "requirement_id": "ER2",
+      "round_index": 1,
+      "query": "支付链路 幂等控制 入口 幂等标识 重复支付 识别 处理结果 AbstractChainHandler",
+      "source_scope": "CODE",
+      "reason": "针对ER2缺失的支付侧入口、幂等标识和重复识别，复用已发现的责任链抽象类关键词，聚焦支付链路幂等控制。",
+      "decision_source": "llm",
+      "error": null
+    },
+    {
+      "action_id": "SA8",
+      "requirement_id": "ER4",
+      "round_index": 1,
+      "query": "订单 支付 唯一性约束 去重记录 幂等 判定 OrderStateService UserReuseDO",
+      "source_scope": "CODE",
+      "reason": "针对ER4缺失的订单/支付表唯一约束或去重记录，复用已发现的OrderStateService和UserReuseDO，聚焦持久化层幂等判定结构。",
+      "decision_source": "llm",
+      "error": null
+    }
+  ],
+  "coverage_rounds": [
+    {
+      "round_index": 0,
+      "statuses": [
+        {
+          "requirement_id": "ER1",
+          "state": "PARTIAL",
+          "evidence_ids": [
+            8624
+          ],
+          "missing_criteria": [
+            "订单创建幂等控制的触发入口（调用 assertSameCreateRequest 的入口方法或接口）",
+            "订单幂等标识（订单号）的来源与生成/传递方式"
+          ],
+          "reason": "8624 展示了已有订单与请求的重复识别及不一致时抛异常，但未体现入口与标识来源。",
+          "decision_source": "llm",
+          "check_error": null
+        },
+        {
+          "requirement_id": "ER2",
+          "state": "MISSING",
+          "evidence_ids": [],
+          "missing_criteria": [
+            "支付侧参与幂等控制的入口代码",
+            "支付幂等标识来源",
+            "支付重复请求/重复事件的识别方式与处理结果"
+          ],
+          "reason": "所提供的支付链路证据仅剩抽象方法或票务/用户侧占位，无支付幂等入口与判定逻辑。",
+          "decision_source": "llm",
+          "check_error": null
+        },
+        {
+          "requirement_id": "ER3",
+          "state": "SATISFIED",
+          "evidence_ids": [
+            8618,
+            8698,
+            8706,
+            8632,
+            8720
+          ],
+          "missing_criteria": [],
+          "reason": "以 orderSn 为共享标识，8618/8632/8706/8698 分别给出订单状态检查、条件更新、支付侧拒重复支付与下游通知补偿，覆盖关联与状态流转。",
+          "decision_source": "llm",
+          "check_error": null
+        },
+        {
+          "requirement_id": "ER4",
+          "state": "PARTIAL",
+          "evidence_ids": [
+            8632
+          ],
+          "missing_criteria": [
+            "订单/支付相关表的唯一性约束或去重记录结构",
+            "持久化层用于幂等判定的具体约束/记录定义"
+          ],
+          "reason": "8632 说明了条件更新加影响行数的原子操作，但缺少存储层唯一约束或去重记录结构证据。",
+          "decision_source": "llm",
+          "check_error": null
+        },
+        {
+          "requirement_id": "ER5",
+          "state": "SATISFIED",
+          "evidence_ids": [
+            11371,
+            11264,
+            11624
+          ],
+          "missing_criteria": [],
+          "reason": "文档 11371 描述支付与订单协同幂等及补偿，11264/11624 描述订单支付回调幂等，覆盖订单与支付链路的文档化说明。",
+          "decision_source": "llm",
+          "check_error": null
+        }
+      ]
+    },
+    {
+      "round_index": 1,
+      "statuses": [
+        {
+          "requirement_id": "ER1",
+          "state": "SATISFIED",
+          "evidence_ids": [
+            8614,
+            8624,
+            8586
+          ],
+          "missing_criteria": [],
+          "reason": "包含订单创建入口、orderSn 幂等标识、重复请求识别与处理逻辑",
+          "decision_source": "llm",
+          "check_error": null
+        },
+        {
+          "requirement_id": "ER2",
+          "state": "MISSING",
+          "evidence_ids": [],
+          "missing_criteria": [
+            "支付侧参与幂等控制的入口方法",
+            "支付侧幂等标识来源",
+            "支付侧重复请求识别方式及处理结果"
+          ],
+          "reason": "证据均为用户/票务链抽象或占位，无支付侧幂等控制内容",
+          "decision_source": "llm",
+          "check_error": null
+        },
+        {
+          "requirement_id": "ER3",
+          "state": "SATISFIED",
+          "evidence_ids": [
+            8618,
+            8706,
+            8632,
+            8698
+          ],
+          "missing_criteria": [],
+          "reason": "包含订单与支付通过 orderSn 关联、状态流转条件及双方防重复处理",
+          "decision_source": "llm",
+          "check_error": null
+        },
+        {
+          "requirement_id": "ER4",
+          "state": "SATISFIED",
+          "evidence_ids": [
+            8632,
+            8633,
+            8634
+          ],
+          "missing_criteria": [],
+          "reason": "包含条件更新与事务边界等原子操作证据",
+          "decision_source": "llm",
+          "check_error": null
+        },
+        {
+          "requirement_id": "ER5",
+          "state": "SATISFIED",
+          "evidence_ids": [
+            11371,
+            11264,
+            11624
+          ],
+          "missing_criteria": [],
+          "reason": "文档明确描述了订单与支付链路的幂等设计",
+          "decision_source": "llm",
+          "check_error": null
+        }
+      ]
+    }
+  ],
+  "final_coverage": [
+    {
+      "requirement_id": "ER1",
+      "state": "SATISFIED",
+      "evidence_ids": [
+        8614,
+        8624,
+        8586
+      ],
+      "missing_criteria": [],
+      "reason": "包含订单创建入口、orderSn 幂等标识、重复请求识别与处理逻辑",
+      "decision_source": "llm",
+      "check_error": null
+    },
+    {
+      "requirement_id": "ER2",
+      "state": "MISSING",
+      "evidence_ids": [],
+      "missing_criteria": [
+        "支付侧参与幂等控制的入口方法",
+        "支付侧幂等标识来源",
+        "支付侧重复请求识别方式及处理结果"
+      ],
+      "reason": "证据均为用户/票务链抽象或占位，无支付侧幂等控制内容",
+      "decision_source": "llm",
+      "check_error": null
+    },
+    {
+      "requirement_id": "ER3",
+      "state": "SATISFIED",
+      "evidence_ids": [
+        8618,
+        8706,
+        8632,
+        8698
+      ],
+      "missing_criteria": [],
+      "reason": "包含订单与支付通过 orderSn 关联、状态流转条件及双方防重复处理",
+      "decision_source": "llm",
+      "check_error": null
+    },
+    {
+      "requirement_id": "ER4",
+      "state": "SATISFIED",
+      "evidence_ids": [
+        8632,
+        8633,
+        8634
+      ],
+      "missing_criteria": [],
+      "reason": "包含条件更新与事务边界等原子操作证据",
+      "decision_source": "llm",
+      "check_error": null
+    },
+    {
+      "requirement_id": "ER5",
+      "state": "SATISFIED",
+      "evidence_ids": [
+        11371,
+        11264,
+        11624
+      ],
+      "missing_criteria": [],
+      "reason": "文档明确描述了订单与支付链路的幂等设计",
+      "decision_source": "llm",
+      "check_error": null
+    }
+  ],
+  "evidence_package_state": "PARTIAL",
+  "explanation_plan": {
+    "answer_goal": "按现有证据说明用户问题的项目事实",
+    "direct_answer": "",
+    "audience_model": "未在本阶段判定（规划器未成功运行）",
+    "core_mental_model": "按证据逐条说明，不额外推断",
+    "primary_strategy": "PROBLEM_SOLUTION",
+    "secondary_strategies": [],
+    "prerequisite_concepts": [],
+    "likely_misconceptions": [],
+    "sections": [
+      {
+        "id": "S1",
+        "title": "问题是什么",
+        "section_type": "PROBLEM_SETUP",
+        "teaching_goal": "按证据覆盖情况说明该项目事实",
+        "key_points": [
+          "当前订单链路中实现幂等控制的具体代码位置、触发入口和判定逻辑",
+          "当前支付链路中实现幂等控制的具体代码位置、触发入口和判定逻辑",
+          "订单与支付链路之间幂等标识和状态变化的关联方式"
+        ],
+        "claim_plans": [
+          {
+            "claim_goal": "陈述该项目事实",
+            "claim_type": "PROJECT_FACT",
+            "evidence_labels": [
+              "E1",
+              "E2",
+              "E3",
+              "E4",
+              "E5",
+              "E19",
+              "E20",
+              "E21",
+              "E22"
+            ],
+            "confidence": "CONFIRMED",
+            "assumptions": [],
+            "conditional": false
+          }
+        ],
+        "evidence_labels": [
+          "E1",
+          "E2",
+          "E3",
+          "E4",
+          "E5",
+          "E19",
+          "E20",
+          "E21",
+          "E22"
+        ],
+        "teaching_devices": [
+          "NONE"
+        ],
+        "depends_on": [],
+        "evidence_state": "CONFIRMED",
+        "target_tokens": null
+      },
+      {
+        "id": "S2",
+        "title": "实现机制",
+        "section_type": "MECHANISM",
+        "teaching_goal": "按证据覆盖情况说明该项目事实",
+        "key_points": [
+          "当前订单链路中实现幂等控制的具体代码位置、触发入口和判定逻辑",
+          "当前支付链路中实现幂等控制的具体代码位置、触发入口和判定逻辑",
+          "订单与支付链路之间幂等标识和状态变化的关联方式"
+        ],
+        "claim_plans": [
+          {
+            "claim_goal": "陈述该项目事实",
+            "claim_type": "PROJECT_FACT",
+            "evidence_labels": [
+              "E1",
+              "E2",
+              "E3",
+              "E4",
+              "E5",
+              "E19",
+              "E20",
+              "E21",
+              "E22"
+            ],
+            "confidence": "CONFIRMED",
+            "assumptions": [],
+            "conditional": false
+          }
+        ],
+        "evidence_labels": [
+          "E1",
+          "E2",
+          "E3",
+          "E4",
+          "E5",
+          "E19",
+          "E20",
+          "E21",
+          "E22"
+        ],
+        "teaching_devices": [
+          "NONE"
+        ],
+        "depends_on": [],
+        "evidence_state": "CONFIRMED",
+        "target_tokens": null
+      },
+      {
+        "id": "S3",
+        "title": "收束",
+        "section_type": "SUMMARY",
+        "teaching_goal": "按证据覆盖情况说明该项目事实",
+        "key_points": [
+          "当前订单链路中实现幂等控制的具体代码位置、触发入口和判定逻辑",
+          "当前支付链路中实现幂等控制的具体代码位置、触发入口和判定逻辑",
+          "订单与支付链路之间幂等标识和状态变化的关联方式"
+        ],
+        "claim_plans": [
+          {
+            "claim_goal": "陈述该项目事实",
+            "claim_type": "PROJECT_FACT",
+            "evidence_labels": [
+              "E1",
+              "E2",
+              "E3",
+              "E4",
+              "E5",
+              "E19",
+              "E20",
+              "E21",
+              "E22"
+            ],
+            "confidence": "CONFIRMED",
+            "assumptions": [],
+            "conditional": false
+          }
+        ],
+        "evidence_labels": [
+          "E1",
+          "E2",
+          "E3",
+          "E4",
+          "E5",
+          "E19",
+          "E20",
+          "E21",
+          "E22"
+        ],
+        "teaching_devices": [
+          "NONE"
+        ],
+        "depends_on": [],
+        "evidence_state": "CONFIRMED",
+        "target_tokens": null
+      }
+    ],
+    "unresolved_gaps": [
+      "当前订单链路中实现幂等控制的具体代码位置、触发入口和判定逻辑",
+      "当前支付链路中实现幂等控制的具体代码位置、触发入口和判定逻辑",
+      "订单与支付链路之间幂等标识和状态变化的关联方式",
+      "幂等判定依赖的持久化结构、唯一性约束或原子操作",
+      "项目文档中关于订单和支付链路幂等设计的既有说明"
+    ],
+    "conflicts": [],
+    "answer_depth": "detailed",
+    "decision_source": "fallback"
+  },
+  "teaching": {
+    "generation_mode": "multi_pass",
+    "decision_source": "fallback",
+    "planning_error": "RuntimeError: DeepSeek request failed (HTTP 402): {\"error\":{\"message\":\"Insufficient Balance (request_id: a2406ae5-3782-4979-aae1-367a3e83cdfc)\",\"type\":\"unknown_error\",\"param\":null,\"code\":\"invalid_request_error\"}}",
+    "primary_strategy": "PROBLEM_SOLUTION",
+    "secondary_strategies": [],
+    "core_mental_model": "按证据逐条说明，不额外推断",
+    "context_views": {
+      "workspace_evidence": 30,
+      "bound_evidence": 9,
+      "per_section": {
+        "S1": 9
+      }
+    },
+    "section_drafts": [],
+    "section_citations": {},
+    "section_execution": [
+      {
+        "section_id": "S1",
+        "title": "问题是什么",
+        "section_type": "PROBLEM_SETUP",
+        "latency_ms": 563.7565999641083,
+        "evidence_count": 9,
+        "context_chars": 11152,
+        "target_tokens": null,
+        "revision": false,
+        "revision_notes_count": 0,
+        "input_tokens": null,
+        "output_tokens": null,
+        "success": false,
+        "error": "RuntimeError: DeepSeek request failed (HTTP 402): {\"error\":{\"message\":\"Insufficient Balance (request_id: 5781b391-e7c7-411d-a765-ab186a704412)\",\"type\":\"unknown_error\",\"param\":null,\"code\":\"invalid_request_error\"}}"
+      }
+    ],
+    "section_confidence": {},
+    "compression_events": [],
+    "revision_trace": null,
+    "output_budget": {
+      "max_output_tokens": 7400,
+      "preferred_sections": 3,
+      "allow_multi_pass": true,
+      "reason": "sized from the explanation plan"
+    }
+  }
+}
+
+================ DevContext Performance ================
+
+Query:            详细解释当前订单和支付链路是如何保证幂等的
+Mode / depth:     teach / detailed
+Sample:           first_sample
+Total latency:    52.9 s
+
+LLM calls:        7   (output tokens: 10970)
+Embedding calls:  5
+Retrieval actions:  8
+Sections:         1   (revisions: 0)
+
+--------------------------------------------------------
+Stage                          Round        Time       %
+--------------------------------------------------------
+evidence_planning                           8.0s   15.1%
+search_action_planning             0        5.9s   11.2%
+evidence_retrieval                 0        2.8s    5.4%
+coverage_check                     0        8.0s   15.1%
+search_action_planning             1       14.0s   26.4%
+evidence_retrieval                 1        0.4s    0.8%
+coverage_check                     1       12.6s   23.8%
+explanation_planning                        0.6s    1.0%
+teaching_draft                              0.6s    1.1%
+--------------------------------------------------------
+attributed                                 52.9s
+unattributed                                0.0s    0.0%
+
+Top bottlenecks:
+  1. coverage_check                  20.6s   39.0%
+  2. search_action_planning          19.9s   37.6%
+  3. evidence_planning                8.0s   15.1%
+  4. evidence_retrieval               3.3s    6.2%
+  5. teaching_draft                   0.6s    1.1%
+
+Wasted LLM time:  1.1 s (calls that produced nothing usable)
+========================================================
+Performance report written to D:\Java-learning\DevContext\artifacts\single-stream-experiment\q3-multi_pass.json

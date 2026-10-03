@@ -1,0 +1,1354 @@
+{
+  "query": "详细解释当前订单和支付链路是如何保证幂等的",
+  "answer_mode": "teach",
+  "generation_mode": "single_stream",
+  "readability": {
+    "metrics_version": "teaching_style_v1",
+    "heuristic": true,
+    "completion_status": "complete",
+    "sections_inspected_count": 9,
+    "section_chars": {
+      "S1": 145,
+      "S2": 203,
+      "S3": 201,
+      "S4": 193,
+      "S5": 275,
+      "S6": 282,
+      "S7": 178,
+      "S8": 215,
+      "S9": 208
+    },
+    "total_body_chars": 1900,
+    "avg_section_chars": 211.11,
+    "max_section_chars": 282,
+    "sentence_count": 48,
+    "avg_sentence_chars": 38.58,
+    "max_sentence_chars": 106,
+    "long_sentence_count": 2,
+    "long_sentence_rate": 0.0417,
+    "planned_new_terms_per_section": {
+      "S1": 2,
+      "S2": 2,
+      "S3": 2,
+      "S4": 2,
+      "S5": 0,
+      "S6": 2,
+      "S7": 1,
+      "S8": 0,
+      "S9": 1
+    },
+    "observed_new_terms_per_section": {
+      "S1": 3,
+      "S2": 1,
+      "S3": 2,
+      "S4": 2,
+      "S5": 0,
+      "S6": 0,
+      "S7": 1,
+      "S8": 0,
+      "S9": 0
+    },
+    "code_identifier_count": 30,
+    "abstract_term_count": 14,
+    "citation_count": 61,
+    "citation_density": 3.21,
+    "warnings": [
+      {
+        "section_id": "S1",
+        "code": "NEW_TERM_LOAD",
+        "value": 3,
+        "threshold": 2
+      },
+      {
+        "section_id": "S5",
+        "code": "LONG_SENTENCE",
+        "value": 106,
+        "threshold": 80
+      },
+      {
+        "section_id": "S6",
+        "code": "LONG_SENTENCE",
+        "value": 86,
+        "threshold": 80
+      }
+    ],
+    "sections": [
+      {
+        "section_id": "S1",
+        "section_chars": 145,
+        "sentence_count": 4,
+        "sentence_chars": [
+          46,
+          27,
+          25,
+          43
+        ],
+        "avg_sentence_chars": 35.25,
+        "max_sentence_chars": 46,
+        "long_sentence_count": 0,
+        "long_sentence_rate": 0.0,
+        "target_chars": 170,
+        "target_chars_delta": -25,
+        "planned_new_terms": [
+          "幂等",
+          "条件更新"
+        ],
+        "planned_new_term_count": 2,
+        "observed_new_terms": [
+          "状态机",
+          "条件更新",
+          "影响行数"
+        ],
+        "observed_new_term_count": 3,
+        "code_identifier_count": 1,
+        "code_block_chars": 0,
+        "max_consecutive_identifiers": 1,
+        "abstract_term_count": 0,
+        "citation_count": 7,
+        "citation_density": 4.83,
+        "warnings": [
+          {
+            "section_id": "S1",
+            "code": "NEW_TERM_LOAD",
+            "value": 3,
+            "threshold": 2
+          }
+        ]
+      },
+      {
+        "section_id": "S2",
+        "section_chars": 203,
+        "sentence_count": 7,
+        "sentence_chars": [
+          21,
+          33,
+          22,
+          22,
+          52,
+          34,
+          12
+        ],
+        "avg_sentence_chars": 28.0,
+        "max_sentence_chars": 52,
+        "long_sentence_count": 0,
+        "long_sentence_rate": 0.0,
+        "target_chars": 200,
+        "target_chars_delta": 3,
+        "planned_new_terms": [
+          "业务唯一键",
+          "orderSn"
+        ],
+        "planned_new_term_count": 2,
+        "observed_new_terms": [
+          "状态推进"
+        ],
+        "observed_new_term_count": 1,
+        "code_identifier_count": 3,
+        "code_block_chars": 0,
+        "max_consecutive_identifiers": 1,
+        "abstract_term_count": 1,
+        "citation_count": 5,
+        "citation_density": 2.46,
+        "warnings": []
+      },
+      {
+        "section_id": "S3",
+        "section_chars": 201,
+        "sentence_count": 4,
+        "sentence_chars": [
+          36,
+          74,
+          61,
+          26
+        ],
+        "avg_sentence_chars": 49.25,
+        "max_sentence_chars": 74,
+        "long_sentence_count": 0,
+        "long_sentence_rate": 0.0,
+        "target_chars": 220,
+        "target_chars_delta": -19,
+        "planned_new_terms": [
+          "状态机",
+          "影响行数"
+        ],
+        "planned_new_term_count": 2,
+        "observed_new_terms": [
+          "事务",
+          "幂等"
+        ],
+        "observed_new_term_count": 2,
+        "code_identifier_count": 3,
+        "code_block_chars": 0,
+        "max_consecutive_identifiers": 1,
+        "abstract_term_count": 3,
+        "citation_count": 3,
+        "citation_density": 1.49,
+        "warnings": []
+      },
+      {
+        "section_id": "S4",
+        "section_chars": 193,
+        "sentence_count": 7,
+        "sentence_chars": [
+          10,
+          19,
+          31,
+          34,
+          45,
+          32,
+          15
+        ],
+        "avg_sentence_chars": 26.57,
+        "max_sentence_chars": 45,
+        "long_sentence_count": 0,
+        "long_sentence_rate": 0.0,
+        "target_chars": 230,
+        "target_chars_delta": -37,
+        "planned_new_terms": [
+          "paySn",
+          "补偿任务"
+        ],
+        "planned_new_term_count": 2,
+        "observed_new_terms": [
+          "回滚",
+          "补偿"
+        ],
+        "observed_new_term_count": 2,
+        "code_identifier_count": 5,
+        "code_block_chars": 0,
+        "max_consecutive_identifiers": 1,
+        "abstract_term_count": 2,
+        "citation_count": 5,
+        "citation_density": 2.59,
+        "warnings": []
+      },
+      {
+        "section_id": "S5",
+        "section_chars": 275,
+        "sentence_count": 5,
+        "sentence_chars": [
+          106,
+          44,
+          32,
+          42,
+          46
+        ],
+        "avg_sentence_chars": 54.0,
+        "max_sentence_chars": 106,
+        "long_sentence_count": 1,
+        "long_sentence_rate": 0.2,
+        "target_chars": 230,
+        "target_chars_delta": 45,
+        "planned_new_terms": [],
+        "planned_new_term_count": 0,
+        "observed_new_terms": [],
+        "observed_new_term_count": 0,
+        "code_identifier_count": 4,
+        "code_block_chars": 0,
+        "max_consecutive_identifiers": 2,
+        "abstract_term_count": 0,
+        "citation_count": 9,
+        "citation_density": 3.27,
+        "warnings": [
+          {
+            "section_id": "S5",
+            "code": "LONG_SENTENCE",
+            "value": 106,
+            "threshold": 80
+          }
+        ]
+      },
+      {
+        "section_id": "S6",
+        "section_chars": 282,
+        "sentence_count": 5,
+        "sentence_chars": [
+          40,
+          86,
+          55,
+          59,
+          37
+        ],
+        "avg_sentence_chars": 55.4,
+        "max_sentence_chars": 86,
+        "long_sentence_count": 1,
+        "long_sentence_rate": 0.2,
+        "target_chars": 230,
+        "target_chars_delta": 52,
+        "planned_new_terms": [
+          "延迟关单",
+          "兜底扫表"
+        ],
+        "planned_new_term_count": 2,
+        "observed_new_terms": [],
+        "observed_new_term_count": 0,
+        "code_identifier_count": 5,
+        "code_block_chars": 0,
+        "max_consecutive_identifiers": 1,
+        "abstract_term_count": 1,
+        "citation_count": 5,
+        "citation_density": 1.77,
+        "warnings": [
+          {
+            "section_id": "S6",
+            "code": "LONG_SENTENCE",
+            "value": 86,
+            "threshold": 80
+          }
+        ]
+      },
+      {
+        "section_id": "S7",
+        "section_chars": 178,
+        "sentence_count": 6,
+        "sentence_chars": [
+          9,
+          51,
+          13,
+          41,
+          38,
+          20
+        ],
+        "avg_sentence_chars": 28.67,
+        "max_sentence_chars": 51,
+        "long_sentence_count": 0,
+        "long_sentence_rate": 0.0,
+        "target_chars": 230,
+        "target_chars_delta": -52,
+        "planned_new_terms": [
+          "人工介入"
+        ],
+        "planned_new_term_count": 1,
+        "observed_new_terms": [
+          "裁决"
+        ],
+        "observed_new_term_count": 1,
+        "code_identifier_count": 1,
+        "code_block_chars": 0,
+        "max_consecutive_identifiers": 1,
+        "abstract_term_count": 2,
+        "citation_count": 4,
+        "citation_density": 2.25,
+        "warnings": []
+      },
+      {
+        "section_id": "S8",
+        "section_chars": 215,
+        "sentence_count": 6,
+        "sentence_chars": [
+          30,
+          30,
+          54,
+          50,
+          11,
+          34
+        ],
+        "avg_sentence_chars": 34.83,
+        "max_sentence_chars": 54,
+        "long_sentence_count": 0,
+        "long_sentence_rate": 0.0,
+        "target_chars": 230,
+        "target_chars_delta": -15,
+        "planned_new_terms": [],
+        "planned_new_term_count": 0,
+        "observed_new_terms": [],
+        "observed_new_term_count": 0,
+        "code_identifier_count": 5,
+        "code_block_chars": 0,
+        "max_consecutive_identifiers": 2,
+        "abstract_term_count": 3,
+        "citation_count": 12,
+        "citation_density": 5.58,
+        "warnings": []
+      },
+      {
+        "section_id": "S9",
+        "section_chars": 208,
+        "sentence_count": 4,
+        "sentence_chars": [
+          26,
+          53,
+          64,
+          61
+        ],
+        "avg_sentence_chars": 51.0,
+        "max_sentence_chars": 64,
+        "long_sentence_count": 0,
+        "long_sentence_rate": 0.0,
+        "target_chars": 230,
+        "target_chars_delta": -22,
+        "planned_new_terms": [
+          "跨链路标识"
+        ],
+        "planned_new_term_count": 1,
+        "observed_new_terms": [],
+        "observed_new_term_count": 0,
+        "code_identifier_count": 3,
+        "code_block_chars": 0,
+        "max_consecutive_identifiers": 1,
+        "abstract_term_count": 2,
+        "citation_count": 11,
+        "citation_density": 5.29,
+        "warnings": []
+      }
+    ],
+    "inspector_errors": []
+  },
+  "stream": {
+    "generation_mode": "single_stream",
+    "completion_status": "complete",
+    "stream_started_offset_ms": 102821.85859995661,
+    "first_content_token_ms": 120501.92989996867,
+    "first_section_ready_ms": 120926.60279996926,
+    "first_content_token_from_stream_ms": 17680.07130001206,
+    "first_section_ready_from_stream_ms": 18104.744200012647,
+    "stream_finished_ms": 124758.20839998778,
+    "stream_duration_ms": 21936.349800031167,
+    "sections_planned": 9,
+    "sections_completed": 9,
+    "sections_emitted": 9,
+    "sections_failed": 0,
+    "missing_sections": [],
+    "input_tokens": 8274,
+    "output_tokens": 5674,
+    "reasoning_tokens": 4156,
+    "visible_output_tokens": 1518,
+    "stream_retry_count": 0,
+    "stream_partial": false,
+    "stream_cancelled": false,
+    "failed_section": null,
+    "error": null,
+    "attempts": [
+      {
+        "attempt": 1,
+        "started_offset_ms": 102821.88539998606,
+        "finished_offset_ms": 124758.20400001248,
+        "first_content_token_ms": 120501.92989996867,
+        "first_section_ready_ms": 120926.60279996926,
+        "error": null,
+        "usage": {
+          "prompt_tokens": 8274,
+          "completion_tokens": 5674,
+          "total_tokens": 13948,
+          "prompt_cache_hit_tokens": 640,
+          "prompt_cache_miss_tokens": 7634,
+          "reasoning_tokens": 4156
+        }
+      }
+    ],
+    "plan_schema_version": "teaching_v2",
+    "readability": {
+      "metrics_version": "teaching_style_v1",
+      "heuristic": true,
+      "completion_status": "complete",
+      "sections_inspected_count": 9,
+      "section_chars": {
+        "S1": 145,
+        "S2": 203,
+        "S3": 201,
+        "S4": 193,
+        "S5": 275,
+        "S6": 282,
+        "S7": 178,
+        "S8": 215,
+        "S9": 208
+      },
+      "total_body_chars": 1900,
+      "avg_section_chars": 211.11,
+      "max_section_chars": 282,
+      "sentence_count": 48,
+      "avg_sentence_chars": 38.58,
+      "max_sentence_chars": 106,
+      "long_sentence_count": 2,
+      "long_sentence_rate": 0.0417,
+      "planned_new_terms_per_section": {
+        "S1": 2,
+        "S2": 2,
+        "S3": 2,
+        "S4": 2,
+        "S5": 0,
+        "S6": 2,
+        "S7": 1,
+        "S8": 0,
+        "S9": 1
+      },
+      "observed_new_terms_per_section": {
+        "S1": 3,
+        "S2": 1,
+        "S3": 2,
+        "S4": 2,
+        "S5": 0,
+        "S6": 0,
+        "S7": 1,
+        "S8": 0,
+        "S9": 0
+      },
+      "code_identifier_count": 30,
+      "abstract_term_count": 14,
+      "citation_count": 61,
+      "citation_density": 3.21,
+      "warnings": [
+        {
+          "section_id": "S1",
+          "code": "NEW_TERM_LOAD",
+          "value": 3,
+          "threshold": 2
+        },
+        {
+          "section_id": "S5",
+          "code": "LONG_SENTENCE",
+          "value": 106,
+          "threshold": 80
+        },
+        {
+          "section_id": "S6",
+          "code": "LONG_SENTENCE",
+          "value": 86,
+          "threshold": 80
+        }
+      ],
+      "sections": [
+        {
+          "section_id": "S1",
+          "section_chars": 145,
+          "sentence_count": 4,
+          "sentence_chars": [
+            46,
+            27,
+            25,
+            43
+          ],
+          "avg_sentence_chars": 35.25,
+          "max_sentence_chars": 46,
+          "long_sentence_count": 0,
+          "long_sentence_rate": 0.0,
+          "target_chars": 170,
+          "target_chars_delta": -25,
+          "planned_new_terms": [
+            "幂等",
+            "条件更新"
+          ],
+          "planned_new_term_count": 2,
+          "observed_new_terms": [
+            "状态机",
+            "条件更新",
+            "影响行数"
+          ],
+          "observed_new_term_count": 3,
+          "code_identifier_count": 1,
+          "code_block_chars": 0,
+          "max_consecutive_identifiers": 1,
+          "abstract_term_count": 0,
+          "citation_count": 7,
+          "citation_density": 4.83,
+          "warnings": [
+            {
+              "section_id": "S1",
+              "code": "NEW_TERM_LOAD",
+              "value": 3,
+              "threshold": 2
+            }
+          ]
+        },
+        {
+          "section_id": "S2",
+          "section_chars": 203,
+          "sentence_count": 7,
+          "sentence_chars": [
+            21,
+            33,
+            22,
+            22,
+            52,
+            34,
+            12
+          ],
+          "avg_sentence_chars": 28.0,
+          "max_sentence_chars": 52,
+          "long_sentence_count": 0,
+          "long_sentence_rate": 0.0,
+          "target_chars": 200,
+          "target_chars_delta": 3,
+          "planned_new_terms": [
+            "业务唯一键",
+            "orderSn"
+          ],
+          "planned_new_term_count": 2,
+          "observed_new_terms": [
+            "状态推进"
+          ],
+          "observed_new_term_count": 1,
+          "code_identifier_count": 3,
+          "code_block_chars": 0,
+          "max_consecutive_identifiers": 1,
+          "abstract_term_count": 1,
+          "citation_count": 5,
+          "citation_density": 2.46,
+          "warnings": []
+        },
+        {
+          "section_id": "S3",
+          "section_chars": 201,
+          "sentence_count": 4,
+          "sentence_chars": [
+            36,
+            74,
+            61,
+            26
+          ],
+          "avg_sentence_chars": 49.25,
+          "max_sentence_chars": 74,
+          "long_sentence_count": 0,
+          "long_sentence_rate": 0.0,
+          "target_chars": 220,
+          "target_chars_delta": -19,
+          "planned_new_terms": [
+            "状态机",
+            "影响行数"
+          ],
+          "planned_new_term_count": 2,
+          "observed_new_terms": [
+            "事务",
+            "幂等"
+          ],
+          "observed_new_term_count": 2,
+          "code_identifier_count": 3,
+          "code_block_chars": 0,
+          "max_consecutive_identifiers": 1,
+          "abstract_term_count": 3,
+          "citation_count": 3,
+          "citation_density": 1.49,
+          "warnings": []
+        },
+        {
+          "section_id": "S4",
+          "section_chars": 193,
+          "sentence_count": 7,
+          "sentence_chars": [
+            10,
+            19,
+            31,
+            34,
+            45,
+            32,
+            15
+          ],
+          "avg_sentence_chars": 26.57,
+          "max_sentence_chars": 45,
+          "long_sentence_count": 0,
+          "long_sentence_rate": 0.0,
+          "target_chars": 230,
+          "target_chars_delta": -37,
+          "planned_new_terms": [
+            "paySn",
+            "补偿任务"
+          ],
+          "planned_new_term_count": 2,
+          "observed_new_terms": [
+            "回滚",
+            "补偿"
+          ],
+          "observed_new_term_count": 2,
+          "code_identifier_count": 5,
+          "code_block_chars": 0,
+          "max_consecutive_identifiers": 1,
+          "abstract_term_count": 2,
+          "citation_count": 5,
+          "citation_density": 2.59,
+          "warnings": []
+        },
+        {
+          "section_id": "S5",
+          "section_chars": 275,
+          "sentence_count": 5,
+          "sentence_chars": [
+            106,
+            44,
+            32,
+            42,
+            46
+          ],
+          "avg_sentence_chars": 54.0,
+          "max_sentence_chars": 106,
+          "long_sentence_count": 1,
+          "long_sentence_rate": 0.2,
+          "target_chars": 230,
+          "target_chars_delta": 45,
+          "planned_new_terms": [],
+          "planned_new_term_count": 0,
+          "observed_new_terms": [],
+          "observed_new_term_count": 0,
+          "code_identifier_count": 4,
+          "code_block_chars": 0,
+          "max_consecutive_identifiers": 2,
+          "abstract_term_count": 0,
+          "citation_count": 9,
+          "citation_density": 3.27,
+          "warnings": [
+            {
+              "section_id": "S5",
+              "code": "LONG_SENTENCE",
+              "value": 106,
+              "threshold": 80
+            }
+          ]
+        },
+        {
+          "section_id": "S6",
+          "section_chars": 282,
+          "sentence_count": 5,
+          "sentence_chars": [
+            40,
+            86,
+            55,
+            59,
+            37
+          ],
+          "avg_sentence_chars": 55.4,
+          "max_sentence_chars": 86,
+          "long_sentence_count": 1,
+          "long_sentence_rate": 0.2,
+          "target_chars": 230,
+          "target_chars_delta": 52,
+          "planned_new_terms": [
+            "延迟关单",
+            "兜底扫表"
+          ],
+          "planned_new_term_count": 2,
+          "observed_new_terms": [],
+          "observed_new_term_count": 0,
+          "code_identifier_count": 5,
+          "code_block_chars": 0,
+          "max_consecutive_identifiers": 1,
+          "abstract_term_count": 1,
+          "citation_count": 5,
+          "citation_density": 1.77,
+          "warnings": [
+            {
+              "section_id": "S6",
+              "code": "LONG_SENTENCE",
+              "value": 86,
+              "threshold": 80
+            }
+          ]
+        },
+        {
+          "section_id": "S7",
+          "section_chars": 178,
+          "sentence_count": 6,
+          "sentence_chars": [
+            9,
+            51,
+            13,
+            41,
+            38,
+            20
+          ],
+          "avg_sentence_chars": 28.67,
+          "max_sentence_chars": 51,
+          "long_sentence_count": 0,
+          "long_sentence_rate": 0.0,
+          "target_chars": 230,
+          "target_chars_delta": -52,
+          "planned_new_terms": [
+            "人工介入"
+          ],
+          "planned_new_term_count": 1,
+          "observed_new_terms": [
+            "裁决"
+          ],
+          "observed_new_term_count": 1,
+          "code_identifier_count": 1,
+          "code_block_chars": 0,
+          "max_consecutive_identifiers": 1,
+          "abstract_term_count": 2,
+          "citation_count": 4,
+          "citation_density": 2.25,
+          "warnings": []
+        },
+        {
+          "section_id": "S8",
+          "section_chars": 215,
+          "sentence_count": 6,
+          "sentence_chars": [
+            30,
+            30,
+            54,
+            50,
+            11,
+            34
+          ],
+          "avg_sentence_chars": 34.83,
+          "max_sentence_chars": 54,
+          "long_sentence_count": 0,
+          "long_sentence_rate": 0.0,
+          "target_chars": 230,
+          "target_chars_delta": -15,
+          "planned_new_terms": [],
+          "planned_new_term_count": 0,
+          "observed_new_terms": [],
+          "observed_new_term_count": 0,
+          "code_identifier_count": 5,
+          "code_block_chars": 0,
+          "max_consecutive_identifiers": 2,
+          "abstract_term_count": 3,
+          "citation_count": 12,
+          "citation_density": 5.58,
+          "warnings": []
+        },
+        {
+          "section_id": "S9",
+          "section_chars": 208,
+          "sentence_count": 4,
+          "sentence_chars": [
+            26,
+            53,
+            64,
+            61
+          ],
+          "avg_sentence_chars": 51.0,
+          "max_sentence_chars": 64,
+          "long_sentence_count": 0,
+          "long_sentence_rate": 0.0,
+          "target_chars": 230,
+          "target_chars_delta": -22,
+          "planned_new_terms": [
+            "跨链路标识"
+          ],
+          "planned_new_term_count": 1,
+          "observed_new_terms": [],
+          "observed_new_term_count": 0,
+          "code_identifier_count": 3,
+          "code_block_chars": 0,
+          "max_consecutive_identifiers": 1,
+          "abstract_term_count": 2,
+          "citation_count": 11,
+          "citation_density": 5.29,
+          "warnings": []
+        }
+      ],
+      "inspector_errors": []
+    },
+    "core_mental_model": "重复请求不是靠一把总锁拦住，而是让数据库在“状态还符合预期”时才改；改不动就说明已处理过或该拒绝。",
+    "output_budget": {
+      "max_output_tokens": 11000,
+      "preferred_sections": 6,
+      "allow_multi_pass": false,
+      "reason": "fixed depth budget, micro granularity"
+    },
+    "context_views": {
+      "bound_evidence": 17
+    },
+    "section_drafts": [
+      {
+        "id": "S1",
+        "chars": 208,
+        "used_citations": [
+          "E18",
+          "E16",
+          "E2",
+          "E3",
+          "E11",
+          "E9"
+        ]
+      },
+      {
+        "id": "S2",
+        "chars": 261,
+        "used_citations": [
+          "E19",
+          "E16",
+          "E14",
+          "E3"
+        ]
+      },
+      {
+        "id": "S3",
+        "chars": 243,
+        "used_citations": [
+          "E2",
+          "E8",
+          "E3"
+        ]
+      },
+      {
+        "id": "S4",
+        "chars": 248,
+        "used_citations": [
+          "E9",
+          "E11"
+        ]
+      },
+      {
+        "id": "S5",
+        "chars": 359,
+        "used_citations": [
+          "E20",
+          "E21",
+          "E10",
+          "E19",
+          "E8"
+        ]
+      },
+      {
+        "id": "S6",
+        "chars": 337,
+        "used_citations": [
+          "E5",
+          "E4",
+          "E1",
+          "E2"
+        ]
+      },
+      {
+        "id": "S7",
+        "chars": 223,
+        "used_citations": [
+          "E13",
+          "E9",
+          "E14",
+          "E11"
+        ]
+      },
+      {
+        "id": "S8",
+        "chars": 318,
+        "used_citations": [
+          "E16",
+          "E14",
+          "E3",
+          "E9",
+          "E20",
+          "E21",
+          "E8",
+          "E11"
+        ]
+      },
+      {
+        "id": "S9",
+        "chars": 298,
+        "used_citations": [
+          "E8",
+          "E20",
+          "E21",
+          "E19",
+          "E12",
+          "E16",
+          "E18"
+        ]
+      }
+    ]
+  },
+  "depth": "detailed",
+  "top_k": 12,
+  "timestamp": "2026-10-03T10:52:33.902540+00:00",
+  "sample_kind": "first_sample",
+  "total_latency_ms": 124760.439,
+  "attributed_ms": 124754.933,
+  "unattributed_ms": 5.506,
+  "unattributed_ratio": 0.0,
+  "top_level_stages_used": [
+    "evidence_planning",
+    "search_action_planning",
+    "evidence_retrieval",
+    "coverage_check",
+    "explanation_planning",
+    "teaching_draft",
+    "teaching_review",
+    "teaching_revision"
+  ],
+  "stop_reason": "partial",
+  "summary": {
+    "llm_calls": 7,
+    "embedding_calls": 5,
+    "retrieval_actions": 6,
+    "sections": 9,
+    "revisions": 0,
+    "planned_section_count": 9,
+    "llm_latency_ms": 121772.455,
+    "llm_input_tokens": 36840,
+    "llm_output_tokens": 26490,
+    "llm_reasoning_tokens": 21412,
+    "discarded_llm_latency_ms": 0.0,
+    "final_answer_chars": 2511,
+    "final_answer_tokens_estimated": 1770
+  },
+  "stages": [
+    {
+      "stage": "evidence_planning",
+      "latency_ms": 24329.87040001899,
+      "decision_source": "llm",
+      "model": "deepseek-flash",
+      "reasoning_effort": "high",
+      "input_tokens": 479,
+      "output_tokens": 3455,
+      "round_index": null
+    },
+    {
+      "stage": "search_action_planning",
+      "latency_ms": 3356.2917999806814,
+      "decision_source": "llm",
+      "model": "deepseek-flash",
+      "reasoning_effort": "low",
+      "input_tokens": 794,
+      "output_tokens": 752,
+      "round_index": 0
+    },
+    {
+      "stage": "evidence_retrieval",
+      "latency_ms": 2816.6261999867857,
+      "decision_source": "policy",
+      "model": null,
+      "reasoning_effort": null,
+      "input_tokens": null,
+      "output_tokens": null,
+      "round_index": 0
+    },
+    {
+      "stage": "coverage_check",
+      "latency_ms": 18886.137499997858,
+      "decision_source": "llm",
+      "model": "deepseek-flash",
+      "reasoning_effort": "low",
+      "input_tokens": 7654,
+      "output_tokens": 4308,
+      "round_index": 0
+    },
+    {
+      "stage": "search_action_planning",
+      "latency_ms": 7995.513399946503,
+      "decision_source": "llm",
+      "model": "deepseek-flash",
+      "reasoning_effort": "low",
+      "input_tokens": 551,
+      "output_tokens": 1671,
+      "round_index": 1
+    },
+    {
+      "stage": "evidence_retrieval",
+      "latency_ms": 147.80799997970462,
+      "decision_source": "policy",
+      "model": null,
+      "reasoning_effort": null,
+      "input_tokens": null,
+      "output_tokens": null,
+      "round_index": 1
+    },
+    {
+      "stage": "coverage_check",
+      "latency_ms": 13608.471399988048,
+      "decision_source": "llm",
+      "model": "deepseek-flash",
+      "reasoning_effort": "low",
+      "input_tokens": 8074,
+      "output_tokens": 3042,
+      "round_index": 1
+    },
+    {
+      "stage": "explanation_planning",
+      "latency_ms": 31664.808599976823,
+      "decision_source": "llm",
+      "model": "deepseek-flash",
+      "reasoning_effort": "high",
+      "input_tokens": 11014,
+      "output_tokens": 7588,
+      "round_index": null
+    },
+    {
+      "stage": "teaching_draft",
+      "latency_ms": 21949.406200030353,
+      "decision_source": "llm",
+      "model": "deepseek-flash",
+      "reasoning_effort": "high",
+      "input_tokens": 8274,
+      "output_tokens": 5674,
+      "round_index": null
+    }
+  ],
+  "llm_calls": [
+    {
+      "call_id": 1,
+      "stage": "evidence_planning",
+      "latency_ms": 24329.616100003477,
+      "substage": null,
+      "model": "deepseek-flash",
+      "reasoning_effort": "high",
+      "max_tokens": 8192,
+      "json_mode": true,
+      "input_tokens": 479,
+      "output_tokens": 3455,
+      "reasoning_tokens": 2992,
+      "finish_reason": "stop",
+      "success": true,
+      "error": null,
+      "wasted": false,
+      "wasted_reason": null,
+      "discarded_latency_ms": 0.0
+    },
+    {
+      "call_id": 2,
+      "stage": "search_action_planning",
+      "latency_ms": 3355.697500053793,
+      "substage": "round_0",
+      "model": "deepseek-flash",
+      "reasoning_effort": "low",
+      "max_tokens": 4096,
+      "json_mode": true,
+      "input_tokens": 794,
+      "output_tokens": 752,
+      "reasoning_tokens": 429,
+      "finish_reason": "stop",
+      "success": true,
+      "error": null,
+      "wasted": false,
+      "wasted_reason": null,
+      "discarded_latency_ms": 0.0
+    },
+    {
+      "call_id": 3,
+      "stage": "coverage_check",
+      "latency_ms": 18885.254200024065,
+      "substage": "round_0",
+      "model": "deepseek-flash",
+      "reasoning_effort": "low",
+      "max_tokens": 32768,
+      "json_mode": true,
+      "input_tokens": 7654,
+      "output_tokens": 4308,
+      "reasoning_tokens": 3855,
+      "finish_reason": "stop",
+      "success": true,
+      "error": null,
+      "wasted": false,
+      "wasted_reason": null,
+      "discarded_latency_ms": 0.0
+    },
+    {
+      "call_id": 4,
+      "stage": "search_action_planning",
+      "latency_ms": 7995.013800042216,
+      "substage": "round_1",
+      "model": "deepseek-flash",
+      "reasoning_effort": "low",
+      "max_tokens": 4096,
+      "json_mode": true,
+      "input_tokens": 551,
+      "output_tokens": 1671,
+      "reasoning_tokens": 1591,
+      "finish_reason": "stop",
+      "success": true,
+      "error": null,
+      "wasted": false,
+      "wasted_reason": null,
+      "discarded_latency_ms": 0.0
+    },
+    {
+      "call_id": 5,
+      "stage": "coverage_check",
+      "latency_ms": 13607.600399991497,
+      "substage": "round_1",
+      "model": "deepseek-flash",
+      "reasoning_effort": "low",
+      "max_tokens": 32768,
+      "json_mode": true,
+      "input_tokens": 8074,
+      "output_tokens": 3042,
+      "reasoning_tokens": 2678,
+      "finish_reason": "stop",
+      "success": true,
+      "error": null,
+      "wasted": false,
+      "wasted_reason": null,
+      "discarded_latency_ms": 0.0
+    },
+    {
+      "call_id": 6,
+      "stage": "explanation_planning",
+      "latency_ms": 31663.112699985504,
+      "substage": null,
+      "model": "deepseek-flash",
+      "reasoning_effort": "high",
+      "max_tokens": 32768,
+      "json_mode": true,
+      "input_tokens": 11014,
+      "output_tokens": 7588,
+      "reasoning_tokens": 5711,
+      "finish_reason": "stop",
+      "success": true,
+      "error": null,
+      "wasted": false,
+      "wasted_reason": null,
+      "discarded_latency_ms": 0.0
+    },
+    {
+      "call_id": 7,
+      "stage": "teaching_draft",
+      "latency_ms": 21936.15999998292,
+      "substage": "single_stream",
+      "model": "deepseek-flash",
+      "reasoning_effort": "high",
+      "max_tokens": 11000,
+      "json_mode": false,
+      "input_tokens": 8274,
+      "output_tokens": 5674,
+      "reasoning_tokens": 4156,
+      "finish_reason": "stop",
+      "success": true,
+      "error": null,
+      "wasted": false,
+      "wasted_reason": null,
+      "discarded_latency_ms": 0.0
+    }
+  ],
+  "embedding_calls": [
+    {
+      "call_id": 1,
+      "query": "订单 创建 状态变更 幂等 重复请求 识别 阻止 实现 代码 配置 数据约束 触发条件",
+      "latency_ms": 374.16639999719337,
+      "batch_size": 1,
+      "model": "text-embedding-v4",
+      "dimensions": 1024,
+      "transport": "curl",
+      "success": true,
+      "error": null
+    },
+    {
+      "call_id": 2,
+      "query": "支付 请求 回调 状态更新 幂等 重复处理 识别 阻止 实现 代码 配置 数据约束 触发条件",
+      "latency_ms": 393.01880000857636,
+      "batch_size": 1,
+      "model": "text-embedding-v4",
+      "dimensions": 1024,
+      "transport": "curl",
+      "success": true,
+      "error": null
+    },
+    {
+      "call_id": 3,
+      "query": "订单 支付 链路 幂等 关联 标识 上下文 传递 业务请求标识 生成规则 重复请求 判断",
+      "latency_ms": 367.03309998847544,
+      "batch_size": 1,
+      "model": "text-embedding-v4",
+      "dimensions": 1024,
+      "transport": "curl",
+      "success": true,
+      "error": null
+    },
+    {
+      "call_id": 4,
+      "query": "幂等 校验 不通过 重复请求 返回已有结果 抛出异常 拒绝处理 分支 订单 支付",
+      "latency_ms": 404.15860002394766,
+      "batch_size": 1,
+      "model": "text-embedding-v4",
+      "dimensions": 1024,
+      "transport": "curl",
+      "success": true,
+      "error": null
+    },
+    {
+      "call_id": 5,
+      "query": "项目文档 设计说明 订单 支付 链路 幂等 策略 实现 一致",
+      "latency_ms": 405.8297000010498,
+      "batch_size": 1,
+      "model": "text-embedding-v4",
+      "dimensions": 1024,
+      "transport": "curl",
+      "success": true,
+      "error": null
+    }
+  ],
+  "retrieval_actions": [
+    {
+      "action_id": "SA1",
+      "requirement_id": "ER1",
+      "round_index": 0,
+      "query": "订单 创建 状态变更 幂等 重复请求 识别 阻止 实现 代码 配置 数据约束 触发条件",
+      "source_scope": "CODE",
+      "top_k": 5,
+      "total_ms": 933.9567000279203,
+      "result_count": 5,
+      "query_embedding_ms": 822.6127999951132,
+      "keyword_sql_ms": 0.0,
+      "vector_sql_ms": 111.33169999811798,
+      "fusion_ms": 0.0,
+      "error": null
+    },
+    {
+      "action_id": "SA2",
+      "requirement_id": "ER2",
+      "round_index": 0,
+      "query": "支付 请求 回调 状态更新 幂等 重复处理 识别 阻止 实现 代码 配置 数据约束 触发条件",
+      "source_scope": "CODE",
+      "top_k": 5,
+      "total_ms": 441.2939000176266,
+      "result_count": 5,
+      "query_embedding_ms": 398.3334999647923,
+      "keyword_sql_ms": 0.0,
+      "vector_sql_ms": 42.946400004439056,
+      "fusion_ms": 0.0,
+      "error": null
+    },
+    {
+      "action_id": "SA3",
+      "requirement_id": "ER3",
+      "round_index": 0,
+      "query": "订单 支付 链路 幂等 关联 标识 上下文 传递 业务请求标识 生成规则 重复请求 判断",
+      "source_scope": "CODE",
+      "top_k": 5,
+      "total_ms": 431.2670999788679,
+      "result_count": 5,
+      "query_embedding_ms": 372.0626000431366,
+      "keyword_sql_ms": 0.0,
+      "vector_sql_ms": 59.197999944444746,
+      "fusion_ms": 0.0,
+      "error": null
+    },
+    {
+      "action_id": "SA4",
+      "requirement_id": "ER4",
+      "round_index": 0,
+      "query": "幂等 校验 不通过 重复请求 返回已有结果 抛出异常 拒绝处理 分支 订单 支付",
+      "source_scope": "CODE",
+      "top_k": 5,
+      "total_ms": 507.4743999866769,
+      "result_count": 5,
+      "query_embedding_ms": 411.45890002371743,
+      "keyword_sql_ms": 0.0,
+      "vector_sql_ms": 96.00329998647794,
+      "fusion_ms": 0.0,
+      "error": null
+    },
+    {
+      "action_id": "SA5",
+      "requirement_id": "ER5",
+      "round_index": 0,
+      "query": "项目文档 设计说明 订单 支付 链路 幂等 策略 实现 一致",
+      "source_scope": "DOCUMENT",
+      "top_k": 3,
+      "total_ms": 498.6633000080474,
+      "result_count": 3,
+      "query_embedding_ms": 413.25560002587736,
+      "keyword_sql_ms": 0.0,
+      "vector_sql_ms": 85.39689995814115,
+      "fusion_ms": 0.0,
+      "error": null
+    },
+    {
+      "action_id": "SA6",
+      "requirement_id": "ER3",
+      "round_index": 1,
+      "query": "payCallbackOrder orderSn paySn 幂等 标识 生成规则 传递 PayServiceImpl OrderService",
+      "source_scope": "CODE",
+      "top_k": 5,
+      "total_ms": 147.5262999883853,
+      "result_count": 5,
+      "query_embedding_ms": 0.0,
+      "keyword_sql_ms": 147.51600002637133,
+      "vector_sql_ms": 0.0,
+      "fusion_ms": 0.0,
+      "error": null
+    }
+  ],
+  "section_executions": [],
+  "repeated_embeddings": {}
+}

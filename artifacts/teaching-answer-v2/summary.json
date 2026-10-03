@@ -1,0 +1,405 @@
+{
+  "samples": [
+    {
+      "case": "q1",
+      "version": "v1",
+      "status": "complete",
+      "sections_planned": 11,
+      "sections_emitted": 11,
+      "total_seconds": 111.350438,
+      "generation_seconds": 89.11145729996497,
+      "writer_seconds": 61.50412450003205,
+      "total_llm_calls": 5,
+      "generation_llm_calls": 2,
+      "writer_calls": 1,
+      "ttft_seconds": 102.36566380003933,
+      "ttfs_seconds": 103.41646730003413,
+      "writer_ttft_seconds": 52.52120190003188,
+      "writer_ttfs_seconds": 53.57200540002668,
+      "first_section_lead_seconds": 7.933970699965866,
+      "llm_input_tokens": 30558,
+      "llm_output_tokens": 19921,
+      "llm_reasoning_tokens": 14667,
+      "writer_input_tokens": 7897,
+      "writer_output_tokens": 9655,
+      "writer_visible_tokens": 1864,
+      "writer_reasoning_tokens": 7791,
+      "answer_chars": 3217,
+      "retry_count": 0,
+      "missing_sections": [],
+      "inspector_errors": [],
+      "style": {
+        "total_body_chars": 2645,
+        "avg_section_chars": 240.45,
+        "max_section_chars": 288,
+        "sentence_count": 51,
+        "avg_sentence_chars": 50.86,
+        "max_sentence_chars": 108,
+        "long_sentence_count": 5,
+        "long_sentence_rate": 0.098,
+        "code_identifier_count": 47,
+        "abstract_term_count": 12,
+        "citation_count": 46,
+        "citation_density": 1.74,
+        "planned_new_terms_per_section": {
+          "S1": null,
+          "S2": null,
+          "S3": null,
+          "S4": null,
+          "S5": null,
+          "S6": null,
+          "S7": null,
+          "S8": null,
+          "S9": null,
+          "S10": null,
+          "S11": null
+        },
+        "observed_new_terms_per_section": {
+          "S1": 5,
+          "S2": 0,
+          "S3": 1,
+          "S4": 1,
+          "S5": 2,
+          "S6": 0,
+          "S7": 0,
+          "S8": 0,
+          "S9": 1,
+          "S10": 0,
+          "S11": 1
+        },
+        "warnings": [
+          {
+            "section_id": "S1",
+            "code": "NEW_TERM_LOAD",
+            "value": 5,
+            "threshold": 2
+          },
+          {
+            "section_id": "S2",
+            "code": "LONG_SENTENCE",
+            "value": 108,
+            "threshold": 80
+          },
+          {
+            "section_id": "S3",
+            "code": "LONG_SENTENCE",
+            "value": 90,
+            "threshold": 80
+          },
+          {
+            "section_id": "S4",
+            "code": "LONG_SENTENCE",
+            "value": 82,
+            "threshold": 80
+          },
+          {
+            "section_id": "S5",
+            "code": "LONG_SENTENCE",
+            "value": 95,
+            "threshold": 80
+          }
+        ]
+      }
+    },
+    {
+      "case": "q1",
+      "version": "v2",
+      "status": "complete",
+      "sections_planned": 8,
+      "sections_emitted": 8,
+      "total_seconds": 110.299965,
+      "generation_seconds": 36.054632299987134,
+      "writer_seconds": 13.78776169999037,
+      "total_llm_calls": 7,
+      "generation_llm_calls": 2,
+      "writer_calls": 1,
+      "ttft_seconds": 106.68866280000657,
+      "ttfs_seconds": 107.12408179999329,
+      "writer_ttft_seconds": 10.178048199974,
+      "writer_ttfs_seconds": 10.613467199960724,
+      "first_section_lead_seconds": 3.175883200006705,
+      "llm_input_tokens": 45944,
+      "llm_output_tokens": 24306,
+      "llm_reasoning_tokens": 19330,
+      "writer_input_tokens": 9904,
+      "writer_output_tokens": 3390,
+      "writer_visible_tokens": 1144,
+      "writer_reasoning_tokens": 2246,
+      "answer_chars": 1698,
+      "retry_count": 0,
+      "missing_sections": [],
+      "inspector_errors": [],
+      "style": {
+        "total_body_chars": 1275,
+        "avg_section_chars": 159.38,
+        "max_section_chars": 193,
+        "sentence_count": 34,
+        "avg_sentence_chars": 36.5,
+        "max_sentence_chars": 88,
+        "long_sentence_count": 1,
+        "long_sentence_rate": 0.0294,
+        "code_identifier_count": 11,
+        "abstract_term_count": 6,
+        "citation_count": 36,
+        "citation_density": 2.82,
+        "planned_new_terms_per_section": {
+          "S1": 2,
+          "S2": 2,
+          "S3": 1,
+          "S4": 1,
+          "S5": 1,
+          "S6": 1,
+          "S7": 1,
+          "S8": 0
+        },
+        "observed_new_terms_per_section": {
+          "S1": 2,
+          "S2": 0,
+          "S3": 2,
+          "S4": 2,
+          "S5": 0,
+          "S6": 0,
+          "S7": 1,
+          "S8": 0
+        },
+        "warnings": [
+          {
+            "section_id": "S4",
+            "code": "LONG_SENTENCE",
+            "value": 88,
+            "threshold": 80
+          }
+        ]
+      },
+      "published_invalid_citations": 0,
+      "answer_contains_markers": false,
+      "answer_contains_reasoning_field": false
+    },
+    {
+      "case": "q3",
+      "version": "v1",
+      "status": "partial",
+      "sections_planned": 10,
+      "sections_emitted": 5,
+      "total_seconds": 101.097413,
+      "generation_seconds": 47.2786647999892,
+      "writer_seconds": 18.55832150002243,
+      "total_llm_calls": 7,
+      "generation_llm_calls": 2,
+      "writer_calls": 1,
+      "ttft_seconds": 87.32369420002215,
+      "ttfs_seconds": 88.87619629997062,
+      "writer_ttft_seconds": 4.786985800019465,
+      "writer_ttfs_seconds": 6.339487899967935,
+      "first_section_lead_seconds": 12.221216700029386,
+      "llm_input_tokens": 36277,
+      "llm_output_tokens": 21644,
+      "llm_reasoning_tokens": 14514,
+      "writer_input_tokens": 8254,
+      "writer_output_tokens": 4039,
+      "writer_visible_tokens": 3112,
+      "writer_reasoning_tokens": 927,
+      "answer_chars": 2998,
+      "retry_count": 0,
+      "missing_sections": [
+        "S6",
+        "S7",
+        "S8",
+        "S9",
+        "S10"
+      ],
+      "inspector_errors": [],
+      "style": {
+        "total_body_chars": 2552,
+        "avg_section_chars": 510.4,
+        "max_section_chars": 591,
+        "sentence_count": 38,
+        "avg_sentence_chars": 66.16,
+        "max_sentence_chars": 179,
+        "long_sentence_count": 14,
+        "long_sentence_rate": 0.3684,
+        "code_identifier_count": 50,
+        "abstract_term_count": 11,
+        "citation_count": 30,
+        "citation_density": 1.18,
+        "planned_new_terms_per_section": {
+          "S1": null,
+          "S2": null,
+          "S3": null,
+          "S4": null,
+          "S5": null
+        },
+        "observed_new_terms_per_section": {
+          "S1": 5,
+          "S2": 2,
+          "S3": 1,
+          "S4": 0,
+          "S5": 1
+        },
+        "warnings": [
+          {
+            "section_id": "S1",
+            "code": "LONG_SECTION",
+            "value": 534,
+            "threshold": 320
+          },
+          {
+            "section_id": "S1",
+            "code": "LONG_SENTENCE",
+            "value": 129,
+            "threshold": 80
+          },
+          {
+            "section_id": "S1",
+            "code": "NEW_TERM_LOAD",
+            "value": 5,
+            "threshold": 2
+          },
+          {
+            "section_id": "S2",
+            "code": "LONG_SECTION",
+            "value": 591,
+            "threshold": 320
+          },
+          {
+            "section_id": "S2",
+            "code": "LONG_SENTENCE",
+            "value": 179,
+            "threshold": 80
+          },
+          {
+            "section_id": "S3",
+            "code": "LONG_SECTION",
+            "value": 466,
+            "threshold": 320
+          },
+          {
+            "section_id": "S3",
+            "code": "LONG_SENTENCE",
+            "value": 98,
+            "threshold": 80
+          },
+          {
+            "section_id": "S4",
+            "code": "LONG_SECTION",
+            "value": 487,
+            "threshold": 320
+          },
+          {
+            "section_id": "S4",
+            "code": "LONG_SENTENCE",
+            "value": 99,
+            "threshold": 80
+          },
+          {
+            "section_id": "S5",
+            "code": "LONG_SECTION",
+            "value": 474,
+            "threshold": 320
+          },
+          {
+            "section_id": "S5",
+            "code": "LONG_SENTENCE",
+            "value": 126,
+            "threshold": 80
+          }
+        ]
+      }
+    },
+    {
+      "case": "q3",
+      "version": "v2",
+      "status": "complete",
+      "sections_planned": 9,
+      "sections_emitted": 9,
+      "total_seconds": 124.760439,
+      "generation_seconds": 53.614214800007176,
+      "writer_seconds": 21.936349800031167,
+      "total_llm_calls": 7,
+      "generation_llm_calls": 2,
+      "writer_calls": 1,
+      "ttft_seconds": 120.50192989996867,
+      "ttfs_seconds": 120.92660279996926,
+      "writer_ttft_seconds": 17.68007130001206,
+      "writer_ttfs_seconds": 18.104744200012647,
+      "first_section_lead_seconds": 3.833836200030739,
+      "llm_input_tokens": 36840,
+      "llm_output_tokens": 26490,
+      "llm_reasoning_tokens": 21412,
+      "writer_input_tokens": 8274,
+      "writer_output_tokens": 5674,
+      "writer_visible_tokens": 1518,
+      "writer_reasoning_tokens": 4156,
+      "answer_chars": 2511,
+      "retry_count": 0,
+      "missing_sections": [],
+      "inspector_errors": [],
+      "style": {
+        "total_body_chars": 1900,
+        "avg_section_chars": 211.11,
+        "max_section_chars": 282,
+        "sentence_count": 48,
+        "avg_sentence_chars": 38.58,
+        "max_sentence_chars": 106,
+        "long_sentence_count": 2,
+        "long_sentence_rate": 0.0417,
+        "code_identifier_count": 30,
+        "abstract_term_count": 14,
+        "citation_count": 61,
+        "citation_density": 3.21,
+        "planned_new_terms_per_section": {
+          "S1": 2,
+          "S2": 2,
+          "S3": 2,
+          "S4": 2,
+          "S5": 0,
+          "S6": 2,
+          "S7": 1,
+          "S8": 0,
+          "S9": 1
+        },
+        "observed_new_terms_per_section": {
+          "S1": 3,
+          "S2": 1,
+          "S3": 2,
+          "S4": 2,
+          "S5": 0,
+          "S6": 0,
+          "S7": 1,
+          "S8": 0,
+          "S9": 0
+        },
+        "warnings": [
+          {
+            "section_id": "S1",
+            "code": "NEW_TERM_LOAD",
+            "value": 3,
+            "threshold": 2
+          },
+          {
+            "section_id": "S5",
+            "code": "LONG_SENTENCE",
+            "value": 106,
+            "threshold": 80
+          },
+          {
+            "section_id": "S6",
+            "code": "LONG_SENTENCE",
+            "value": 86,
+            "threshold": 80
+          }
+        ]
+      },
+      "published_invalid_citations": 0,
+      "answer_contains_markers": false,
+      "answer_contains_reasoning_field": false
+    }
+  ],
+  "comparison_type": "historical V1; V2 one run per question; retrieval not frozen",
+  "manual_acceptance": "pending",
+  "quality_judge": false,
+  "q1_total_reduction_pct": 0.9433936847199398,
+  "q1_generation_reduction_pct": 59.539846623065706,
+  "q1_writer_reduction_pct": 77.5823787232624,
+  "q3_complete_performance_comparison_valid": false
+}

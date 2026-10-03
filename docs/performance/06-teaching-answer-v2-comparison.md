@@ -107,7 +107,7 @@ V1 Q3的S6～S10缺失记录保留。本次V2提供了完整回答，确认这�
 | Q3 V1（历史partial） | [五节答案](../../artifacts/teaching-answer-v2/q3-v1.answer.md) | [历史性能](../../artifacts/single-stream-experiment/q3-single_stream.json) | [指标](../../artifacts/teaching-answer-v2/q3-v1.readability.json) |
 | Q3 V2 | [答案](../../artifacts/teaching-answer-v2/q3-v2.answer.md) | [性能](../../artifacts/teaching-answer-v2/q3-v2.json) | [指标](../../artifacts/teaching-answer-v2/q3-v2.readability.json) |
 
-V2独立trace为 [Q1](../../artifacts/teaching-answer-v2/q1-v2.trace.json)、[Q3](../../artifacts/teaching-answer-v2/q3-v2.trace.json)，对应`.out`和`.err`保留完整运行日志。配置在manifest，简表在summary.json，检查记录在validation.json。遵循仓库既有规则，原始artifacts保留本地且被Git忽略；实现、测试、使用说明和报告进入提交，不覆盖V1目录。
+V2独立trace为 [Q1](../../artifacts/teaching-answer-v2/q1-v2.trace.json)、[Q3](../../artifacts/teaching-answer-v2/q3-v2.trace.json)，对应`.out`和`.err`保留完整运行日志。配置在manifest，简表在summary.json，检查记录在validation.json。原始产物在初次实现提交时仅保留本地；后续按用户要求已显式纳入版本控制，方便远程分析。统一入口见 [真实回答分析样本](../../artifacts/README.md)，V1目录未覆盖。
 
 测试命令（PowerShell）：
 

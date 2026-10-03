@@ -1,0 +1,351 @@
+{
+  "metrics_version": "teaching_style_v1",
+  "heuristic": true,
+  "completion_status": "partial",
+  "sections_inspected_count": 5,
+  "section_chars": {
+    "S1": 534,
+    "S2": 591,
+    "S3": 466,
+    "S4": 487,
+    "S5": 474
+  },
+  "total_body_chars": 2552,
+  "avg_section_chars": 510.4,
+  "max_section_chars": 591,
+  "sentence_count": 38,
+  "avg_sentence_chars": 66.16,
+  "max_sentence_chars": 179,
+  "long_sentence_count": 14,
+  "long_sentence_rate": 0.3684,
+  "planned_new_terms_per_section": {
+    "S1": null,
+    "S2": null,
+    "S3": null,
+    "S4": null,
+    "S5": null
+  },
+  "observed_new_terms_per_section": {
+    "S1": 5,
+    "S2": 2,
+    "S3": 1,
+    "S4": 0,
+    "S5": 1
+  },
+  "code_identifier_count": 50,
+  "abstract_term_count": 11,
+  "citation_count": 30,
+  "citation_density": 1.18,
+  "warnings": [
+    {
+      "section_id": "S1",
+      "code": "LONG_SECTION",
+      "value": 534,
+      "threshold": 320
+    },
+    {
+      "section_id": "S1",
+      "code": "LONG_SENTENCE",
+      "value": 129,
+      "threshold": 80
+    },
+    {
+      "section_id": "S1",
+      "code": "NEW_TERM_LOAD",
+      "value": 5,
+      "threshold": 2
+    },
+    {
+      "section_id": "S2",
+      "code": "LONG_SECTION",
+      "value": 591,
+      "threshold": 320
+    },
+    {
+      "section_id": "S2",
+      "code": "LONG_SENTENCE",
+      "value": 179,
+      "threshold": 80
+    },
+    {
+      "section_id": "S3",
+      "code": "LONG_SECTION",
+      "value": 466,
+      "threshold": 320
+    },
+    {
+      "section_id": "S3",
+      "code": "LONG_SENTENCE",
+      "value": 98,
+      "threshold": 80
+    },
+    {
+      "section_id": "S4",
+      "code": "LONG_SECTION",
+      "value": 487,
+      "threshold": 320
+    },
+    {
+      "section_id": "S4",
+      "code": "LONG_SENTENCE",
+      "value": 99,
+      "threshold": 80
+    },
+    {
+      "section_id": "S5",
+      "code": "LONG_SECTION",
+      "value": 474,
+      "threshold": 320
+    },
+    {
+      "section_id": "S5",
+      "code": "LONG_SENTENCE",
+      "value": 126,
+      "threshold": 80
+    }
+  ],
+  "sections": [
+    {
+      "section_id": "S1",
+      "section_chars": 534,
+      "sentence_count": 7,
+      "sentence_chars": [
+        90,
+        7,
+        129,
+        116,
+        60,
+        97,
+        28
+      ],
+      "avg_sentence_chars": 75.29,
+      "max_sentence_chars": 129,
+      "long_sentence_count": 4,
+      "long_sentence_rate": 0.5714,
+      "target_chars": null,
+      "target_chars_delta": null,
+      "planned_new_terms": null,
+      "planned_new_term_count": null,
+      "observed_new_terms": [
+        "幂等",
+        "状态机",
+        "副作用",
+        "条件更新",
+        "影响行数"
+      ],
+      "observed_new_term_count": 5,
+      "code_identifier_count": 13,
+      "code_block_chars": 0,
+      "max_consecutive_identifiers": 2,
+      "abstract_term_count": 2,
+      "citation_count": 8,
+      "citation_density": 1.5,
+      "warnings": [
+        {
+          "section_id": "S1",
+          "code": "LONG_SECTION",
+          "value": 534,
+          "threshold": 320
+        },
+        {
+          "section_id": "S1",
+          "code": "LONG_SENTENCE",
+          "value": 129,
+          "threshold": 80
+        },
+        {
+          "section_id": "S1",
+          "code": "NEW_TERM_LOAD",
+          "value": 5,
+          "threshold": 2
+        }
+      ]
+    },
+    {
+      "section_id": "S2",
+      "section_chars": 591,
+      "sentence_count": 8,
+      "sentence_chars": [
+        26,
+        98,
+        179,
+        42,
+        31,
+        11,
+        136,
+        60
+      ],
+      "avg_sentence_chars": 72.88,
+      "max_sentence_chars": 179,
+      "long_sentence_count": 3,
+      "long_sentence_rate": 0.375,
+      "target_chars": null,
+      "target_chars_delta": null,
+      "planned_new_terms": null,
+      "planned_new_term_count": null,
+      "observed_new_terms": [
+        "事务",
+        "回滚"
+      ],
+      "observed_new_term_count": 2,
+      "code_identifier_count": 17,
+      "code_block_chars": 0,
+      "max_consecutive_identifiers": 4,
+      "abstract_term_count": 1,
+      "citation_count": 5,
+      "citation_density": 0.85,
+      "warnings": [
+        {
+          "section_id": "S2",
+          "code": "LONG_SECTION",
+          "value": 591,
+          "threshold": 320
+        },
+        {
+          "section_id": "S2",
+          "code": "LONG_SENTENCE",
+          "value": 179,
+          "threshold": 80
+        }
+      ]
+    },
+    {
+      "section_id": "S3",
+      "section_chars": 466,
+      "sentence_count": 7,
+      "sentence_chars": [
+        57,
+        98,
+        33,
+        39,
+        96,
+        79,
+        57
+      ],
+      "avg_sentence_chars": 65.57,
+      "max_sentence_chars": 98,
+      "long_sentence_count": 2,
+      "long_sentence_rate": 0.2857,
+      "target_chars": null,
+      "target_chars_delta": null,
+      "planned_new_terms": null,
+      "planned_new_term_count": null,
+      "observed_new_terms": [
+        "状态推进"
+      ],
+      "observed_new_term_count": 1,
+      "code_identifier_count": 5,
+      "code_block_chars": 0,
+      "max_consecutive_identifiers": 1,
+      "abstract_term_count": 2,
+      "citation_count": 4,
+      "citation_density": 0.86,
+      "warnings": [
+        {
+          "section_id": "S3",
+          "code": "LONG_SECTION",
+          "value": 466,
+          "threshold": 320
+        },
+        {
+          "section_id": "S3",
+          "code": "LONG_SENTENCE",
+          "value": 98,
+          "threshold": 80
+        }
+      ]
+    },
+    {
+      "section_id": "S4",
+      "section_chars": 487,
+      "sentence_count": 8,
+      "sentence_chars": [
+        51,
+        48,
+        9,
+        74,
+        99,
+        75,
+        61,
+        62
+      ],
+      "avg_sentence_chars": 59.88,
+      "max_sentence_chars": 99,
+      "long_sentence_count": 1,
+      "long_sentence_rate": 0.125,
+      "target_chars": null,
+      "target_chars_delta": null,
+      "planned_new_terms": null,
+      "planned_new_term_count": null,
+      "observed_new_terms": [],
+      "observed_new_term_count": 0,
+      "code_identifier_count": 9,
+      "code_block_chars": 0,
+      "max_consecutive_identifiers": 3,
+      "abstract_term_count": 1,
+      "citation_count": 7,
+      "citation_density": 1.44,
+      "warnings": [
+        {
+          "section_id": "S4",
+          "code": "LONG_SECTION",
+          "value": 487,
+          "threshold": 320
+        },
+        {
+          "section_id": "S4",
+          "code": "LONG_SENTENCE",
+          "value": 99,
+          "threshold": 80
+        }
+      ]
+    },
+    {
+      "section_id": "S5",
+      "section_chars": 474,
+      "sentence_count": 8,
+      "sentence_chars": [
+        27,
+        84,
+        81,
+        12,
+        90,
+        26,
+        126,
+        20
+      ],
+      "avg_sentence_chars": 58.25,
+      "max_sentence_chars": 126,
+      "long_sentence_count": 4,
+      "long_sentence_rate": 0.5,
+      "target_chars": null,
+      "target_chars_delta": null,
+      "planned_new_terms": null,
+      "planned_new_term_count": null,
+      "observed_new_terms": [
+        "补偿"
+      ],
+      "observed_new_term_count": 1,
+      "code_identifier_count": 6,
+      "code_block_chars": 0,
+      "max_consecutive_identifiers": 1,
+      "abstract_term_count": 5,
+      "citation_count": 6,
+      "citation_density": 1.27,
+      "warnings": [
+        {
+          "section_id": "S5",
+          "code": "LONG_SECTION",
+          "value": 474,
+          "threshold": 320
+        },
+        {
+          "section_id": "S5",
+          "code": "LONG_SENTENCE",
+          "value": 126,
+          "threshold": 80
+        }
+      ]
+    }
+  ]
+}

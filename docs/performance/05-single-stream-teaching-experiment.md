@@ -81,7 +81,7 @@ Provider 的 completion token 包括 reasoning。旧模式失败调用没有完�
 | Q3 single_stream | [不完整答案](../../artifacts/single-stream-experiment/q3-single_stream.answer.md) | [性能](../../artifacts/single-stream-experiment/q3-single_stream.json) | [日志](../../artifacts/single-stream-experiment/q3-single_stream.out) |
 | Q3 multi_pass | [失败提示](../../artifacts/single-stream-experiment/q3-multi_pass.answer.md) | [性能](../../artifacts/single-stream-experiment/q3-multi_pass.json) | [日志](../../artifacts/single-stream-experiment/q3-multi_pass.out) |
 
-原始产物遵循仓库既有规则保存在 git 忽略的 artifacts 目录；本报告与实现提交到分支。[summary.json](../../artifacts/single-stream-experiment/summary.json) 提供精简机器可读结果。
+原始产物在初次实验提交时保留于 git 忽略的 artifacts 目录；后续按用户要求，答案、性能、配置与运行日志已显式纳入版本控制，并从原始日志提取独立 trace，方便远程分析。阅读入口见 [真实回答分析样本](../../artifacts/README.md)。[summary.json](../../artifacts/single-stream-experiment/summary.json) 提供精简机器可读结果。
 
 ## 4. 引用检查、失败样本与观察限制
 

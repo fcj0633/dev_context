@@ -1,0 +1,2593 @@
+Question:
+详细解释当前订单和支付链路是如何保证幂等的
+
+Evidence Plan: llm
+  ER1. 订单链路中用于保证幂等性的实际实现机制及其触发条件 — CODE
+  ER2. 支付链路中用于保证幂等性的实际实现机制及其触发条件 — CODE
+  ER3. 订单链路与支付链路之间用于幂等关联的标识或上下文的传递方式与一致性保证 — CODE
+  ER4. 当订单或支付链路检测到重复请求或幂等冲突时，系统实际返回或执行的后续动作 — CODE
+  ER5. 项目内关于订单与支付链路幂等设计的文档或设计说明 — DOCUMENT
+
+Route: MIXED (rules)
+Sufficiency: insufficient
+Requirements: ER1 SATISFIED, ER2 SATISFIED, ER3 PARTIAL, ER4 SATISFIED, ER5 SATISFIED
+Retries: 1
+
+Answer:
+## 先给结论：订单支付幂等到底靠什么？
+网络重试、回调重放、延迟任务重投都可能让同一动作执行两次，所以项目要防止重复下单或重复改状态 [E18]。订单支付核心链路不依赖统一的 @Idempotent 组件 [E16]。它主要靠业务唯一键、状态机、条件更新加影响行数判断 [E18]。订单侧改状态时只有原状态符合预期才更新，改不动就视为已处理 [E2] [E3]；支付侧同样不依赖 Redis [E11] [E9]。
+
+## 订单创建时，重复下单怎么不被重复受理？
+用户手抖点两次提交时，系统不能生成两张订单。每笔订单有一个业务编号，普通理解就是订单号，代码里叫 orderSn。创建入口是 createTicketOrder [E19]。数据库用 order_sn 唯一索引拦住重复插入 [E16]。若 orderSn 已存在，系统会读回旧订单，校验用户、车次、出发到达、座位、证件号和金额是否与本次请求一致 [E14]。一致说明是同一请求，可复用；不一致则抛“订单号已被其他购票请求占用” [E14]。后续状态推进再靠条件更新 [E3]。
+
+## 订单状态推进怎样做到重复回调不重复改？
+状态机指状态只能按规定的条件和路径变化；影响行数指数据库实际改了几条记录。OrderStateService 把订单本地状态推进做成独立事务，先提交本地状态，再通知下游，重试时用条件更新加影响行数判断是否推进过，因此天然幂等 [E2]。payCallbackOrder 遇到已支付订单的重复回调直接返回 true；markOrderPaid 若未生效，也视为已处理 [E8]。订单状态推进全部靠这种方式，重复调用不会造成二次破坏 [E3]。
+
+## 支付回调在支付服务侧怎么幂等？
+支付渠道可能重复回调。paySn 是支付流水号，用来定位支付单。payCallback 先校验 paySn 和金额，金额不符一律拒绝 [E9]。如果支付单已是已支付，就按通知状态返回，不重复推进，也不重复通知下游 [E9]。否则用 paySn 加 status=WAIT_PAY 做条件更新；影响行数为 0 只记录已被并发处理 [E9]。下游通知失败不回滚支付单，只把通知状态置为未完成，由补偿任务重推 [E9] [E11]。补偿任务就是事后主动补做的任务。
+
+## 支付成功后如何通知订单，重复通知怎么处理？
+支付成功后，支付服务通过远程调用 OrderRemoteService.payCallbackOrder，把结果发到订单服务的 /api/order-service/order/ticket/pay-callback [E20] [E21]。订单服务的这个接口由 OrderService.payCallbackOrder 声明并实现 [E10] [E19]。订单侧若已是已支付，重复回调直接返回 true，让支付服务停止重推 [E8]。若订单已关闭却收到支付成功，会记录错误并返回 true，同样停止重推，等待后续人工核对 [E8]。回调携带 orderSn、paySn 等标识来定位订单和支付单，但证据未给出它们的定义与生成规则 [E8] [E20] [E21]。
+
+## 超时关单和延迟任务重复投递怎么办？
+延迟关单指下单后投递一个延迟消息，到点再关单；兜底扫表指投递失败时靠定时扫描补上。OrderDelayCloseProducer 用 RDelayedQueue 投递 orderSn，延迟 payTimeoutMinutes 分钟；投递失败不影响下单，由兜底扫表补上 [E5]。closeTimeoutOrder 重复收到时会先查订单：不存在直接返回；已支付也直接返回，绝不能关单和回滚座位 [E4]。只有待支付才推进 closePendingOrder，之后无论本次是否真正关单，都补齐关闭支付单和回滚座位，因为它们幂等 [E4]。closeTicketOrder 在订单接口中声明 [E1]，本地状态由独立事务先提交 [E2]。
+
+## 失败、重试和异常分支会怎么处理？
+不同异常有不同动作。支付前检查订单状态：待支付放行；已支付抛“订单已支付，无需重复支付”；已取消抛“订单已取消，无法支付” [E13]。支付回调金额不符时直接拒绝 [E9]。订单创建时若 orderSn 冲突且内容不是同一请求，抛“订单号已被其他购票请求占用” [E14]。支付成功后的下游通知失败不回滚支付单，只把通知状态置为未完成，由补偿任务重推 [E11]。人工介入指机器无法自动裁决时交给人工核对。
+
+## 完整走一遍：重复请求在订单和支付链路会怎样？
+创建订单时，order_sn 唯一索引和冲突校验先当第一道裁判 [E16] [E14]。订单状态推进时，条件更新和影响行数当第二道裁判，能推进才推进 [E3]。支付单创建靠 t_pay.order_sn UNIQUE [E16]，支付状态推进靠 WHERE status=WAIT_PAY [E9]。支付成功后，支付服务远程调用订单的 payCallbackOrder [E20] [E21]；订单已支付则重复回调返回 true [E8]。通知失败由补偿任务重推 [E11]。缺口是 orderSn/paySn 的定义、生成规则和一致性保证仍缺证据 [E8] [E20] [E21]。
+
+## 边界和缺口：哪些话不能说得太满？
+跨链路标识指在订单和支付之间传递、用来关联两边的编号。orderSn 和 paySn 在回调与远程调用中确实出现 [E8] [E20] [E21] [E19]，但它们的定义、生成规则和一致性保证缺失，不能说得太满 [E8] [E20] [E21] [E19]。票务侧的重复购买校验 TrainPurchaseTicketRepeatChainFilter 仍是占位，不能当作订单支付幂等的依据 [E12]。文档说订单支付核心链路不依赖统一 @Idempotent，不等于没有幂等要求，而是改用业务唯一键、状态机、条件更新和影响行数 [E16] [E18]。
+
+Explanation Strategy:
+
+
+Mental Model:
+重复请求不是靠一把总锁拦住，而是让数据库在“状态还符合预期”时才改；改不动就说明已处理过或该拒绝。
+
+Context:
+  Workspace evidence: None
+  Bound evidence: 17
+
+Generation:
+  9 sections
+  0 targeted revision
+
+Sources:
+[E18] 7-模块设计文档/4-订单支付的幂等问题.md
+[E16] 7-模块设计文档/1-订单支付-车票.md > 二十三、所以这个项目其实没有复杂的 @Idempotent
+[E2] services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/service/OrderStateService.java:29-91 — OrderStateService#OrderStateService
+[E3] services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/service/impl/OrderServiceImpl.java:53-386 — OrderServiceImpl#OrderServiceImpl
+[E11] services/pay-services/src/main/java/edu/swu/fcj/my12306/biz/payservice/service/impl/PayServiceImpl.java:47-329 — PayServiceImpl#PayServiceImpl
+[E9] services/pay-services/src/main/java/edu/swu/fcj/my12306/biz/payservice/service/impl/PayServiceImpl.java:131-165 — PayServiceImpl#payCallback
+[E19] services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/service/OrderService.java:9-46 — OrderService#OrderService
+[E14] services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/service/impl/OrderServiceImpl.java:367-385 — OrderServiceImpl#assertSameCreateRequest
+[E8] services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/service/impl/OrderServiceImpl.java:236-263 — OrderServiceImpl#payCallbackOrder
+[E20] services/pay-services/src/main/java/edu/swu/fcj/my12306/biz/payservice/remote/OrderRemoteService.java:21-22 — OrderRemoteService#payCallbackOrder
+[E21] services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/controller/TicketOrderController.java:67-70 — TicketOrderController#payCallbackOrder
+[E10] services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/service/OrderService.java:37-37 — OrderService#payCallbackOrder
+[E5] services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/mq/OrderDelayCloseProducer.java:54-66 — OrderDelayCloseProducer#doSend
+[E4] services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/service/impl/OrderServiceImpl.java:265-288 — OrderServiceImpl#closeTimeoutOrder
+[E1] services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/service/OrderService.java:30-30 — OrderService#closeTicketOrder
+[E13] services/pay-services/src/main/java/edu/swu/fcj/my12306/biz/payservice/service/impl/PayServiceImpl.java:244-252 — PayServiceImpl#checkOrderCanPay
+[E12] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/handler/ticket/filter/purchase/TrainPurchaseTicketRepeatChainFilter.java:14-17 — TrainPurchaseTicketRepeatChainFilter#handler
+
+Trace:
+{
+  "route": {
+    "query_type": "MIXED",
+    "decision_source": "rules",
+    "reason": "union of evidence source requirements",
+    "code_signals": [],
+    "doc_signals": []
+  },
+  "rounds": [
+    {
+      "round_index": 0,
+      "retrieval_query": "订单 创建 状态变更 幂等 重复请求 识别 阻止 实现 代码 配置 数据约束 触发条件 | 支付 请求 回调 状态更新 幂等 重复处理 识别 阻止 实现 代码 配置 数据约束 触发条件 | 订单 支付 链路 幂等 关联 标识 上下文 传递 业务请求标识 生成规则 重复请求 判断 | 幂等 校验 不通过 重复请求 返回已有结果 抛出异常 拒绝处理 分支 订单 支付 | 项目文档 设计说明 订单 支付 链路 幂等 策略 实现 一致",
+      "retrieval_query_type": "MIXED",
+      "selected_chunks": [
+        {
+          "citation_label": "E1",
+          "chunk_id": 8629,
+          "source_type": "CODE",
+          "file_path": "services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/service/OrderService.java",
+          "identity": "OrderService#closeTicketOrder",
+          "retrieval_rank": 1,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1"
+          ]
+        },
+        {
+          "citation_label": "E2",
+          "chunk_id": 8632,
+          "source_type": "CODE",
+          "file_path": "services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/service/OrderStateService.java",
+          "identity": "OrderStateService#OrderStateService",
+          "retrieval_rank": 2,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1"
+          ]
+        },
+        {
+          "citation_label": "E3",
+          "chunk_id": 8613,
+          "source_type": "CODE",
+          "file_path": "services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/service/impl/OrderServiceImpl.java",
+          "identity": "OrderServiceImpl#OrderServiceImpl",
+          "retrieval_rank": 3,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1"
+          ]
+        },
+        {
+          "citation_label": "E4",
+          "chunk_id": 8619,
+          "source_type": "CODE",
+          "file_path": "services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/service/impl/OrderServiceImpl.java",
+          "identity": "OrderServiceImpl#closeTimeoutOrder",
+          "retrieval_rank": 4,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1"
+          ]
+        },
+        {
+          "citation_label": "E5",
+          "chunk_id": 8602,
+          "source_type": "CODE",
+          "file_path": "services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/mq/OrderDelayCloseProducer.java",
+          "identity": "OrderDelayCloseProducer#doSend",
+          "retrieval_rank": 5,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1"
+          ]
+        },
+        {
+          "citation_label": "E8",
+          "chunk_id": 8618,
+          "source_type": "CODE",
+          "file_path": "services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/service/impl/OrderServiceImpl.java",
+          "identity": "OrderServiceImpl#payCallbackOrder",
+          "retrieval_rank": 3,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER2",
+            "ER3",
+            "ER4"
+          ]
+        },
+        {
+          "citation_label": "E9",
+          "chunk_id": 8702,
+          "source_type": "CODE",
+          "file_path": "services/pay-services/src/main/java/edu/swu/fcj/my12306/biz/payservice/service/impl/PayServiceImpl.java",
+          "identity": "PayServiceImpl#payCallback",
+          "retrieval_rank": 4,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER2"
+          ]
+        },
+        {
+          "citation_label": "E10",
+          "chunk_id": 8630,
+          "source_type": "CODE",
+          "file_path": "services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/service/OrderService.java",
+          "identity": "OrderService#payCallbackOrder",
+          "retrieval_rank": 5,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER2",
+            "ER3"
+          ]
+        },
+        {
+          "citation_label": "E11",
+          "chunk_id": 8698,
+          "source_type": "CODE",
+          "file_path": "services/pay-services/src/main/java/edu/swu/fcj/my12306/biz/payservice/service/impl/PayServiceImpl.java",
+          "identity": "PayServiceImpl#PayServiceImpl",
+          "retrieval_rank": 1,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER3"
+          ]
+        },
+        {
+          "citation_label": "E12",
+          "chunk_id": 8858,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/handler/ticket/filter/purchase/TrainPurchaseTicketRepeatChainFilter.java",
+          "identity": "TrainPurchaseTicketRepeatChainFilter#handler",
+          "retrieval_rank": 1,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER4"
+          ]
+        },
+        {
+          "citation_label": "E13",
+          "chunk_id": 8706,
+          "source_type": "CODE",
+          "file_path": "services/pay-services/src/main/java/edu/swu/fcj/my12306/biz/payservice/service/impl/PayServiceImpl.java",
+          "identity": "PayServiceImpl#checkOrderCanPay",
+          "retrieval_rank": 2,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER4"
+          ]
+        },
+        {
+          "citation_label": "E14",
+          "chunk_id": 8624,
+          "source_type": "CODE",
+          "file_path": "services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/service/impl/OrderServiceImpl.java",
+          "identity": "OrderServiceImpl#assertSameCreateRequest",
+          "retrieval_rank": 3,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER4"
+          ]
+        },
+        {
+          "citation_label": "E16",
+          "chunk_id": 11273,
+          "source_type": "DOCUMENT",
+          "file_path": "7-模块设计文档/1-订单支付-车票.md",
+          "identity": "二十三、所以这个项目其实没有复杂的 @Idempotent",
+          "retrieval_rank": 1,
+          "source_role": "CURRENT_DESIGN",
+          "temporal_status": "UNKNOWN",
+          "authority_priority": 70,
+          "sub_question_ids": [
+            "ER5"
+          ]
+        },
+        {
+          "citation_label": "E18",
+          "chunk_id": 11377,
+          "source_type": "DOCUMENT",
+          "file_path": "7-模块设计文档/4-订单支付的幂等问题.md",
+          "identity": "DOCUMENT_SECTION",
+          "retrieval_rank": 3,
+          "source_role": "CURRENT_DESIGN",
+          "temporal_status": "UNKNOWN",
+          "authority_priority": 70,
+          "sub_question_ids": [
+            "ER5"
+          ]
+        },
+        {
+          "citation_label": "E19",
+          "chunk_id": 8625,
+          "source_type": "CODE",
+          "file_path": "services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/service/OrderService.java",
+          "identity": "OrderService#OrderService",
+          "retrieval_rank": 2,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER3"
+          ]
+        },
+        {
+          "citation_label": "E20",
+          "chunk_id": 8686,
+          "source_type": "CODE",
+          "file_path": "services/pay-services/src/main/java/edu/swu/fcj/my12306/biz/payservice/remote/OrderRemoteService.java",
+          "identity": "OrderRemoteService#payCallbackOrder",
+          "retrieval_rank": 4,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER3"
+          ]
+        },
+        {
+          "citation_label": "E21",
+          "chunk_id": 8579,
+          "source_type": "CODE",
+          "file_path": "services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/controller/TicketOrderController.java",
+          "identity": "TicketOrderController#payCallbackOrder",
+          "retrieval_rank": 5,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER3"
+          ]
+        }
+      ],
+      "sufficiency": {
+        "enough": false,
+        "missing_aspects": [
+          {
+            "source_type": "CODE",
+            "description": "尚缺订单与支付链路间共享幂等标识的定义与生成规则",
+            "sub_question_id": "ER3"
+          },
+          {
+            "source_type": "CODE",
+            "description": "尚缺该标识在两条链路中如何用于判断重复请求的一致性说明",
+            "sub_question_id": "ER3"
+          },
+          {
+            "source_type": "CODE",
+            "description": "尚缺标识传递的一致性保证机制说明",
+            "sub_question_id": "ER3"
+          }
+        ],
+        "reason": "some CORE evidence requirements remain unresolved",
+        "decision_source": "llm",
+        "statuses": [
+          {
+            "sub_question_id": "ER1",
+            "satisfied": true,
+            "reason": "订单状态变更通过条件更新+影响行数实现幂等，重复调用被识别为已处理，并说明了生效条件。",
+            "state": "SATISFIED"
+          },
+          {
+            "sub_question_id": "ER2",
+            "satisfied": true,
+            "reason": "支付回调中先查状态、金额校验，已支付直接返回，条件更新未生效时视为已处理，并说明了生效条件。",
+            "state": "SATISFIED"
+          },
+          {
+            "sub_question_id": "ER3",
+            "satisfied": false,
+            "reason": "仅有订单号/支付流水号在远程调用与回调中的使用痕迹，未说明标识定义、生成规则与一致性保证。",
+            "state": "PARTIAL"
+          },
+          {
+            "sub_question_id": "ER4",
+            "satisfied": true,
+            "reason": "展示了重复回调返回已处理、已支付重复支付抛异常、订单号冲突抛异常等实际动作及依据。",
+            "state": "SATISFIED"
+          },
+          {
+            "sub_question_id": "ER5",
+            "satisfied": true,
+            "reason": "文档明确阐述订单支付链路不依赖统一 @Idempotent，靠业务唯一键、状态机、条件更新+影响行数，与代码实现一致。",
+            "state": "SATISFIED"
+          }
+        ]
+      },
+      "rewrite": null,
+      "rewrite_error": null,
+      "rewrites": []
+    },
+    {
+      "round_index": 1,
+      "retrieval_query": "payCallbackOrder orderSn paySn 幂等 标识 生成规则 传递 PayServiceImpl OrderService",
+      "retrieval_query_type": "MIXED",
+      "selected_chunks": [
+        {
+          "citation_label": "E1",
+          "chunk_id": 8629,
+          "source_type": "CODE",
+          "file_path": "services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/service/OrderService.java",
+          "identity": "OrderService#closeTicketOrder",
+          "retrieval_rank": 1,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1"
+          ]
+        },
+        {
+          "citation_label": "E2",
+          "chunk_id": 8632,
+          "source_type": "CODE",
+          "file_path": "services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/service/OrderStateService.java",
+          "identity": "OrderStateService#OrderStateService",
+          "retrieval_rank": 2,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1"
+          ]
+        },
+        {
+          "citation_label": "E3",
+          "chunk_id": 8613,
+          "source_type": "CODE",
+          "file_path": "services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/service/impl/OrderServiceImpl.java",
+          "identity": "OrderServiceImpl#OrderServiceImpl",
+          "retrieval_rank": 3,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1"
+          ]
+        },
+        {
+          "citation_label": "E4",
+          "chunk_id": 8619,
+          "source_type": "CODE",
+          "file_path": "services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/service/impl/OrderServiceImpl.java",
+          "identity": "OrderServiceImpl#closeTimeoutOrder",
+          "retrieval_rank": 4,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1"
+          ]
+        },
+        {
+          "citation_label": "E5",
+          "chunk_id": 8602,
+          "source_type": "CODE",
+          "file_path": "services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/mq/OrderDelayCloseProducer.java",
+          "identity": "OrderDelayCloseProducer#doSend",
+          "retrieval_rank": 5,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1"
+          ]
+        },
+        {
+          "citation_label": "E8",
+          "chunk_id": 8618,
+          "source_type": "CODE",
+          "file_path": "services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/service/impl/OrderServiceImpl.java",
+          "identity": "OrderServiceImpl#payCallbackOrder",
+          "retrieval_rank": 3,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER2",
+            "ER3",
+            "ER4"
+          ]
+        },
+        {
+          "citation_label": "E9",
+          "chunk_id": 8702,
+          "source_type": "CODE",
+          "file_path": "services/pay-services/src/main/java/edu/swu/fcj/my12306/biz/payservice/service/impl/PayServiceImpl.java",
+          "identity": "PayServiceImpl#payCallback",
+          "retrieval_rank": 4,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER2"
+          ]
+        },
+        {
+          "citation_label": "E10",
+          "chunk_id": 8630,
+          "source_type": "CODE",
+          "file_path": "services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/service/OrderService.java",
+          "identity": "OrderService#payCallbackOrder",
+          "retrieval_rank": 5,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER2",
+            "ER3"
+          ]
+        },
+        {
+          "citation_label": "E11",
+          "chunk_id": 8698,
+          "source_type": "CODE",
+          "file_path": "services/pay-services/src/main/java/edu/swu/fcj/my12306/biz/payservice/service/impl/PayServiceImpl.java",
+          "identity": "PayServiceImpl#PayServiceImpl",
+          "retrieval_rank": 1,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER3"
+          ]
+        },
+        {
+          "citation_label": "E12",
+          "chunk_id": 8858,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/handler/ticket/filter/purchase/TrainPurchaseTicketRepeatChainFilter.java",
+          "identity": "TrainPurchaseTicketRepeatChainFilter#handler",
+          "retrieval_rank": 1,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER4"
+          ]
+        },
+        {
+          "citation_label": "E13",
+          "chunk_id": 8706,
+          "source_type": "CODE",
+          "file_path": "services/pay-services/src/main/java/edu/swu/fcj/my12306/biz/payservice/service/impl/PayServiceImpl.java",
+          "identity": "PayServiceImpl#checkOrderCanPay",
+          "retrieval_rank": 2,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER4"
+          ]
+        },
+        {
+          "citation_label": "E14",
+          "chunk_id": 8624,
+          "source_type": "CODE",
+          "file_path": "services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/service/impl/OrderServiceImpl.java",
+          "identity": "OrderServiceImpl#assertSameCreateRequest",
+          "retrieval_rank": 3,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER4"
+          ]
+        },
+        {
+          "citation_label": "E16",
+          "chunk_id": 11273,
+          "source_type": "DOCUMENT",
+          "file_path": "7-模块设计文档/1-订单支付-车票.md",
+          "identity": "二十三、所以这个项目其实没有复杂的 @Idempotent",
+          "retrieval_rank": 1,
+          "source_role": "CURRENT_DESIGN",
+          "temporal_status": "UNKNOWN",
+          "authority_priority": 70,
+          "sub_question_ids": [
+            "ER5"
+          ]
+        },
+        {
+          "citation_label": "E18",
+          "chunk_id": 11377,
+          "source_type": "DOCUMENT",
+          "file_path": "7-模块设计文档/4-订单支付的幂等问题.md",
+          "identity": "DOCUMENT_SECTION",
+          "retrieval_rank": 3,
+          "source_role": "CURRENT_DESIGN",
+          "temporal_status": "UNKNOWN",
+          "authority_priority": 70,
+          "sub_question_ids": [
+            "ER5"
+          ]
+        },
+        {
+          "citation_label": "E19",
+          "chunk_id": 8625,
+          "source_type": "CODE",
+          "file_path": "services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/service/OrderService.java",
+          "identity": "OrderService#OrderService",
+          "retrieval_rank": 2,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER3"
+          ]
+        },
+        {
+          "citation_label": "E20",
+          "chunk_id": 8686,
+          "source_type": "CODE",
+          "file_path": "services/pay-services/src/main/java/edu/swu/fcj/my12306/biz/payservice/remote/OrderRemoteService.java",
+          "identity": "OrderRemoteService#payCallbackOrder",
+          "retrieval_rank": 4,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER3"
+          ]
+        },
+        {
+          "citation_label": "E21",
+          "chunk_id": 8579,
+          "source_type": "CODE",
+          "file_path": "services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/controller/TicketOrderController.java",
+          "identity": "TicketOrderController#payCallbackOrder",
+          "retrieval_rank": 5,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER3"
+          ]
+        }
+      ],
+      "sufficiency": {
+        "enough": false,
+        "missing_aspects": [
+          {
+            "source_type": "CODE",
+            "description": "尚缺订单与支付链路间共享幂等标识的定义与生成规则",
+            "sub_question_id": "ER3"
+          },
+          {
+            "source_type": "CODE",
+            "description": "尚缺该标识在两条链路中如何用于判断重复请求的一致性说明",
+            "sub_question_id": "ER3"
+          },
+          {
+            "source_type": "CODE",
+            "description": "尚缺标识传递的一致性保证机制说明",
+            "sub_question_id": "ER3"
+          }
+        ],
+        "reason": "some CORE evidence requirements remain unresolved",
+        "decision_source": "llm",
+        "statuses": [
+          {
+            "sub_question_id": "ER1",
+            "satisfied": true,
+            "reason": "订单状态变更通过条件更新+影响行数实现幂等，重复调用被识别为已处理，并说明了生效条件。",
+            "state": "SATISFIED"
+          },
+          {
+            "sub_question_id": "ER2",
+            "satisfied": true,
+            "reason": "支付回调中先查状态、金额校验，已支付直接返回，条件更新未生效时视为已处理，并说明了生效条件。",
+            "state": "SATISFIED"
+          },
+          {
+            "sub_question_id": "ER3",
+            "satisfied": false,
+            "reason": "仅有订单号/支付流水号在远程调用与回调中的使用痕迹，未说明标识定义、生成规则与一致性保证。",
+            "state": "PARTIAL"
+          },
+          {
+            "sub_question_id": "ER4",
+            "satisfied": true,
+            "reason": "展示了重复回调返回已处理、已支付重复支付抛异常、订单号冲突抛异常等实际动作及依据。",
+            "state": "SATISFIED"
+          },
+          {
+            "sub_question_id": "ER5",
+            "satisfied": true,
+            "reason": "文档明确阐述订单支付链路不依赖统一 @Idempotent，靠业务唯一键、状态机、条件更新+影响行数，与代码实现一致。",
+            "state": "SATISFIED"
+          }
+        ]
+      },
+      "rewrite": null,
+      "rewrite_error": null,
+      "rewrites": []
+    }
+  ],
+  "retry_count": 1,
+  "final_sufficiency": {
+    "enough": false,
+    "missing_aspects": [
+      {
+        "source_type": "CODE",
+        "description": "尚缺订单与支付链路间共享幂等标识的定义与生成规则",
+        "sub_question_id": "ER3"
+      },
+      {
+        "source_type": "CODE",
+        "description": "尚缺该标识在两条链路中如何用于判断重复请求的一致性说明",
+        "sub_question_id": "ER3"
+      },
+      {
+        "source_type": "CODE",
+        "description": "尚缺标识传递的一致性保证机制说明",
+        "sub_question_id": "ER3"
+      }
+    ],
+    "reason": "some CORE evidence requirements remain unresolved",
+    "decision_source": "llm",
+    "statuses": [
+      {
+        "sub_question_id": "ER1",
+        "satisfied": true,
+        "reason": "订单状态变更通过条件更新+影响行数实现幂等，重复调用被识别为已处理，并说明了生效条件。",
+        "state": "SATISFIED"
+      },
+      {
+        "sub_question_id": "ER2",
+        "satisfied": true,
+        "reason": "支付回调中先查状态、金额校验，已支付直接返回，条件更新未生效时视为已处理，并说明了生效条件。",
+        "state": "SATISFIED"
+      },
+      {
+        "sub_question_id": "ER3",
+        "satisfied": false,
+        "reason": "仅有订单号/支付流水号在远程调用与回调中的使用痕迹，未说明标识定义、生成规则与一致性保证。",
+        "state": "PARTIAL"
+      },
+      {
+        "sub_question_id": "ER4",
+        "satisfied": true,
+        "reason": "展示了重复回调返回已处理、已支付重复支付抛异常、订单号冲突抛异常等实际动作及依据。",
+        "state": "SATISFIED"
+      },
+      {
+        "sub_question_id": "ER5",
+        "satisfied": true,
+        "reason": "文档明确阐述订单支付链路不依赖统一 @Idempotent，靠业务唯一键、状态机、条件更新+影响行数，与代码实现一致。",
+        "state": "SATISFIED"
+      }
+    ]
+  },
+  "stop_reason": "partial",
+  "plan": null,
+  "sub_question_traces": [
+    {
+      "sub_question_id": "ER1",
+      "question": "订单链路中用于保证幂等性的实际实现机制及其触发条件",
+      "purpose": "证据需包含订单创建或订单状态变更过程中用于识别并阻止重复请求的代码、配置或数据约束，并说明该机制在何种条件下生效。",
+      "query_type": "CODE",
+      "selected_chunks": [
+        {
+          "citation_label": "C1",
+          "chunk_id": 8629,
+          "source_type": "CODE",
+          "file_path": "services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/service/OrderService.java",
+          "identity": "OrderService#closeTicketOrder",
+          "retrieval_rank": 1,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1"
+          ]
+        },
+        {
+          "citation_label": "C6",
+          "chunk_id": 8632,
+          "source_type": "CODE",
+          "file_path": "services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/service/OrderStateService.java",
+          "identity": "OrderStateService#OrderStateService",
+          "retrieval_rank": 6,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1"
+          ]
+        },
+        {
+          "citation_label": "C10",
+          "chunk_id": 8613,
+          "source_type": "CODE",
+          "file_path": "services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/service/impl/OrderServiceImpl.java",
+          "identity": "OrderServiceImpl#OrderServiceImpl",
+          "retrieval_rank": 10,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1"
+          ]
+        }
+      ]
+    },
+    {
+      "sub_question_id": "ER2",
+      "question": "支付链路中用于保证幂等性的实际实现机制及其触发条件",
+      "purpose": "证据需包含支付请求发起、支付回调或支付状态更新过程中用于识别并阻止重复处理的代码、配置或数据约束，并说明该机制在何种条件下生效。",
+      "query_type": "CODE",
+      "selected_chunks": [
+        {
+          "citation_label": "C3",
+          "chunk_id": 8718,
+          "source_type": "CODE",
+          "file_path": "services/pay-services/src/main/java/edu/swu/fcj/my12306/biz/payservice/service/PayService.java",
+          "identity": "PayService#payCallback",
+          "retrieval_rank": 2,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER2",
+            "ER3"
+          ]
+        },
+        {
+          "citation_label": "C7",
+          "chunk_id": 8720,
+          "source_type": "CODE",
+          "file_path": "services/pay-services/src/main/java/edu/swu/fcj/my12306/biz/payservice/service/PayService.java",
+          "identity": "PayService#notifyPayResult",
+          "retrieval_rank": 7,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER2",
+            "ER3"
+          ]
+        },
+        {
+          "citation_label": "C8",
+          "chunk_id": 8630,
+          "source_type": "CODE",
+          "file_path": "services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/service/OrderService.java",
+          "identity": "OrderService#payCallbackOrder",
+          "retrieval_rank": 8,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER2",
+            "ER3"
+          ]
+        },
+        {
+          "citation_label": "C11",
+          "chunk_id": 8618,
+          "source_type": "CODE",
+          "file_path": "services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/service/impl/OrderServiceImpl.java",
+          "identity": "OrderServiceImpl#payCallbackOrder",
+          "retrieval_rank": 11,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER2",
+            "ER3",
+            "ER4"
+          ]
+        }
+      ]
+    },
+    {
+      "sub_question_id": "ER3",
+      "question": "订单链路与支付链路之间用于幂等关联的标识或上下文的传递方式与一致性保证",
+      "purpose": "证据需说明订单链路与支付链路之间共享或传递的幂等相关标识（如业务请求标识）的定义、生成规则以及在两个链路中如何用于判断重复请求。",
+      "query_type": "CODE",
+      "selected_chunks": [
+        {
+          "citation_label": "C3",
+          "chunk_id": 8718,
+          "source_type": "CODE",
+          "file_path": "services/pay-services/src/main/java/edu/swu/fcj/my12306/biz/payservice/service/PayService.java",
+          "identity": "PayService#payCallback",
+          "retrieval_rank": 2,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER2",
+            "ER3"
+          ]
+        },
+        {
+          "citation_label": "C4",
+          "chunk_id": 8698,
+          "source_type": "CODE",
+          "file_path": "services/pay-services/src/main/java/edu/swu/fcj/my12306/biz/payservice/service/impl/PayServiceImpl.java",
+          "identity": "PayServiceImpl#PayServiceImpl",
+          "retrieval_rank": 3,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER3"
+          ]
+        },
+        {
+          "citation_label": "C7",
+          "chunk_id": 8720,
+          "source_type": "CODE",
+          "file_path": "services/pay-services/src/main/java/edu/swu/fcj/my12306/biz/payservice/service/PayService.java",
+          "identity": "PayService#notifyPayResult",
+          "retrieval_rank": 7,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER2",
+            "ER3"
+          ]
+        },
+        {
+          "citation_label": "C8",
+          "chunk_id": 8630,
+          "source_type": "CODE",
+          "file_path": "services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/service/OrderService.java",
+          "identity": "OrderService#payCallbackOrder",
+          "retrieval_rank": 8,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER2",
+            "ER3"
+          ]
+        },
+        {
+          "citation_label": "C11",
+          "chunk_id": 8618,
+          "source_type": "CODE",
+          "file_path": "services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/service/impl/OrderServiceImpl.java",
+          "identity": "OrderServiceImpl#payCallbackOrder",
+          "retrieval_rank": 11,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER2",
+            "ER3",
+            "ER4"
+          ]
+        }
+      ]
+    },
+    {
+      "sub_question_id": "ER4",
+      "question": "当订单或支付链路检测到重复请求或幂等冲突时，系统实际返回或执行的后续动作",
+      "purpose": "证据需展示在幂等校验不通过或检测到重复请求时，订单链路或支付链路是返回已有结果、抛出异常、拒绝处理还是进入其他分支，并说明其依据。",
+      "query_type": "CODE",
+      "selected_chunks": [
+        {
+          "citation_label": "C5",
+          "chunk_id": 8858,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/handler/ticket/filter/purchase/TrainPurchaseTicketRepeatChainFilter.java",
+          "identity": "TrainPurchaseTicketRepeatChainFilter#handler",
+          "retrieval_rank": 4,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER4"
+          ]
+        },
+        {
+          "citation_label": "C9",
+          "chunk_id": 8706,
+          "source_type": "CODE",
+          "file_path": "services/pay-services/src/main/java/edu/swu/fcj/my12306/biz/payservice/service/impl/PayServiceImpl.java",
+          "identity": "PayServiceImpl#checkOrderCanPay",
+          "retrieval_rank": 9,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER4"
+          ]
+        },
+        {
+          "citation_label": "C11",
+          "chunk_id": 8618,
+          "source_type": "CODE",
+          "file_path": "services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/service/impl/OrderServiceImpl.java",
+          "identity": "OrderServiceImpl#payCallbackOrder",
+          "retrieval_rank": 11,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER2",
+            "ER3",
+            "ER4"
+          ]
+        },
+        {
+          "citation_label": "C12",
+          "chunk_id": 8624,
+          "source_type": "CODE",
+          "file_path": "services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/service/impl/OrderServiceImpl.java",
+          "identity": "OrderServiceImpl#assertSameCreateRequest",
+          "retrieval_rank": 12,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER4"
+          ]
+        }
+      ]
+    },
+    {
+      "sub_question_id": "ER5",
+      "question": "项目内关于订单与支付链路幂等设计的文档或设计说明",
+      "purpose": "证据需包含项目文档或设计说明中对订单与支付链路幂等策略的阐述，且内容与当前代码实现一致。",
+      "query_type": "DOC",
+      "selected_chunks": [
+        {
+          "citation_label": "C2",
+          "chunk_id": 11273,
+          "source_type": "DOCUMENT",
+          "file_path": "7-模块设计文档/1-订单支付-车票.md",
+          "identity": "二十三、所以这个项目其实没有复杂的 @Idempotent",
+          "retrieval_rank": 5,
+          "source_role": "CURRENT_DESIGN",
+          "temporal_status": "UNKNOWN",
+          "authority_priority": 70,
+          "sub_question_ids": [
+            "ER5"
+          ]
+        }
+      ]
+    }
+  ],
+  "citations": {
+    "used_labels": [
+      "E18",
+      "E16",
+      "E2",
+      "E3",
+      "E11",
+      "E9",
+      "E19",
+      "E14",
+      "E8",
+      "E20",
+      "E21",
+      "E10",
+      "E5",
+      "E4",
+      "E1",
+      "E13",
+      "E12"
+    ],
+    "invalid_labels": [],
+    "zero_valid": false,
+    "sources": [
+      "[E18] 7-模块设计文档/4-订单支付的幂等问题.md",
+      "[E16] 7-模块设计文档/1-订单支付-车票.md > 二十三、所以这个项目其实没有复杂的 @Idempotent",
+      "[E2] services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/service/OrderStateService.java:29-91 — OrderStateService#OrderStateService",
+      "[E3] services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/service/impl/OrderServiceImpl.java:53-386 — OrderServiceImpl#OrderServiceImpl",
+      "[E11] services/pay-services/src/main/java/edu/swu/fcj/my12306/biz/payservice/service/impl/PayServiceImpl.java:47-329 — PayServiceImpl#PayServiceImpl",
+      "[E9] services/pay-services/src/main/java/edu/swu/fcj/my12306/biz/payservice/service/impl/PayServiceImpl.java:131-165 — PayServiceImpl#payCallback",
+      "[E19] services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/service/OrderService.java:9-46 — OrderService#OrderService",
+      "[E14] services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/service/impl/OrderServiceImpl.java:367-385 — OrderServiceImpl#assertSameCreateRequest",
+      "[E8] services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/service/impl/OrderServiceImpl.java:236-263 — OrderServiceImpl#payCallbackOrder",
+      "[E20] services/pay-services/src/main/java/edu/swu/fcj/my12306/biz/payservice/remote/OrderRemoteService.java:21-22 — OrderRemoteService#payCallbackOrder",
+      "[E21] services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/controller/TicketOrderController.java:67-70 — TicketOrderController#payCallbackOrder",
+      "[E10] services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/service/OrderService.java:37-37 — OrderService#payCallbackOrder",
+      "[E5] services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/mq/OrderDelayCloseProducer.java:54-66 — OrderDelayCloseProducer#doSend",
+      "[E4] services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/service/impl/OrderServiceImpl.java:265-288 — OrderServiceImpl#closeTimeoutOrder",
+      "[E1] services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/service/OrderService.java:30-30 — OrderService#closeTicketOrder",
+      "[E13] services/pay-services/src/main/java/edu/swu/fcj/my12306/biz/payservice/service/impl/PayServiceImpl.java:244-252 — PayServiceImpl#checkOrderCanPay",
+      "[E12] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/handler/ticket/filter/purchase/TrainPurchaseTicketRepeatChainFilter.java:14-17 — TrainPurchaseTicketRepeatChainFilter#handler"
+    ]
+  },
+  "sections": {
+    "count": 9,
+    "lengths": [
+      205,
+      258,
+      240,
+      245,
+      356,
+      334,
+      220,
+      315,
+      295
+    ],
+    "max_chars": 356,
+    "over_budget": 1
+  },
+  "answer_plan": null,
+  "source_conflicts": [],
+  "review": null,
+  "stage_usage": [
+    {
+      "stage": "evidence_planning",
+      "latency_ms": 24329.87040001899,
+      "decision_source": "llm",
+      "model": "deepseek-flash",
+      "reasoning_effort": "high",
+      "input_tokens": 479,
+      "output_tokens": 3455,
+      "round_index": null
+    },
+    {
+      "stage": "search_action_planning",
+      "latency_ms": 3356.2917999806814,
+      "decision_source": "llm",
+      "model": "deepseek-flash",
+      "reasoning_effort": "low",
+      "input_tokens": 794,
+      "output_tokens": 752,
+      "round_index": 0
+    },
+    {
+      "stage": "evidence_retrieval",
+      "latency_ms": 2816.6261999867857,
+      "decision_source": "policy",
+      "model": null,
+      "reasoning_effort": null,
+      "input_tokens": null,
+      "output_tokens": null,
+      "round_index": 0
+    },
+    {
+      "stage": "coverage_check",
+      "latency_ms": 18886.137499997858,
+      "decision_source": "llm",
+      "model": "deepseek-flash",
+      "reasoning_effort": "low",
+      "input_tokens": 7654,
+      "output_tokens": 4308,
+      "round_index": 0
+    },
+    {
+      "stage": "search_action_planning",
+      "latency_ms": 7995.513399946503,
+      "decision_source": "llm",
+      "model": "deepseek-flash",
+      "reasoning_effort": "low",
+      "input_tokens": 551,
+      "output_tokens": 1671,
+      "round_index": 1
+    },
+    {
+      "stage": "evidence_retrieval",
+      "latency_ms": 147.80799997970462,
+      "decision_source": "policy",
+      "model": null,
+      "reasoning_effort": null,
+      "input_tokens": null,
+      "output_tokens": null,
+      "round_index": 1
+    },
+    {
+      "stage": "coverage_check",
+      "latency_ms": 13608.471399988048,
+      "decision_source": "llm",
+      "model": "deepseek-flash",
+      "reasoning_effort": "low",
+      "input_tokens": 8074,
+      "output_tokens": 3042,
+      "round_index": 1
+    },
+    {
+      "stage": "explanation_planning",
+      "latency_ms": 31664.808599976823,
+      "decision_source": "llm",
+      "model": "deepseek-flash",
+      "reasoning_effort": "high",
+      "input_tokens": 11014,
+      "output_tokens": 7588,
+      "round_index": null
+    },
+    {
+      "stage": "teaching_draft",
+      "latency_ms": 21949.406200030353,
+      "decision_source": "llm",
+      "model": "deepseek-flash",
+      "reasoning_effort": "high",
+      "input_tokens": 8274,
+      "output_tokens": 5674,
+      "round_index": null
+    }
+  ],
+  "evidence_plan": {
+    "schema_version": 2,
+    "original_query": "详细解释当前订单和支付链路是如何保证幂等的",
+    "requirements": [
+      {
+        "id": "ER1",
+        "target": "订单链路中用于保证幂等性的实际实现机制及其触发条件",
+        "success_criteria": "证据需包含订单创建或订单状态变更过程中用于识别并阻止重复请求的代码、配置或数据约束，并说明该机制在何种条件下生效。",
+        "priority": "CORE",
+        "temporal_scope": "CURRENT",
+        "source_requirement": "CODE"
+      },
+      {
+        "id": "ER2",
+        "target": "支付链路中用于保证幂等性的实际实现机制及其触发条件",
+        "success_criteria": "证据需包含支付请求发起、支付回调或支付状态更新过程中用于识别并阻止重复处理的代码、配置或数据约束，并说明该机制在何种条件下生效。",
+        "priority": "CORE",
+        "temporal_scope": "CURRENT",
+        "source_requirement": "CODE"
+      },
+      {
+        "id": "ER3",
+        "target": "订单链路与支付链路之间用于幂等关联的标识或上下文的传递方式与一致性保证",
+        "success_criteria": "证据需说明订单链路与支付链路之间共享或传递的幂等相关标识（如业务请求标识）的定义、生成规则以及在两个链路中如何用于判断重复请求。",
+        "priority": "CORE",
+        "temporal_scope": "CURRENT",
+        "source_requirement": "CODE"
+      },
+      {
+        "id": "ER4",
+        "target": "当订单或支付链路检测到重复请求或幂等冲突时，系统实际返回或执行的后续动作",
+        "success_criteria": "证据需展示在幂等校验不通过或检测到重复请求时，订单链路或支付链路是返回已有结果、抛出异常、拒绝处理还是进入其他分支，并说明其依据。",
+        "priority": "CORE",
+        "temporal_scope": "CURRENT",
+        "source_requirement": "CODE"
+      },
+      {
+        "id": "ER5",
+        "target": "项目内关于订单与支付链路幂等设计的文档或设计说明",
+        "success_criteria": "证据需包含项目文档或设计说明中对订单与支付链路幂等策略的阐述，且内容与当前代码实现一致。",
+        "priority": "SUPPORTING",
+        "temporal_scope": "CURRENT",
+        "source_requirement": "DOCUMENT"
+      }
+    ],
+    "decision_source": "llm"
+  },
+  "requirement_traces": [
+    {
+      "requirement_id": "ER1",
+      "target": "订单链路中用于保证幂等性的实际实现机制及其触发条件",
+      "search_history": [
+        {
+          "action_id": "SA1",
+          "requirement_id": "ER1",
+          "round_index": 0,
+          "query": "订单 创建 状态变更 幂等 重复请求 识别 阻止 实现 代码 配置 数据约束 触发条件",
+          "source_scope": "CODE",
+          "reason": "首轮搜索订单链路中幂等实现机制、代码或数据约束及生效条件",
+          "decision_source": "llm",
+          "error": null
+        }
+      ],
+      "evidence_ids": [
+        8632,
+        8613,
+        8619
+      ],
+      "coverage_history": [
+        {
+          "requirement_id": "ER1",
+          "state": "SATISFIED",
+          "evidence_ids": [
+            8632,
+            8613,
+            8619,
+            8602
+          ],
+          "missing_criteria": [],
+          "reason": "证据包含订单状态变更中的条件更新与影响行数判断机制，并说明重试、重复投递等触发条件下的幂等处理。",
+          "decision_source": "llm",
+          "check_error": null
+        },
+        {
+          "requirement_id": "ER1",
+          "state": "SATISFIED",
+          "evidence_ids": [
+            8632,
+            8613,
+            8619
+          ],
+          "missing_criteria": [],
+          "reason": "订单状态变更通过条件更新+影响行数实现幂等，重复调用被识别为已处理，并说明了生效条件。",
+          "decision_source": "llm",
+          "check_error": null
+        }
+      ],
+      "final_state": "SATISFIED"
+    },
+    {
+      "requirement_id": "ER2",
+      "target": "支付链路中用于保证幂等性的实际实现机制及其触发条件",
+      "search_history": [
+        {
+          "action_id": "SA2",
+          "requirement_id": "ER2",
+          "round_index": 0,
+          "query": "支付 请求 回调 状态更新 幂等 重复处理 识别 阻止 实现 代码 配置 数据约束 触发条件",
+          "source_scope": "CODE",
+          "reason": "首轮搜索支付链路中幂等实现机制、代码或数据约束及生效条件",
+          "decision_source": "llm",
+          "error": null
+        }
+      ],
+      "evidence_ids": [
+        8702,
+        8618
+      ],
+      "coverage_history": [
+        {
+          "requirement_id": "ER2",
+          "state": "SATISFIED",
+          "evidence_ids": [
+            8702,
+            8618
+          ],
+          "missing_criteria": [],
+          "reason": "支付链路实现中有条件更新与影响行数判断，订单回调中也有重复处理识别，并说明触发条件。",
+          "decision_source": "llm",
+          "check_error": null
+        },
+        {
+          "requirement_id": "ER2",
+          "state": "SATISFIED",
+          "evidence_ids": [
+            8702,
+            8618
+          ],
+          "missing_criteria": [],
+          "reason": "支付回调中先查状态、金额校验，已支付直接返回，条件更新未生效时视为已处理，并说明了生效条件。",
+          "decision_source": "llm",
+          "check_error": null
+        }
+      ],
+      "final_state": "SATISFIED"
+    },
+    {
+      "requirement_id": "ER3",
+      "target": "订单链路与支付链路之间用于幂等关联的标识或上下文的传递方式与一致性保证",
+      "search_history": [
+        {
+          "action_id": "SA3",
+          "requirement_id": "ER3",
+          "round_index": 0,
+          "query": "订单 支付 链路 幂等 关联 标识 上下文 传递 业务请求标识 生成规则 重复请求 判断",
+          "source_scope": "CODE",
+          "reason": "首轮搜索订单与支付链路间幂等相关标识的定义、传递和一致性保证",
+          "decision_source": "llm",
+          "error": null
+        },
+        {
+          "action_id": "SA6",
+          "requirement_id": "ER3",
+          "round_index": 1,
+          "query": "payCallbackOrder orderSn paySn 幂等 标识 生成规则 传递 PayServiceImpl OrderService",
+          "source_scope": "CODE",
+          "reason": "第二轮聚焦 ER3 缺口，复用已发现的支付/订单服务符号与回调方法，查找 orderSn、paySn 等幂等标识的定义、生成规则及跨链路传递一致性。",
+          "decision_source": "llm",
+          "error": null
+        }
+      ],
+      "evidence_ids": [
+        8618,
+        8686,
+        8579,
+        8698
+      ],
+      "coverage_history": [
+        {
+          "requirement_id": "ER3",
+          "state": "PARTIAL",
+          "evidence_ids": [
+            8698,
+            8618
+          ],
+          "missing_criteria": [
+            "缺少幂等相关标识（如orderSn、paySn）的定义与生成规则",
+            "缺少两个链路中如何传递该标识并用于判断重复请求的一致性保证说明"
+          ],
+          "reason": "证据仅显示订单号在支付回调中被使用，但未说明其定义、生成规则及跨链路的幂等一致性保证。",
+          "decision_source": "llm",
+          "check_error": null
+        },
+        {
+          "requirement_id": "ER3",
+          "state": "PARTIAL",
+          "evidence_ids": [
+            8618,
+            8686,
+            8579,
+            8698
+          ],
+          "missing_criteria": [
+            "尚缺订单与支付链路间共享幂等标识的定义与生成规则",
+            "尚缺该标识在两条链路中如何用于判断重复请求的一致性说明",
+            "尚缺标识传递的一致性保证机制说明"
+          ],
+          "reason": "仅有订单号/支付流水号在远程调用与回调中的使用痕迹，未说明标识定义、生成规则与一致性保证。",
+          "decision_source": "llm",
+          "check_error": null
+        }
+      ],
+      "final_state": "PARTIAL"
+    },
+    {
+      "requirement_id": "ER4",
+      "target": "当订单或支付链路检测到重复请求或幂等冲突时，系统实际返回或执行的后续动作",
+      "search_history": [
+        {
+          "action_id": "SA4",
+          "requirement_id": "ER4",
+          "round_index": 0,
+          "query": "幂等 校验 不通过 重复请求 返回已有结果 抛出异常 拒绝处理 分支 订单 支付",
+          "source_scope": "CODE",
+          "reason": "首轮搜索检测到重复请求或幂等冲突时系统实际返回或执行的后续动作",
+          "decision_source": "llm",
+          "error": null
+        }
+      ],
+      "evidence_ids": [
+        8706,
+        8624,
+        8618
+      ],
+      "coverage_history": [
+        {
+          "requirement_id": "ER4",
+          "state": "SATISFIED",
+          "evidence_ids": [
+            8706,
+            8624,
+            8618
+          ],
+          "missing_criteria": [],
+          "reason": "证据展示了支付重复时抛出异常、订单创建冲突时抛出异常以及重复回调时返回已处理等动作及其依据。",
+          "decision_source": "llm",
+          "check_error": null
+        },
+        {
+          "requirement_id": "ER4",
+          "state": "SATISFIED",
+          "evidence_ids": [
+            8706,
+            8624,
+            8618
+          ],
+          "missing_criteria": [],
+          "reason": "展示了重复回调返回已处理、已支付重复支付抛异常、订单号冲突抛异常等实际动作及依据。",
+          "decision_source": "llm",
+          "check_error": null
+        }
+      ],
+      "final_state": "SATISFIED"
+    },
+    {
+      "requirement_id": "ER5",
+      "target": "项目内关于订单与支付链路幂等设计的文档或设计说明",
+      "search_history": [
+        {
+          "action_id": "SA5",
+          "requirement_id": "ER5",
+          "round_index": 0,
+          "query": "项目文档 设计说明 订单 支付 链路 幂等 策略 实现 一致",
+          "source_scope": "DOCUMENT",
+          "reason": "首轮搜索项目内关于订单与支付链路幂等设计的文档或设计说明",
+          "decision_source": "llm",
+          "error": null
+        }
+      ],
+      "evidence_ids": [
+        11273,
+        11377,
+        11633
+      ],
+      "coverage_history": [
+        {
+          "requirement_id": "ER5",
+          "state": "SATISFIED",
+          "evidence_ids": [
+            11273,
+            11633,
+            11377
+          ],
+          "missing_criteria": [],
+          "reason": "文档明确阐述订单支付链路幂等策略为业务唯一键+状态机+条件更新+影响行数，与代码实现一致。",
+          "decision_source": "llm",
+          "check_error": null
+        },
+        {
+          "requirement_id": "ER5",
+          "state": "SATISFIED",
+          "evidence_ids": [
+            11273,
+            11377,
+            11633
+          ],
+          "missing_criteria": [],
+          "reason": "文档明确阐述订单支付链路不依赖统一 @Idempotent，靠业务唯一键、状态机、条件更新+影响行数，与代码实现一致。",
+          "decision_source": "llm",
+          "check_error": null
+        }
+      ],
+      "final_state": "SATISFIED"
+    }
+  ],
+  "search_actions": [
+    {
+      "action_id": "SA1",
+      "requirement_id": "ER1",
+      "round_index": 0,
+      "query": "订单 创建 状态变更 幂等 重复请求 识别 阻止 实现 代码 配置 数据约束 触发条件",
+      "source_scope": "CODE",
+      "reason": "首轮搜索订单链路中幂等实现机制、代码或数据约束及生效条件",
+      "decision_source": "llm",
+      "error": null
+    },
+    {
+      "action_id": "SA2",
+      "requirement_id": "ER2",
+      "round_index": 0,
+      "query": "支付 请求 回调 状态更新 幂等 重复处理 识别 阻止 实现 代码 配置 数据约束 触发条件",
+      "source_scope": "CODE",
+      "reason": "首轮搜索支付链路中幂等实现机制、代码或数据约束及生效条件",
+      "decision_source": "llm",
+      "error": null
+    },
+    {
+      "action_id": "SA3",
+      "requirement_id": "ER3",
+      "round_index": 0,
+      "query": "订单 支付 链路 幂等 关联 标识 上下文 传递 业务请求标识 生成规则 重复请求 判断",
+      "source_scope": "CODE",
+      "reason": "首轮搜索订单与支付链路间幂等相关标识的定义、传递和一致性保证",
+      "decision_source": "llm",
+      "error": null
+    },
+    {
+      "action_id": "SA4",
+      "requirement_id": "ER4",
+      "round_index": 0,
+      "query": "幂等 校验 不通过 重复请求 返回已有结果 抛出异常 拒绝处理 分支 订单 支付",
+      "source_scope": "CODE",
+      "reason": "首轮搜索检测到重复请求或幂等冲突时系统实际返回或执行的后续动作",
+      "decision_source": "llm",
+      "error": null
+    },
+    {
+      "action_id": "SA5",
+      "requirement_id": "ER5",
+      "round_index": 0,
+      "query": "项目文档 设计说明 订单 支付 链路 幂等 策略 实现 一致",
+      "source_scope": "DOCUMENT",
+      "reason": "首轮搜索项目内关于订单与支付链路幂等设计的文档或设计说明",
+      "decision_source": "llm",
+      "error": null
+    },
+    {
+      "action_id": "SA6",
+      "requirement_id": "ER3",
+      "round_index": 1,
+      "query": "payCallbackOrder orderSn paySn 幂等 标识 生成规则 传递 PayServiceImpl OrderService",
+      "source_scope": "CODE",
+      "reason": "第二轮聚焦 ER3 缺口，复用已发现的支付/订单服务符号与回调方法，查找 orderSn、paySn 等幂等标识的定义、生成规则及跨链路传递一致性。",
+      "decision_source": "llm",
+      "error": null
+    }
+  ],
+  "coverage_rounds": [
+    {
+      "round_index": 0,
+      "statuses": [
+        {
+          "requirement_id": "ER1",
+          "state": "SATISFIED",
+          "evidence_ids": [
+            8632,
+            8613,
+            8619,
+            8602
+          ],
+          "missing_criteria": [],
+          "reason": "证据包含订单状态变更中的条件更新与影响行数判断机制，并说明重试、重复投递等触发条件下的幂等处理。",
+          "decision_source": "llm",
+          "check_error": null
+        },
+        {
+          "requirement_id": "ER2",
+          "state": "SATISFIED",
+          "evidence_ids": [
+            8702,
+            8618
+          ],
+          "missing_criteria": [],
+          "reason": "支付链路实现中有条件更新与影响行数判断，订单回调中也有重复处理识别，并说明触发条件。",
+          "decision_source": "llm",
+          "check_error": null
+        },
+        {
+          "requirement_id": "ER3",
+          "state": "PARTIAL",
+          "evidence_ids": [
+            8698,
+            8618
+          ],
+          "missing_criteria": [
+            "缺少幂等相关标识（如orderSn、paySn）的定义与生成规则",
+            "缺少两个链路中如何传递该标识并用于判断重复请求的一致性保证说明"
+          ],
+          "reason": "证据仅显示订单号在支付回调中被使用，但未说明其定义、生成规则及跨链路的幂等一致性保证。",
+          "decision_source": "llm",
+          "check_error": null
+        },
+        {
+          "requirement_id": "ER4",
+          "state": "SATISFIED",
+          "evidence_ids": [
+            8706,
+            8624,
+            8618
+          ],
+          "missing_criteria": [],
+          "reason": "证据展示了支付重复时抛出异常、订单创建冲突时抛出异常以及重复回调时返回已处理等动作及其依据。",
+          "decision_source": "llm",
+          "check_error": null
+        },
+        {
+          "requirement_id": "ER5",
+          "state": "SATISFIED",
+          "evidence_ids": [
+            11273,
+            11633,
+            11377
+          ],
+          "missing_criteria": [],
+          "reason": "文档明确阐述订单支付链路幂等策略为业务唯一键+状态机+条件更新+影响行数，与代码实现一致。",
+          "decision_source": "llm",
+          "check_error": null
+        }
+      ]
+    },
+    {
+      "round_index": 1,
+      "statuses": [
+        {
+          "requirement_id": "ER1",
+          "state": "SATISFIED",
+          "evidence_ids": [
+            8632,
+            8613,
+            8619
+          ],
+          "missing_criteria": [],
+          "reason": "订单状态变更通过条件更新+影响行数实现幂等，重复调用被识别为已处理，并说明了生效条件。",
+          "decision_source": "llm",
+          "check_error": null
+        },
+        {
+          "requirement_id": "ER2",
+          "state": "SATISFIED",
+          "evidence_ids": [
+            8702,
+            8618
+          ],
+          "missing_criteria": [],
+          "reason": "支付回调中先查状态、金额校验，已支付直接返回，条件更新未生效时视为已处理，并说明了生效条件。",
+          "decision_source": "llm",
+          "check_error": null
+        },
+        {
+          "requirement_id": "ER3",
+          "state": "PARTIAL",
+          "evidence_ids": [
+            8618,
+            8686,
+            8579,
+            8698
+          ],
+          "missing_criteria": [
+            "尚缺订单与支付链路间共享幂等标识的定义与生成规则",
+            "尚缺该标识在两条链路中如何用于判断重复请求的一致性说明",
+            "尚缺标识传递的一致性保证机制说明"
+          ],
+          "reason": "仅有订单号/支付流水号在远程调用与回调中的使用痕迹，未说明标识定义、生成规则与一致性保证。",
+          "decision_source": "llm",
+          "check_error": null
+        },
+        {
+          "requirement_id": "ER4",
+          "state": "SATISFIED",
+          "evidence_ids": [
+            8706,
+            8624,
+            8618
+          ],
+          "missing_criteria": [],
+          "reason": "展示了重复回调返回已处理、已支付重复支付抛异常、订单号冲突抛异常等实际动作及依据。",
+          "decision_source": "llm",
+          "check_error": null
+        },
+        {
+          "requirement_id": "ER5",
+          "state": "SATISFIED",
+          "evidence_ids": [
+            11273,
+            11377,
+            11633
+          ],
+          "missing_criteria": [],
+          "reason": "文档明确阐述订单支付链路不依赖统一 @Idempotent，靠业务唯一键、状态机、条件更新+影响行数，与代码实现一致。",
+          "decision_source": "llm",
+          "check_error": null
+        }
+      ]
+    }
+  ],
+  "final_coverage": [
+    {
+      "requirement_id": "ER1",
+      "state": "SATISFIED",
+      "evidence_ids": [
+        8632,
+        8613,
+        8619
+      ],
+      "missing_criteria": [],
+      "reason": "订单状态变更通过条件更新+影响行数实现幂等，重复调用被识别为已处理，并说明了生效条件。",
+      "decision_source": "llm",
+      "check_error": null
+    },
+    {
+      "requirement_id": "ER2",
+      "state": "SATISFIED",
+      "evidence_ids": [
+        8702,
+        8618
+      ],
+      "missing_criteria": [],
+      "reason": "支付回调中先查状态、金额校验，已支付直接返回，条件更新未生效时视为已处理，并说明了生效条件。",
+      "decision_source": "llm",
+      "check_error": null
+    },
+    {
+      "requirement_id": "ER3",
+      "state": "PARTIAL",
+      "evidence_ids": [
+        8618,
+        8686,
+        8579,
+        8698
+      ],
+      "missing_criteria": [
+        "尚缺订单与支付链路间共享幂等标识的定义与生成规则",
+        "尚缺该标识在两条链路中如何用于判断重复请求的一致性说明",
+        "尚缺标识传递的一致性保证机制说明"
+      ],
+      "reason": "仅有订单号/支付流水号在远程调用与回调中的使用痕迹，未说明标识定义、生成规则与一致性保证。",
+      "decision_source": "llm",
+      "check_error": null
+    },
+    {
+      "requirement_id": "ER4",
+      "state": "SATISFIED",
+      "evidence_ids": [
+        8706,
+        8624,
+        8618
+      ],
+      "missing_criteria": [],
+      "reason": "展示了重复回调返回已处理、已支付重复支付抛异常、订单号冲突抛异常等实际动作及依据。",
+      "decision_source": "llm",
+      "check_error": null
+    },
+    {
+      "requirement_id": "ER5",
+      "state": "SATISFIED",
+      "evidence_ids": [
+        11273,
+        11377,
+        11633
+      ],
+      "missing_criteria": [],
+      "reason": "文档明确阐述订单支付链路不依赖统一 @Idempotent，靠业务唯一键、状态机、条件更新+影响行数，与代码实现一致。",
+      "decision_source": "llm",
+      "check_error": null
+    }
+  ],
+  "evidence_package_state": "PARTIAL",
+  "explanation_plan": {
+    "direct_answer": "订单支付链路不靠统一 @Idempotent，主要靠业务唯一键、状态机、条件更新+影响行数判断来幂等。",
+    "core_mental_model": "重复请求不是靠一把总锁拦住，而是让数据库在“状态还符合预期”时才改；改不动就说明已处理过或该拒绝。",
+    "answer_depth": "detailed",
+    "sections": [
+      {
+        "id": "S1",
+        "title": "先给结论：订单支付幂等到底靠什么？",
+        "reader_takeaway": "订单支付核心链路不依赖统一 @Idempotent，而是靠业务唯一键、状态机、条件更新和影响行数判断。",
+        "new_terms": [
+          "幂等",
+          "条件更新"
+        ],
+        "key_points": [
+          "文档明确订单支付核心链路不依赖统一 @Idempotent（E16/E18）。",
+          "订单状态推进用条件更新+影响行数，重复调用被识别为已处理（E2/E3）。",
+          "支付状态推进同样用条件更新+影响行数，不依赖 Redis（E11/E9）。"
+        ],
+        "evidence_labels": [
+          "E16",
+          "E18",
+          "E2",
+          "E3",
+          "E11",
+          "E9"
+        ],
+        "target_chars": 170
+      },
+      {
+        "id": "S2",
+        "title": "订单创建时，重复下单怎么不被重复受理？",
+        "reader_takeaway": "订单创建以 order_sn 为业务唯一键，冲突时校验是否同一请求，不同请求直接拒绝。",
+        "new_terms": [
+          "业务唯一键",
+          "orderSn"
+        ],
+        "key_points": [
+          "文档列订单创建靠 order_sn 唯一索引（E16）。",
+          "代码在 orderSn 已存在时比较用户、车次、座位等是否同一创建请求，不同则抛“订单号已被其他购票请求占用”（E14）。",
+          "createTicketOrder 是订单服务入口，后续状态推进再靠条件更新（E3/E19）。"
+        ],
+        "evidence_labels": [
+          "E16",
+          "E14",
+          "E3",
+          "E19"
+        ],
+        "target_chars": 200
+      },
+      {
+        "id": "S3",
+        "title": "订单状态推进怎样做到重复回调不重复改？",
+        "reader_takeaway": "订单状态用 WHERE status=expected 的条件更新，影响行数决定是否本次生效，重复请求视为已处理。",
+        "new_terms": [
+          "状态机",
+          "影响行数"
+        ],
+        "key_points": [
+          "OrderStateService 把本地状态推进做成独立事务，先提交再通知下游，重试用条件更新+影响行数判断（E2）。",
+          "payCallbackOrder 对已支付重复回调直接返回 true；markOrderPaid 未生效也视为已处理（E8）。",
+          "订单状态推进全部靠条件更新+影响行数，重复调用不会二次破坏（E3）。"
+        ],
+        "evidence_labels": [
+          "E2",
+          "E8",
+          "E3"
+        ],
+        "target_chars": 220
+      },
+      {
+        "id": "S4",
+        "title": "支付回调在支付服务侧怎么幂等？",
+        "reader_takeaway": "支付服务先校验 paySn 和金额，再用条件更新把 WAIT_PAY 推到已支付，重复回调不重复推进。",
+        "new_terms": [
+          "paySn",
+          "补偿任务"
+        ],
+        "key_points": [
+          "payCallback 校验 paySn、金额，金额不符抛异常（E9）。",
+          "已支付时返回通知状态，不重复推进也不重复通知下游（E9）。",
+          "更新条件为 paySn + status=WAIT_PAY，影响行数为 0 只记录已并发处理；下游通知失败不回滚支付单，由补偿任务重推（E9/E11）。"
+        ],
+        "evidence_labels": [
+          "E9",
+          "E11"
+        ],
+        "target_chars": 230
+      },
+      {
+        "id": "S5",
+        "title": "支付成功后如何通知订单，重复通知怎么处理？",
+        "reader_takeaway": "支付服务通过远程调用把支付结果回传订单；订单已支付时重复回调返回 true，让上游停止重推。",
+        "new_terms": [],
+        "key_points": [
+          "支付服务通过 OrderRemoteService.payCallbackOrder 调用订单服务 pay-callback 接口（E20/E21/E10/E19）。",
+          "订单侧 payCallbackOrder 对已支付重复回调返回 true；对订单已关闭但收到支付成功记录错误并返回 true 停止重推（E8）。",
+          "回调携带 orderSn/paySn 等标识用于定位订单和支付单，但证据未给出两者定义与生成规则（E8/E20/E21）。"
+        ],
+        "evidence_labels": [
+          "E20",
+          "E21",
+          "E10",
+          "E19",
+          "E8"
+        ],
+        "target_chars": 230
+      },
+      {
+        "id": "S6",
+        "title": "超时关单和延迟任务重复投递怎么办？",
+        "reader_takeaway": "关单任务重复到达时，先看订单是否存在和是否已支付；本地关单用条件更新，下游关支付单和回滚座位可重复执行。",
+        "new_terms": [
+          "延迟关单",
+          "兜底扫表"
+        ],
+        "key_points": [
+          "closeTimeoutOrder 对订单不存在、已支付直接返回；待支付才 closePendingOrder；随后 closePayOrder 和 rollbackTicketSeats 都会补齐（E4）。",
+          "延迟关单通过 RDelayedQueue 投递 orderSn，投递失败不影响下单，由兜底扫表补上（E5）。",
+          "closePendingOrder 是独立事务方法，保证本地状态先提交再通知下游（E2/E1）。"
+        ],
+        "evidence_labels": [
+          "E4",
+          "E5",
+          "E2",
+          "E1"
+        ],
+        "target_chars": 230
+      },
+      {
+        "id": "S7",
+        "title": "失败、重试和异常分支会怎么处理？",
+        "reader_takeaway": "不同异常有不同动作：重复回调返回已处理，重复支付抛异常，金额不符拒绝，已关闭收到支付成功记录人工介入。",
+        "new_terms": [
+          "人工介入"
+        ],
+        "key_points": [
+          "支付侧 checkOrderCanPay 对待支付放行，已支付抛“订单已支付，无需重复支付”，已取消抛“订单已取消，无法支付”（E13）。",
+          "支付回调金额不符直接拒绝；订单号冲突抛“订单号已被其他购票请求占用”（E9/E14）。",
+          "支付成功后的下游通知失败不回滚支付单，只把通知状态置未完成，由补偿任务重推（E11）。"
+        ],
+        "evidence_labels": [
+          "E13",
+          "E9",
+          "E14",
+          "E11"
+        ],
+        "target_chars": 230
+      },
+      {
+        "id": "S8",
+        "title": "完整走一遍：重复请求在订单和支付链路会怎样？",
+        "reader_takeaway": "两条链路都让数据库条件更新和业务唯一键充当裁判：能推进才推进，推不动就按已处理或异常分支结束。",
+        "new_terms": [],
+        "key_points": [
+          "订单创建靠 order_sn 唯一索引/冲突校验，状态推进靠条件更新+影响行数（E16/E14/E3）。",
+          "支付单创建靠 t_pay.order_sn UNIQUE，支付状态推进靠 WHERE status=WAIT_PAY，成功通知失败由补偿（E16/E9/E11）。",
+          "订单支付之间用 orderSn/paySn 等标识传递回调，但标识定义、生成规则和一致性保证仍缺证据（E8/E20/E21）。"
+        ],
+        "evidence_labels": [
+          "E16",
+          "E14",
+          "E3",
+          "E9",
+          "E11",
+          "E8",
+          "E20",
+          "E21"
+        ],
+        "target_chars": 230
+      },
+      {
+        "id": "S9",
+        "title": "边界和缺口：哪些话不能说得太满？",
+        "reader_takeaway": "当前证据能证明订单支付核心幂等策略，但跨链路标识的生成与一致性、票务重复购买校验仍是缺口或未实现。",
+        "new_terms": [
+          "跨链路标识"
+        ],
+        "key_points": [
+          "ER3 仅部分满足：orderSn/paySn 在回调和远程调用中出现，但定义、生成规则、一致性保证缺失（E8/E20/E21/E19）。",
+          "票务侧 TrainPurchaseTicketRepeatChainFilter 仍是占位，不能当作订单支付幂等依据（E12）。",
+          "文档说明不依赖统一 @Idempotent，不等于没有幂等要求，而是用业务唯一键+状态机+条件更新+影响行数（E16/E18）。"
+        ],
+        "evidence_labels": [
+          "E8",
+          "E20",
+          "E21",
+          "E19",
+          "E12",
+          "E16",
+          "E18"
+        ],
+        "target_chars": 230
+      }
+    ],
+    "question_kind": "HOW",
+    "reader_assumption": "intermediate",
+    "likely_misconceptions": [
+      "以为项目用了统一 @Idempotent 或 Redis 锁做幂等；文档明确订单支付核心链路不依赖统一 @Idempotent。",
+      "以为重复请求一定返回同一个成功结果；实际已支付重复支付会抛异常，订单已关闭收到支付成功会记录人工核对。",
+      "以为 orderSn/paySn 的生成规则和跨链路一致性已经明确；当前证据只显示它们被传递和校验，还缺定义与一致性保证。"
+    ],
+    "decision_source": "llm",
+    "plan_schema_version": "teaching_v2"
+  },
+  "teaching": {
+    "generation_mode": "single_stream",
+    "completion_status": "complete",
+    "stream_started_offset_ms": 102821.85859995661,
+    "first_content_token_ms": 120501.92989996867,
+    "first_section_ready_ms": 120926.60279996926,
+    "first_content_token_from_stream_ms": 17680.07130001206,
+    "first_section_ready_from_stream_ms": 18104.744200012647,
+    "stream_finished_ms": 124758.20839998778,
+    "stream_duration_ms": 21936.349800031167,
+    "sections_planned": 9,
+    "sections_completed": 9,
+    "sections_emitted": 9,
+    "sections_failed": 0,
+    "missing_sections": [],
+    "input_tokens": 8274,
+    "output_tokens": 5674,
+    "reasoning_tokens": 4156,
+    "visible_output_tokens": 1518,
+    "stream_retry_count": 0,
+    "stream_partial": false,
+    "stream_cancelled": false,
+    "failed_section": null,
+    "error": null,
+    "attempts": [
+      {
+        "attempt": 1,
+        "started_offset_ms": 102821.88539998606,
+        "finished_offset_ms": 124758.20400001248,
+        "first_content_token_ms": 120501.92989996867,
+        "first_section_ready_ms": 120926.60279996926,
+        "error": null,
+        "usage": {
+          "prompt_tokens": 8274,
+          "completion_tokens": 5674,
+          "total_tokens": 13948,
+          "prompt_cache_hit_tokens": 640,
+          "prompt_cache_miss_tokens": 7634,
+          "reasoning_tokens": 4156
+        }
+      }
+    ],
+    "plan_schema_version": "teaching_v2",
+    "readability": {
+      "metrics_version": "teaching_style_v1",
+      "heuristic": true,
+      "completion_status": "complete",
+      "sections_inspected_count": 9,
+      "section_chars": {
+        "S1": 145,
+        "S2": 203,
+        "S3": 201,
+        "S4": 193,
+        "S5": 275,
+        "S6": 282,
+        "S7": 178,
+        "S8": 215,
+        "S9": 208
+      },
+      "total_body_chars": 1900,
+      "avg_section_chars": 211.11,
+      "max_section_chars": 282,
+      "sentence_count": 48,
+      "avg_sentence_chars": 38.58,
+      "max_sentence_chars": 106,
+      "long_sentence_count": 2,
+      "long_sentence_rate": 0.0417,
+      "planned_new_terms_per_section": {
+        "S1": 2,
+        "S2": 2,
+        "S3": 2,
+        "S4": 2,
+        "S5": 0,
+        "S6": 2,
+        "S7": 1,
+        "S8": 0,
+        "S9": 1
+      },
+      "observed_new_terms_per_section": {
+        "S1": 3,
+        "S2": 1,
+        "S3": 2,
+        "S4": 2,
+        "S5": 0,
+        "S6": 0,
+        "S7": 1,
+        "S8": 0,
+        "S9": 0
+      },
+      "code_identifier_count": 30,
+      "abstract_term_count": 14,
+      "citation_count": 61,
+      "citation_density": 3.21,
+      "warnings": [
+        {
+          "section_id": "S1",
+          "code": "NEW_TERM_LOAD",
+          "value": 3,
+          "threshold": 2
+        },
+        {
+          "section_id": "S5",
+          "code": "LONG_SENTENCE",
+          "value": 106,
+          "threshold": 80
+        },
+        {
+          "section_id": "S6",
+          "code": "LONG_SENTENCE",
+          "value": 86,
+          "threshold": 80
+        }
+      ],
+      "sections": [
+        {
+          "section_id": "S1",
+          "section_chars": 145,
+          "sentence_count": 4,
+          "sentence_chars": [
+            46,
+            27,
+            25,
+            43
+          ],
+          "avg_sentence_chars": 35.25,
+          "max_sentence_chars": 46,
+          "long_sentence_count": 0,
+          "long_sentence_rate": 0.0,
+          "target_chars": 170,
+          "target_chars_delta": -25,
+          "planned_new_terms": [
+            "幂等",
+            "条件更新"
+          ],
+          "planned_new_term_count": 2,
+          "observed_new_terms": [
+            "状态机",
+            "条件更新",
+            "影响行数"
+          ],
+          "observed_new_term_count": 3,
+          "code_identifier_count": 1,
+          "code_block_chars": 0,
+          "max_consecutive_identifiers": 1,
+          "abstract_term_count": 0,
+          "citation_count": 7,
+          "citation_density": 4.83,
+          "warnings": [
+            {
+              "section_id": "S1",
+              "code": "NEW_TERM_LOAD",
+              "value": 3,
+              "threshold": 2
+            }
+          ]
+        },
+        {
+          "section_id": "S2",
+          "section_chars": 203,
+          "sentence_count": 7,
+          "sentence_chars": [
+            21,
+            33,
+            22,
+            22,
+            52,
+            34,
+            12
+          ],
+          "avg_sentence_chars": 28.0,
+          "max_sentence_chars": 52,
+          "long_sentence_count": 0,
+          "long_sentence_rate": 0.0,
+          "target_chars": 200,
+          "target_chars_delta": 3,
+          "planned_new_terms": [
+            "业务唯一键",
+            "orderSn"
+          ],
+          "planned_new_term_count": 2,
+          "observed_new_terms": [
+            "状态推进"
+          ],
+          "observed_new_term_count": 1,
+          "code_identifier_count": 3,
+          "code_block_chars": 0,
+          "max_consecutive_identifiers": 1,
+          "abstract_term_count": 1,
+          "citation_count": 5,
+          "citation_density": 2.46,
+          "warnings": []
+        },
+        {
+          "section_id": "S3",
+          "section_chars": 201,
+          "sentence_count": 4,
+          "sentence_chars": [
+            36,
+            74,
+            61,
+            26
+          ],
+          "avg_sentence_chars": 49.25,
+          "max_sentence_chars": 74,
+          "long_sentence_count": 0,
+          "long_sentence_rate": 0.0,
+          "target_chars": 220,
+          "target_chars_delta": -19,
+          "planned_new_terms": [
+            "状态机",
+            "影响行数"
+          ],
+          "planned_new_term_count": 2,
+          "observed_new_terms": [
+            "事务",
+            "幂等"
+          ],
+          "observed_new_term_count": 2,
+          "code_identifier_count": 3,
+          "code_block_chars": 0,
+          "max_consecutive_identifiers": 1,
+          "abstract_term_count": 3,
+          "citation_count": 3,
+          "citation_density": 1.49,
+          "warnings": []
+        },
+        {
+          "section_id": "S4",
+          "section_chars": 193,
+          "sentence_count": 7,
+          "sentence_chars": [
+            10,
+            19,
+            31,
+            34,
+            45,
+            32,
+            15
+          ],
+          "avg_sentence_chars": 26.57,
+          "max_sentence_chars": 45,
+          "long_sentence_count": 0,
+          "long_sentence_rate": 0.0,
+          "target_chars": 230,
+          "target_chars_delta": -37,
+          "planned_new_terms": [
+            "paySn",
+            "补偿任务"
+          ],
+          "planned_new_term_count": 2,
+          "observed_new_terms": [
+            "回滚",
+            "补偿"
+          ],
+          "observed_new_term_count": 2,
+          "code_identifier_count": 5,
+          "code_block_chars": 0,
+          "max_consecutive_identifiers": 1,
+          "abstract_term_count": 2,
+          "citation_count": 5,
+          "citation_density": 2.59,
+          "warnings": []
+        },
+        {
+          "section_id": "S5",
+          "section_chars": 275,
+          "sentence_count": 5,
+          "sentence_chars": [
+            106,
+            44,
+            32,
+            42,
+            46
+          ],
+          "avg_sentence_chars": 54.0,
+          "max_sentence_chars": 106,
+          "long_sentence_count": 1,
+          "long_sentence_rate": 0.2,
+          "target_chars": 230,
+          "target_chars_delta": 45,
+          "planned_new_terms": [],
+          "planned_new_term_count": 0,
+          "observed_new_terms": [],
+          "observed_new_term_count": 0,
+          "code_identifier_count": 4,
+          "code_block_chars": 0,
+          "max_consecutive_identifiers": 2,
+          "abstract_term_count": 0,
+          "citation_count": 9,
+          "citation_density": 3.27,
+          "warnings": [
+            {
+              "section_id": "S5",
+              "code": "LONG_SENTENCE",
+              "value": 106,
+              "threshold": 80
+            }
+          ]
+        },
+        {
+          "section_id": "S6",
+          "section_chars": 282,
+          "sentence_count": 5,
+          "sentence_chars": [
+            40,
+            86,
+            55,
+            59,
+            37
+          ],
+          "avg_sentence_chars": 55.4,
+          "max_sentence_chars": 86,
+          "long_sentence_count": 1,
+          "long_sentence_rate": 0.2,
+          "target_chars": 230,
+          "target_chars_delta": 52,
+          "planned_new_terms": [
+            "延迟关单",
+            "兜底扫表"
+          ],
+          "planned_new_term_count": 2,
+          "observed_new_terms": [],
+          "observed_new_term_count": 0,
+          "code_identifier_count": 5,
+          "code_block_chars": 0,
+          "max_consecutive_identifiers": 1,
+          "abstract_term_count": 1,
+          "citation_count": 5,
+          "citation_density": 1.77,
+          "warnings": [
+            {
+              "section_id": "S6",
+              "code": "LONG_SENTENCE",
+              "value": 86,
+              "threshold": 80
+            }
+          ]
+        },
+        {
+          "section_id": "S7",
+          "section_chars": 178,
+          "sentence_count": 6,
+          "sentence_chars": [
+            9,
+            51,
+            13,
+            41,
+            38,
+            20
+          ],
+          "avg_sentence_chars": 28.67,
+          "max_sentence_chars": 51,
+          "long_sentence_count": 0,
+          "long_sentence_rate": 0.0,
+          "target_chars": 230,
+          "target_chars_delta": -52,
+          "planned_new_terms": [
+            "人工介入"
+          ],
+          "planned_new_term_count": 1,
+          "observed_new_terms": [
+            "裁决"
+          ],
+          "observed_new_term_count": 1,
+          "code_identifier_count": 1,
+          "code_block_chars": 0,
+          "max_consecutive_identifiers": 1,
+          "abstract_term_count": 2,
+          "citation_count": 4,
+          "citation_density": 2.25,
+          "warnings": []
+        },
+        {
+          "section_id": "S8",
+          "section_chars": 215,
+          "sentence_count": 6,
+          "sentence_chars": [
+            30,
+            30,
+            54,
+            50,
+            11,
+            34
+          ],
+          "avg_sentence_chars": 34.83,
+          "max_sentence_chars": 54,
+          "long_sentence_count": 0,
+          "long_sentence_rate": 0.0,
+          "target_chars": 230,
+          "target_chars_delta": -15,
+          "planned_new_terms": [],
+          "planned_new_term_count": 0,
+          "observed_new_terms": [],
+          "observed_new_term_count": 0,
+          "code_identifier_count": 5,
+          "code_block_chars": 0,
+          "max_consecutive_identifiers": 2,
+          "abstract_term_count": 3,
+          "citation_count": 12,
+          "citation_density": 5.58,
+          "warnings": []
+        },
+        {
+          "section_id": "S9",
+          "section_chars": 208,
+          "sentence_count": 4,
+          "sentence_chars": [
+            26,
+            53,
+            64,
+            61
+          ],
+          "avg_sentence_chars": 51.0,
+          "max_sentence_chars": 64,
+          "long_sentence_count": 0,
+          "long_sentence_rate": 0.0,
+          "target_chars": 230,
+          "target_chars_delta": -22,
+          "planned_new_terms": [
+            "跨链路标识"
+          ],
+          "planned_new_term_count": 1,
+          "observed_new_terms": [],
+          "observed_new_term_count": 0,
+          "code_identifier_count": 3,
+          "code_block_chars": 0,
+          "max_consecutive_identifiers": 1,
+          "abstract_term_count": 2,
+          "citation_count": 11,
+          "citation_density": 5.29,
+          "warnings": []
+        }
+      ],
+      "inspector_errors": []
+    },
+    "core_mental_model": "重复请求不是靠一把总锁拦住，而是让数据库在“状态还符合预期”时才改；改不动就说明已处理过或该拒绝。",
+    "output_budget": {
+      "max_output_tokens": 11000,
+      "preferred_sections": 6,
+      "allow_multi_pass": false,
+      "reason": "fixed depth budget, micro granularity"
+    },
+    "context_views": {
+      "bound_evidence": 17
+    },
+    "section_drafts": [
+      {
+        "id": "S1",
+        "chars": 208,
+        "used_citations": [
+          "E18",
+          "E16",
+          "E2",
+          "E3",
+          "E11",
+          "E9"
+        ]
+      },
+      {
+        "id": "S2",
+        "chars": 261,
+        "used_citations": [
+          "E19",
+          "E16",
+          "E14",
+          "E3"
+        ]
+      },
+      {
+        "id": "S3",
+        "chars": 243,
+        "used_citations": [
+          "E2",
+          "E8",
+          "E3"
+        ]
+      },
+      {
+        "id": "S4",
+        "chars": 248,
+        "used_citations": [
+          "E9",
+          "E11"
+        ]
+      },
+      {
+        "id": "S5",
+        "chars": 359,
+        "used_citations": [
+          "E20",
+          "E21",
+          "E10",
+          "E19",
+          "E8"
+        ]
+      },
+      {
+        "id": "S6",
+        "chars": 337,
+        "used_citations": [
+          "E5",
+          "E4",
+          "E1",
+          "E2"
+        ]
+      },
+      {
+        "id": "S7",
+        "chars": 223,
+        "used_citations": [
+          "E13",
+          "E9",
+          "E14",
+          "E11"
+        ]
+      },
+      {
+        "id": "S8",
+        "chars": 318,
+        "used_citations": [
+          "E16",
+          "E14",
+          "E3",
+          "E9",
+          "E20",
+          "E21",
+          "E8",
+          "E11"
+        ]
+      },
+      {
+        "id": "S9",
+        "chars": 298,
+        "used_citations": [
+          "E8",
+          "E20",
+          "E21",
+          "E19",
+          "E12",
+          "E16",
+          "E18"
+        ]
+      }
+    ]
+  }
+}
+
+================ DevContext Performance ================
+
+Query:            详细解释当前订单和支付链路是如何保证幂等的
+Mode / depth:     teach / detailed
+Sample:           first_sample
+Total latency:    124.8 s
+
+LLM calls:        7   (output tokens: 26490)
+Embedding calls:  5
+Retrieval actions:  6
+Sections:         9   (revisions: 0)
+
+--------------------------------------------------------
+Stage                          Round        Time       %
+--------------------------------------------------------
+evidence_planning                          24.3s   19.5%
+search_action_planning             0        3.4s    2.7%
+evidence_retrieval                 0        2.8s    2.3%
+coverage_check                     0       18.9s   15.1%
+search_action_planning             1        8.0s    6.4%
+evidence_retrieval                 1        0.1s    0.1%
+coverage_check                     1       13.6s   10.9%
+explanation_planning                       31.7s   25.4%
+teaching_draft                             21.9s   17.6%
+--------------------------------------------------------
+attributed                                124.8s
+unattributed                                0.0s    0.0%
+
+Top bottlenecks:
+  1. coverage_check                  32.5s   26.0%
+  2. explanation_planning            31.7s   25.4%
+  3. evidence_planning               24.3s   19.5%
+  4. teaching_draft                  21.9s   17.6%
+  5. search_action_planning          11.4s    9.1%
+
+
+Teaching readability (heuristic):
+  Avg / max section chars: 211.11 / 282
+  Avg / max sentence chars: 38.58 / 106
+  Long sentences: 2
+  Planned new terms / section: {'S1': 2, 'S2': 2, 'S3': 2, 'S4': 2, 'S5': 0, 'S6': 2, 'S7': 1, 'S8': 0, 'S9': 1}
+  Observed new terms / section: {'S1': 3, 'S2': 1, 'S3': 2, 'S4': 2, 'S5': 0, 'S6': 0, 'S7': 1, 'S8': 0, 'S9': 0}
+  Code identifiers: 30
+  Style warnings: 3
+========================================================
+Performance report written to D:\Java-learning\DevContext\artifacts\teaching-answer-v2\q3-v2.json

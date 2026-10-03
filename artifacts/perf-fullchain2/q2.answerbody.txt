@@ -1,0 +1,41 @@
+## 为什么"查到了票"不等于"提交时还能买到"
+
+假设两个用户在同一秒点了同一趟车、同一个席别，而余票只剩一张，并且这两次点击之前查询接口都返回过"有票"。如果他们各自拿着这次查询结果去下单，会发生什么？历史链路分析文档已经把这个问题定义清楚了：查询有票只是参考信息，不代表提交时一定有票，购票必须以提交时刻的实际可售状态为准；业务上必须保证绝不因为"用户看到过有票"而超卖，也绝不出现"提示成功但没有座位" [E19]。
+
+这个时间差窗口没法靠"下单前再查一次"消掉，因为查询与占用之间总要花一段时间，两个请求的这两段时间可以重叠。项目的分层结构还让窗口更明显：购票不是一步把座位变成"售出"。设计文档描述的过程是座位先 AVAILABLE → LOCKED 并生成 t_ticket 记录，此时用户尚未付款，所以不能直接 LOCKED → SOLD，需要一个 Order 来记录"已发起购买、等待付款" [E17][E18]。也就是说"座位被占用"和"订单成立"是两个不同时刻，中间还夹着一次跨服务调用。并发重复售卖因此不止一个需要防的点。
+
+当前代码确实把"提交时刻还有没有量"作为硬门槛：purchaseTickets 先取令牌桶令牌，取不到直接抛"列车站点已无余票" [E20]。但这一步只挡住"没量还放进来"，挡不住"两个请求都拿到令牌、都去占同一张座位"。
+
+这里要打断一个常见误解：TrainPurchaseTicketRepeatChainFilter.handler 目前是空实现，注释写明重复购买校验规则未定 [E8]。所以"同一用户重复下单会被拦"在当前代码里并不成立，不能把它算作防重手段。
+
+## 入口准入与座位锁：两个请求怎样被排成先后
+
+核心模型可以压成一句：并发购票不是"先查后改"，而是把同一购票资源的占座操作串行化——入口令牌控制放行量，用户锁与席别锁保证同一车次同一席别的本地占座一次只有一个请求在临界区内。
+
+按数据流拆开看。purchaseTickets 的第一行就是购票责任链 `purchaseTicketAbstractChainContext.handler(TicketChainMarkEnum.TRAIN_PURCHASE_TICKET_FILTER, ...)` [E20]，这个 mark 由 TrainPurchaseTicketChainFilter 提供，它是一个 `AbstractChainHandler<PurchaseTicketReqDTO>` 扩展点 [E2][E21]。所以参数校验、车次校验这类便宜判断可以先于昂贵资源发生，形成快速拒绝的位置。
+
+第二步才是准入：`tokenBucket.takeToken(trainId, departure, arrival, seatTypeCounts)` 返回 false 就抛"列车站点已无余票" [E20]。它按乘车区间和席别数量取令牌，作用是把进入后续逻辑的请求量压到与可售量同量级。
+
+第三步是锁前校验：`loadPassengers(requestParam, username)` 完成乘车人归属检查 [E20]，类注释也明确 admission 和 passenger ownership 检查发生在加锁之前 [E5]。这样无效请求不会占着锁。
+
+第四步才进临界区。reserveLocally 先 `userLock.lock()`，key 由 username 与 trainId 拼出；再对 seatTypeCounts 中每个席别依次取席别锁，key 由 trainId 与 seatType 拼出；然后在锁内调用 `purchaseTicketTxService.doPurchaseInTransaction(...)` 完成本地票事务；释放时席别锁倒序释放，用户锁最后释放 [E3]。
+
+为什么这样就能成立：两个请求若命中同一车次同一席别，第二个会阻塞在席别锁上，直到第一个把本地票事务做完并释放；于是它在临界区内读到的余量，就是它真正用来扣减的那份状态，"检查"与"占用"落在同一个临界区里 [E3]。用户锁再叠一层，让同一用户对同一车次的并发（例如连点两次）也串行 [E3]。
+
+锁的边界同样是设计的一部分：类注释写明座位锁只覆盖本地票事务，订单创建发生在所有锁释放之后 [E5]。把跨服务调用留在锁外，锁持有时间短，吞吐不会随订单服务延迟下坠。粒度上，席别锁按 (trainId, seatType) 划分，不同席别之间不互相阻塞 [E3]，对并发友好。需要说明的是，E3 用的是 `lock()` 即阻塞等待，不是 tryLock；公平性与等待超时在给出的代码中看不到。
+
+## 锁释放之后：订单、补偿与恢复如何兜底
+
+起点状态是：reserveLocally 返回，本地票事务已提交，座位进入 LOCKED 类状态 [E17]，随后 `reservationCommitted = true` [E20]。
+
+第一步是令牌归属转移。finally 块只在 `!reservationCommitted` 时才 returnToken [E20]，也就是说一旦本地占座提交，令牌不再随请求结束归还，而是绑到 reservation 生命周期上，类注释写明它只能由真实的座位释放归还 [E5]。这一步是防超卖的枢纽：如果订单创建失败时顺手还令牌，座位还锁着、令牌却已回到池里，新请求就可能拿令牌去抢一张实际不可售的座位。
+
+第二步清缓存：`evictRemainingTicketCacheSafely(requestParam)` 在创建订单前清掉余票缓存 [E20]，避免后续请求读到过期的"有票"。
+
+第三步创建订单，`createOrder` 调用 `orderRemoteService.createTicketOrder(reservation.orderCreateRequest())` [E1]，刻意在锁外执行，结果分三类。正常返回且 code 成功、data 等于本地 orderSn：计 order.success 并返回 orderSn 与订单明细 [E20]，Controller 也只在代理服务正常返回时计一次成功购票 [E15]。明确失败：走 compensateKnownFailure，通过 `ticketCallbackService.cancelCallback` 释放本地占座，再抛"订单服务拒绝创建订单，座位已释放" [E20][E7]；补偿本身也可能失败，此时计 compensation.fail 并记日志，等恢复任务 [E7]。结果未知：createOrder 捕获 Throwable 后计 `my12306.purchase.order.ambiguous`，明确不释放座位，按 orderSn 等待恢复 [E1]；返回的 orderSn 与本地不一致时同样计 ambiguous 并抛"订单创建结果未知" [E20]。未知时不释放的理由很直接——订单可能已经建好，释放座位等于把一张可能已售的票放回可售池。
+
+第四步是订单侧的幂等核对。`assertSameCreateRequest` 在同一 orderSn 已存在时，比对 userId/username/trainId/departure/arrival 以及每一张票的 carriageNumber/seatNumber/seatType/idCard/amount，不一致就抛"订单号已被其他购票请求占用" [E14]。要注意它拦的是"同一订单号被不同内容复用"，而不是"两个不同订单号卖出同一座位"；后者依赖订座环节自身的唯一性，E14 不提供这个保证。
+
+第五步是恢复线索。`selectRecoverableOrderSns` 按 ticket_status 与 create_time < before 过滤，再按 order_sn 分组取回可恢复的订单号 [E13]。这说明结果不确定的订单最终是靠 t_ticket 的状态与 order_sn 做对账收敛，而不是当场重试。仓库中可见的全局异常处理器把未捕获异常转成 500 "系统异常" [E16]，但它位于 user-services，不能据此断言 ticket-services 的异常响应格式。
+
+仍有几处无法由现有证据确认：重复购买规则最终形态未定 [E8]；恢复任务如何把座位与订单逐条对齐、可疑订单最终如何判定成功或释放，属未解决缺口，只能写成条件判断——如果恢复任务以 orderSn 为线索核对 t_ticket 状态，那么它就能补上跨服务那一段的不确定性。

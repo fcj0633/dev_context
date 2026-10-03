@@ -1,0 +1,84 @@
+Question:
+项目购票流程中，是如何保证数据一致性的，避免超卖问题
+
+Evidence Plan: llm
+  ER1. 项目购票流程中存在库存扣减的代码实现，并明确了扣减的执行逻辑与调用位置。 — CODE
+  ER2. 项目购票流程中采用了防止超卖的并发控制手段，并明确了其具体实现或配置。 — CODE
+  ER3. 项目购票流程中定义了事务边界以保障库存数据一致性，并明确了库存操作与订单创建是否在同一事务或最终一致性方案内。 — CODE
+  ER4. 项目购票流程中对库存不足或并发冲突定义了处理与补偿逻辑。 — ANY
+
+Route: MIXED (rules)
+Sufficiency: insufficient
+Requirements: ER1 PARTIAL, ER2 SATISFIED, ER3 SATISFIED, ER4 SATISFIED
+Retries: 1
+
+Answer:
+项目避免超卖靠的是一套分层的组合，而不是某一把锁：先用 Redis 令牌桶对待售余票做一次全局原子预占 [E2]，再用 Redisson 把同一用户、同一车次、同一席别的并发请求串行化 [E6]，然后让真正改票库的动作落在一个只操作 ticket 库的本地事务里 [E8]，最后用提交后回调、幂等补偿和定时兜底把令牌与票状态拉回一致 [E1]。
+
+## 超卖为什么会在购票链路里出现
+
+想象同一趟车、同一天、同一个席别，在开售瞬间涌入几百个请求。每个请求都要回答两个问题："还有票吗？"和"把票占住"。如果这两步之间没有任何互斥——比如先查库存读到"剩 1 张"，再各自去扣减——那么所有请求都能顺利通过查询，最后把余量扣成负数。问题的本质不是数据库慢，而是**判断与扣减不在同一个原子边界内**。
+
+项目的应对是第一道闸门放在最前面：`tokenBucket.takeToken` 用 Redis Lua 脚本执行，按 `(trainId, departure, arrival)` 维度对席别余票令牌做原子扣减 [E2]。一旦返回 false，`purchaseTickets` 直接抛出"列车站点已无余票"，请求根本不会走到后面 [E7]。这说明令牌桶承担的是"全局准入"职责：把绝大多数注定失败的并发请求拦在数据库之外，而不是只做一次查询优化。
+
+但令牌桶本身不解决另一类冲突——同一用户、同一席别下的并发重入。于是需要第二层：分布式锁把临界区收窄。
+
+还有一层结构性约束必须认清：订单服务与票务服务是分离的 [E15]，而票务侧的本地事务被明确设计成只操作 ticket 数据库，远程调用留在编排层，目的是避免网络等待延长行锁持有时间 [E8]。这意味着"扣票 + 建单"无法用一个数据库事务包住，必须靠提交后事件与补偿来衔接。所以防超卖在这个项目里天然是一个**跨进程、跨存储的最终一致问题**，而不是单机事务问题——这也是为什么后面的主链路里，锁、事务、令牌归还的时序必须一丝不乱。
+
+## 从购票入口到本地事务的并发控制链路
+
+按时序复述一遍，每一步都解释它为什么必须在那个位置发生。
+
+**1. 入口与基础校验。** Controller 的 `purchaseTickets` 调用服务层，"代理服务正常返回意味着事务已提交，此时才计为一次成功购票" [E13]——这句话本身就是主链路成功边界的定义。服务层先跑过滤链，再校验 `userId`/`username` 非空、单笔乘车人不超过 5 位 [E7]。这些是极廉价的前置判断，必须全部排在占用任何昂贵资源之前。
+
+**2. 令牌原子预占。** 由请求构建出 `seatTypeCounts` 后调用 `takeToken`；返回 false 就抛"列车站点已无余票" [E2][E7]。这一步是全局准入，也是整个链路里唯一一次对"售出总量"做原子裁决的地方。
+
+**3. 乘车人归属校验。** `loadPassengers` 在加锁之前执行，代码注释特意写明：要在请求占用任何一把分布式锁之前拒绝非法的乘车人归属 [E7]。为什么不放在锁里？因为它是远程调用，一旦进入临界区，网络抖动就会直接转化为锁持有时长。
+
+**4. 加锁并进入本地事务。** `reserveLocally` 先取用户锁（`username + trainId`），再按席别逐个取席别锁，最后才调用 `purchaseTicketTxService.doPurchaseInTransaction` [E6]。注意加锁顺序是固定的：先用户、后席别，席别按遍历顺序 —— 顺序一致是避免互相等待死锁的前提。而这一层事务的定位非常明确："调用方已经完成乘车人校验并持有用户锁和全部席别锁，本事务只操作 ticket 数据库" [E8]。换句话说，锁的临界区**恰好等于**本地事务的范围，不多不少。
+
+**5. 释放锁之后才做外部动作。** 方法返回后进入 `finally` 逆序释放席别锁和用户锁 [E6]；接着才安全地清余票缓存、调订单服务建单 [E7]。订单侧按 `orderSn` 做幂等创建：先 `selectByOrderSn` 命中就直接返回，并发场景靠唯一键 + `DuplicateKeyException` 兜底，并且只允许"内容完全相同的重试"复用已提交订单 [E9]。把建单放在锁外，是因为这个远程调用不具备并发正确性风险（幂等），却会显著拉长锁持有时间。
+
+**6. 令牌归还的责任归属。** 这是最容易写错的一段。本地事务提交后，`cancelCallback` 是唯一的令牌归还者 [E7]；`returnTokensAfterCommit` 会注册 `afterCommit` 回调，只有事务真正提交才执行归还 [E1]。如果没有未提交，`finally` 里直接归还 [E7]。事务提交之后，令牌就归属到"这笔预订"的生命周期，只能由真正的座位释放来归还 [E15]。这条规则把"未提交就放票"这种典型超卖来源直接堵死了。
+
+## 失败恢复、补偿幂等与当前证据边界
+
+正常状态下，上面这条链路会一路走到成功计数。故障则出现在几个不同的位置，每处的状态变化和恢复方式都不同。
+
+**建单明确失败。** `createOrder` 返回空或非成功码时，调用 `compensateKnownFailure`，内部走 `cancelCallback`，成功则计 `compensation.success`，失败则计 `compensation.fail` 并留日志等待恢复任务 [E11]。这一步把已占用的票务状态和令牌释放回可用状态。
+
+**补偿自身的幂等性。** 这里有个反直觉的点：补偿不能是"失败就再调一次"。可能第一次补偿其实已经成功，只是调用方超时以为失败 [E10]。如果第二次继续无条件地 `LOCKED → AVAILABLE` 或 `+1 库存`，被重新放出来的可能是已经卖掉的座位 —— 那不是修复，而是制造超卖 [E10]。所以正确写法是"期望状态 + 条件 UPDATE"，只有符合预期状态的数据才允许变化 [E10]。文档里把这件事总结得更完整：最终一致 = 同步补偿 + 补偿幂等 + 定时兜底 + 按真实状态恢复 [E12]，四者缺一不可。
+
+**辅助设施故障的降级。** 令牌归还抛异常时，`returnToken` 只是记一条降级指标，保留偏松降级并等待 TTL 自愈 [E3]；余票缓存删除失败时同样只记日志、等缓存过期，不阻塞主流程 [E5]。这两处取舍是一致的：宁可短暂少卖，也不因为缓存或计数器问题把已经提交的购票流程回滚掉。
+
+**两个必须说清的边界。** 其一，`TrainPurchaseTicketRepeatChainFilter` 目前是保留占位、未实现 [E4]，所以"防重复购买"不是当前证据支持的强保证。其二，也是更重要的：现有证据里的"扣减"只覆盖到令牌桶预占这一层 [E2]，**没有**直接展示更新库存字段或座位余量的代码片段。因此可以说清的是这套组合——令牌原子预占 [E2]、用户锁与席别锁串行化 [E6]、只操作 ticket 库的本地事务 [E8]、提交后才归还令牌 [E1]、失败后幂等补偿 [E11] ——共同构成防超卖机制；而真实座位库存字段在事务内部如何被条件扣减，无法从当前证据确认。如果 `doPurchaseInTransaction` 内部同样采用"期望状态 + 条件 UPDATE"的语义，那么它与令牌层是闭合的；但这只是基于现有证据的条件判断，不是已证实的事实。
+
+Explanation Strategy:
+PROBLEM_SOLUTION
+
+Mental Model:
+先用令牌桶做全局原子预占，再用分布式锁把同一用户和同一席别的并发购票串行化，最后把本地票库操作收进一个事务，失败或提交后用幂等补偿与兜底任务把令牌和票状态拉回一致。
+
+Context:
+  Workspace evidence: 16
+  Bound evidence: 14
+
+Generation:
+  0 sections
+  0 targeted revision
+
+Sources:
+[E2] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/handler/ticket/tokenbucket/TicketAvailabilityTokenBucket.java:73-105 — TicketAvailabilityTokenBucket#takeToken
+[E6] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/impl/PurchaseTicketServiceImpl.java:118-154 — PurchaseTicketServiceImpl#reserveLocally
+[E8] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/impl/PurchaseTicketTxService.java:51-197 — PurchaseTicketTxService#PurchaseTicketTxService
+[E1] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/impl/TicketCallbackServiceImpl.java:116-131 — TicketCallbackServiceImpl#returnTokensAfterCommit
+[E7] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/impl/PurchaseTicketServiceImpl.java:64-116 — PurchaseTicketServiceImpl#purchaseTickets
+[E15] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/impl/PurchaseTicketServiceImpl.java:49-241 — PurchaseTicketServiceImpl#PurchaseTicketServiceImpl
+[E13] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/controller/TicketController.java:46-58 — TicketController#purchaseTickets
+[E9] services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/service/impl/OrderServiceImpl.java:81-155 — OrderServiceImpl#createTicketOrder
+[E11] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/impl/PurchaseTicketServiceImpl.java:203-212 — PurchaseTicketServiceImpl#compensateKnownFailure
+[E10] 新建文件夹/2-购票.md > 二十七、所以必须补偿
+[E12] 新建文件夹/2-购票.md > 三十二、你需要特别防止的错误回答 > 错误 5
+[E3] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/handler/ticket/tokenbucket/TicketAvailabilityTokenBucket.java:110-126 — TicketAvailabilityTokenBucket#returnToken
+[E5] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/impl/PurchaseTicketServiceImpl.java:214-222 — PurchaseTicketServiceImpl#evictRemainingTicketCacheSafely
+[E4] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/handler/ticket/filter/purchase/TrainPurchaseTicketRepeatChainFilter.java:14-17 — TrainPurchaseTicketRepeatChainFilter#handler

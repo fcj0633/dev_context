@@ -1,0 +1,552 @@
+{
+  "query": "详细解释当前订单和支付链路是如何保证幂等的",
+  "answer_mode": "teach",
+  "generation_mode": "single_stream",
+  "stream": {
+    "generation_mode": "single_stream",
+    "completion_status": "partial",
+    "stream_started_offset_ms": 82536.70840000268,
+    "first_content_token_ms": 87323.69420002215,
+    "first_section_ready_ms": 88876.19629997062,
+    "first_content_token_from_stream_ms": 4786.985800019465,
+    "first_section_ready_from_stream_ms": 6339.487899967935,
+    "stream_finished_ms": 101095.02990002511,
+    "stream_duration_ms": 18558.32150002243,
+    "sections_planned": 10,
+    "sections_completed": 5,
+    "sections_emitted": 5,
+    "sections_failed": 1,
+    "missing_sections": [
+      "S6",
+      "S7",
+      "S8",
+      "S9",
+      "S10"
+    ],
+    "input_tokens": 8254,
+    "output_tokens": 4039,
+    "reasoning_tokens": 927,
+    "visible_output_tokens": 3112,
+    "stream_retry_count": 0,
+    "stream_partial": true,
+    "stream_cancelled": false,
+    "failed_section": "S6",
+    "error": "missing or unclosed section",
+    "attempts": [
+      {
+        "attempt": 1,
+        "started_offset_ms": 82536.72029997688,
+        "finished_offset_ms": 101095.02419998171,
+        "first_content_token_ms": 87323.69420002215,
+        "first_section_ready_ms": 88876.19629997062,
+        "error": "missing or unclosed section",
+        "usage": {
+          "prompt_tokens": 8254,
+          "completion_tokens": 4039,
+          "total_tokens": 12293,
+          "prompt_cache_hit_tokens": 0,
+          "prompt_cache_miss_tokens": 8254,
+          "reasoning_tokens": 927
+        }
+      }
+    ],
+    "core_mental_model": "把幂等键当成状态机的唯一入口：同一请求只有第一次能从预期前置状态迁移成功，后续重放都被识别为已处理，而不是产生第二次业务副作用。",
+    "output_budget": {
+      "max_output_tokens": 11000,
+      "preferred_sections": 7,
+      "allow_multi_pass": false,
+      "reason": "fixed depth budget, micro granularity"
+    },
+    "context_views": {
+      "bound_evidence": 17
+    },
+    "section_drafts": [
+      {
+        "id": "S1",
+        "chars": 641,
+        "used_citations": [
+          "E4",
+          "E2",
+          "E3",
+          "E10",
+          "E17",
+          "E6"
+        ]
+      },
+      {
+        "id": "S2",
+        "chars": 667,
+        "used_citations": [
+          "E4",
+          "E3",
+          "E5"
+        ]
+      },
+      {
+        "id": "S3",
+        "chars": 540,
+        "used_citations": [
+          "E2",
+          "E5",
+          "E6"
+        ]
+      },
+      {
+        "id": "S4",
+        "chars": 578,
+        "used_citations": [
+          "E6",
+          "E18",
+          "E8"
+        ]
+      },
+      {
+        "id": "S5",
+        "chars": 564,
+        "used_citations": [
+          "E17",
+          "E12",
+          "E11"
+        ]
+      }
+    ]
+  },
+  "depth": "detailed",
+  "top_k": 12,
+  "timestamp": "2026-10-03T07:56:34.176883+00:00",
+  "sample_kind": "first_sample",
+  "total_latency_ms": 101097.413,
+  "attributed_ms": 101091.752,
+  "unattributed_ms": 5.661,
+  "unattributed_ratio": 0.0001,
+  "top_level_stages_used": [
+    "evidence_planning",
+    "search_action_planning",
+    "evidence_retrieval",
+    "coverage_check",
+    "explanation_planning",
+    "teaching_draft",
+    "teaching_review",
+    "teaching_revision"
+  ],
+  "stop_reason": "partial",
+  "summary": {
+    "llm_calls": 7,
+    "embedding_calls": 6,
+    "retrieval_actions": 7,
+    "sections": 5,
+    "revisions": 0,
+    "planned_section_count": null,
+    "llm_latency_ms": 97212.517,
+    "llm_input_tokens": 36277,
+    "llm_output_tokens": 21644,
+    "llm_reasoning_tokens": 14514,
+    "discarded_llm_latency_ms": 0.0,
+    "final_answer_chars": 2998,
+    "final_answer_tokens_estimated": 2052
+  },
+  "stages": [
+    {
+      "stage": "evidence_planning",
+      "latency_ms": 4114.2124000471085,
+      "decision_source": "llm",
+      "model": "deepseek-flash",
+      "reasoning_effort": "high",
+      "input_tokens": 479,
+      "output_tokens": 835,
+      "round_index": null
+    },
+    {
+      "stage": "search_action_planning",
+      "latency_ms": 5240.934900008142,
+      "decision_source": "llm",
+      "model": "deepseek-flash",
+      "reasoning_effort": "low",
+      "input_tokens": 853,
+      "output_tokens": 1055,
+      "round_index": 0
+    },
+    {
+      "stage": "evidence_retrieval",
+      "latency_ms": 3716.784699994605,
+      "decision_source": "policy",
+      "model": null,
+      "reasoning_effort": null,
+      "input_tokens": null,
+      "output_tokens": null,
+      "round_index": 0
+    },
+    {
+      "stage": "coverage_check",
+      "latency_ms": 17727.744099975098,
+      "decision_source": "llm",
+      "model": "deepseek-flash",
+      "reasoning_effort": "low",
+      "input_tokens": 7272,
+      "output_tokens": 3812,
+      "round_index": 0
+    },
+    {
+      "stage": "search_action_planning",
+      "latency_ms": 4828.4387000021525,
+      "decision_source": "llm",
+      "model": "deepseek-flash",
+      "reasoning_effort": "low",
+      "input_tokens": 561,
+      "output_tokens": 1046,
+      "round_index": 1
+    },
+    {
+      "stage": "evidence_retrieval",
+      "latency_ms": 147.9609999805689,
+      "decision_source": "policy",
+      "model": null,
+      "reasoning_effort": null,
+      "input_tokens": null,
+      "output_tokens": null,
+      "round_index": 1
+    },
+    {
+      "stage": "coverage_check",
+      "latency_ms": 18037.01159998309,
+      "decision_source": "llm",
+      "model": "deepseek-flash",
+      "reasoning_effort": "low",
+      "input_tokens": 8106,
+      "output_tokens": 4328,
+      "round_index": 1
+    },
+    {
+      "stage": "explanation_planning",
+      "latency_ms": 28710.953600006178,
+      "decision_source": "llm",
+      "model": "deepseek-flash",
+      "reasoning_effort": "high",
+      "input_tokens": 10752,
+      "output_tokens": 6529,
+      "round_index": null
+    },
+    {
+      "stage": "teaching_draft",
+      "latency_ms": 18567.711199983023,
+      "decision_source": "failed",
+      "model": "deepseek-flash",
+      "reasoning_effort": "high",
+      "input_tokens": 8254,
+      "output_tokens": 4039,
+      "round_index": null
+    }
+  ],
+  "llm_calls": [
+    {
+      "call_id": 1,
+      "stage": "evidence_planning",
+      "latency_ms": 4114.044899994042,
+      "substage": null,
+      "model": "deepseek-flash",
+      "reasoning_effort": "high",
+      "max_tokens": 8192,
+      "json_mode": true,
+      "input_tokens": 479,
+      "output_tokens": 835,
+      "reasoning_tokens": 324,
+      "finish_reason": "stop",
+      "success": true,
+      "error": null,
+      "wasted": false,
+      "wasted_reason": null,
+      "discarded_latency_ms": 0.0
+    },
+    {
+      "call_id": 2,
+      "stage": "search_action_planning",
+      "latency_ms": 5240.463500027545,
+      "substage": "round_0",
+      "model": "deepseek-flash",
+      "reasoning_effort": "low",
+      "max_tokens": 4096,
+      "json_mode": true,
+      "input_tokens": 853,
+      "output_tokens": 1055,
+      "reasoning_tokens": 713,
+      "finish_reason": "stop",
+      "success": true,
+      "error": null,
+      "wasted": false,
+      "wasted_reason": null,
+      "discarded_latency_ms": 0.0
+    },
+    {
+      "call_id": 3,
+      "stage": "coverage_check",
+      "latency_ms": 17725.976699963212,
+      "substage": "round_0",
+      "model": "deepseek-flash",
+      "reasoning_effort": "low",
+      "max_tokens": 32768,
+      "json_mode": true,
+      "input_tokens": 7272,
+      "output_tokens": 3812,
+      "reasoning_tokens": 3347,
+      "finish_reason": "stop",
+      "success": true,
+      "error": null,
+      "wasted": false,
+      "wasted_reason": null,
+      "discarded_latency_ms": 0.0
+    },
+    {
+      "call_id": 4,
+      "stage": "search_action_planning",
+      "latency_ms": 4827.78639998287,
+      "substage": "round_1",
+      "model": "deepseek-flash",
+      "reasoning_effort": "low",
+      "max_tokens": 4096,
+      "json_mode": true,
+      "input_tokens": 561,
+      "output_tokens": 1046,
+      "reasoning_tokens": 965,
+      "finish_reason": "stop",
+      "success": true,
+      "error": null,
+      "wasted": false,
+      "wasted_reason": null,
+      "discarded_latency_ms": 0.0
+    },
+    {
+      "call_id": 5,
+      "stage": "coverage_check",
+      "latency_ms": 18036.25030000694,
+      "substage": "round_1",
+      "model": "deepseek-flash",
+      "reasoning_effort": "low",
+      "max_tokens": 32768,
+      "json_mode": true,
+      "input_tokens": 8106,
+      "output_tokens": 4328,
+      "reasoning_tokens": 3694,
+      "finish_reason": "stop",
+      "success": true,
+      "error": null,
+      "wasted": false,
+      "wasted_reason": null,
+      "discarded_latency_ms": 0.0
+    },
+    {
+      "call_id": 6,
+      "stage": "explanation_planning",
+      "latency_ms": 28709.906600008253,
+      "substage": null,
+      "model": "deepseek-flash",
+      "reasoning_effort": "high",
+      "max_tokens": 32768,
+      "json_mode": true,
+      "input_tokens": 10752,
+      "output_tokens": 6529,
+      "reasoning_tokens": 4544,
+      "finish_reason": "stop",
+      "success": true,
+      "error": null,
+      "wasted": false,
+      "wasted_reason": null,
+      "discarded_latency_ms": 0.0
+    },
+    {
+      "call_id": 7,
+      "stage": "teaching_draft",
+      "latency_ms": 18558.08829999296,
+      "substage": "single_stream",
+      "model": "deepseek-flash",
+      "reasoning_effort": "high",
+      "max_tokens": 11000,
+      "json_mode": false,
+      "input_tokens": 8254,
+      "output_tokens": 4039,
+      "reasoning_tokens": 927,
+      "finish_reason": "stop",
+      "success": true,
+      "error": null,
+      "wasted": false,
+      "wasted_reason": null,
+      "discarded_latency_ms": 0.0
+    }
+  ],
+  "embedding_calls": [
+    {
+      "call_id": 1,
+      "query": "订单 创建 状态变更 请求处理 幂等 重复请求 拦截 代码 唯一约束 判定条件",
+      "latency_ms": 510.7193000148982,
+      "batch_size": 1,
+      "model": "text-embedding-v4",
+      "dimensions": 1024,
+      "transport": "curl",
+      "success": true,
+      "error": null
+    },
+    {
+      "call_id": 2,
+      "query": "支付 请求 回调 状态流转 幂等 重复请求 拦截 代码 唯一约束 判定条件",
+      "latency_ms": 435.02999999327585,
+      "batch_size": 1,
+      "model": "text-embedding-v4",
+      "dimensions": 1024,
+      "transport": "curl",
+      "success": true,
+      "error": null
+    },
+    {
+      "call_id": 3,
+      "query": "订单 支付 幂等 标识 唯一键 状态同步 重复处理 代码",
+      "latency_ms": 386.04459998896345,
+      "batch_size": 1,
+      "model": "text-embedding-v4",
+      "dimensions": 1024,
+      "transport": "curl",
+      "success": true,
+      "error": null
+    },
+    {
+      "call_id": 4,
+      "query": "幂等 判重 存储 组件 数据库 唯一索引 访问 代码",
+      "latency_ms": 396.7107000062242,
+      "batch_size": 1,
+      "model": "text-embedding-v4",
+      "dimensions": 1024,
+      "transport": "curl",
+      "success": true,
+      "error": null
+    },
+    {
+      "call_id": 5,
+      "query": "订单 支付 幂等 设计 目标 约束 适用范围 重复请求 文档",
+      "latency_ms": 389.1579000046477,
+      "batch_size": 1,
+      "model": "text-embedding-v4",
+      "dimensions": 1024,
+      "transport": "curl",
+      "success": true,
+      "error": null
+    },
+    {
+      "call_id": 6,
+      "query": "重复请求 幂等 冲突 返回结果 状态处理 重试 补偿 代码 文档",
+      "latency_ms": 447.60849996237084,
+      "batch_size": 1,
+      "model": "text-embedding-v4",
+      "dimensions": 1024,
+      "transport": "curl",
+      "success": true,
+      "error": null
+    }
+  ],
+  "retrieval_actions": [
+    {
+      "action_id": "SA1",
+      "requirement_id": "ER1",
+      "round_index": 0,
+      "query": "订单 创建 状态变更 请求处理 幂等 重复请求 拦截 代码 唯一约束 判定条件",
+      "source_scope": "CODE",
+      "top_k": 5,
+      "total_ms": 936.7249000351876,
+      "result_count": 5,
+      "query_embedding_ms": 846.0852000280283,
+      "keyword_sql_ms": 0.0,
+      "vector_sql_ms": 90.62469995114952,
+      "fusion_ms": 0.0,
+      "error": null
+    },
+    {
+      "action_id": "SA2",
+      "requirement_id": "ER2",
+      "round_index": 0,
+      "query": "支付 请求 回调 状态流转 幂等 重复请求 拦截 代码 唯一约束 判定条件",
+      "source_scope": "CODE",
+      "top_k": 5,
+      "total_ms": 494.70759998075664,
+      "result_count": 5,
+      "query_embedding_ms": 441.90350000280887,
+      "keyword_sql_ms": 0.0,
+      "vector_sql_ms": 52.79079999309033,
+      "fusion_ms": 0.0,
+      "error": null
+    },
+    {
+      "action_id": "SA3",
+      "requirement_id": "ER3",
+      "round_index": 0,
+      "query": "订单 支付 幂等 标识 唯一键 状态同步 重复处理 代码",
+      "source_scope": "CODE",
+      "top_k": 5,
+      "total_ms": 457.5224999571219,
+      "result_count": 5,
+      "query_embedding_ms": 392.86369999172166,
+      "keyword_sql_ms": 0.0,
+      "vector_sql_ms": 64.64900000719354,
+      "fusion_ms": 0.0,
+      "error": null
+    },
+    {
+      "action_id": "SA4",
+      "requirement_id": "ER4",
+      "round_index": 0,
+      "query": "幂等 判重 存储 组件 数据库 唯一索引 访问 代码",
+      "source_scope": "CODE",
+      "top_k": 3,
+      "total_ms": 457.46030000736937,
+      "result_count": 3,
+      "query_embedding_ms": 404.3163000023924,
+      "keyword_sql_ms": 0.0,
+      "vector_sql_ms": 53.1362000037916,
+      "fusion_ms": 0.0,
+      "error": null
+    },
+    {
+      "action_id": "SA5",
+      "requirement_id": "ER5",
+      "round_index": 0,
+      "query": "订单 支付 幂等 设计 目标 约束 适用范围 重复请求 文档",
+      "source_scope": "DOCUMENT",
+      "top_k": 3,
+      "total_ms": 481.9093000260182,
+      "result_count": 3,
+      "query_embedding_ms": 396.5197999496013,
+      "keyword_sql_ms": 0.0,
+      "vector_sql_ms": 85.38160001626238,
+      "fusion_ms": 0.0,
+      "error": null
+    },
+    {
+      "action_id": "SA6",
+      "requirement_id": "ER6",
+      "round_index": 0,
+      "query": "重复请求 幂等 冲突 返回结果 状态处理 重试 补偿 代码 文档",
+      "source_scope": "ANY",
+      "top_k": 3,
+      "total_ms": 884.3831000267528,
+      "result_count": 3,
+      "query_embedding_ms": 450.34579996718094,
+      "keyword_sql_ms": 359.6226000227034,
+      "vector_sql_ms": 74.33119998313487,
+      "fusion_ms": 0.06839999696239829,
+      "error": null
+    },
+    {
+      "action_id": "SA7",
+      "requirement_id": "ER3",
+      "round_index": 1,
+      "query": "orderSn paySn PayServiceImpl OrderServiceImpl payCallbackOrder 幂等 状态同步",
+      "source_scope": "CODE",
+      "top_k": 5,
+      "total_ms": 147.6851999759674,
+      "result_count": 5,
+      "query_embedding_ms": 0.0,
+      "keyword_sql_ms": 147.66499999677762,
+      "vector_sql_ms": 0.0,
+      "fusion_ms": 0.0,
+      "error": null
+    }
+  ],
+  "section_executions": [],
+  "repeated_embeddings": {}
+}

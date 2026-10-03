@@ -1,0 +1,127 @@
+Question:
+详细解释当前订单和支付链路是如何保证幂等的
+
+Evidence Plan: llm
+  ER1. 订单创建、下单或提交操作中用于保证幂等的具体实现机制 — CODE
+  ER2. 支付发起、支付回调或支付通知处理中用于保证幂等的具体实现机制 — CODE
+  ER3. 订单状态和支付状态变更过程中防止重复处理的幂等控制手段 — CODE
+  ER4. 订单和支付链路中幂等键或唯一标识的生成规则及其在链路中的传递与校验方式 — CODE
+  ER5. 项目文档中关于订单与支付链路幂等设计的说明或约定 — DOCUMENT
+
+Route: MIXED (rules)
+Sufficiency: enough
+Requirements: ER1 SATISFIED, ER2 SATISFIED, ER3 SATISFIED, ER4 PARTIAL, ER5 SATISFIED
+Retries: 0
+
+Answer:
+当前订单与支付链路的幂等，不是靠入口去重，而是靠同一套机制贯穿始终：每一次状态推进都把状态前置条件写进 WHERE 做条件更新，再用影响行数判断“本次是否取得推进权”。拿到推进权的请求才继续改下游数据，拿不到 0 行的请求被当作“已经处理过”，重复请求因此被吸收成“已处理”而不会产生二次副作用；跨服务重试也可以整条链重跑。下面从重复来源、统一手法到具体链路和边界依次展开。
+
+## 链路上的重复从哪来：为什么订单和支付必须先谈幂等
+
+先设想一个没有防护的场景：同一条订单被处理两次会怎样？关单逻辑可能关两次支付单、回滚两次座位，支付回调可能把同一笔订单推进两次。而在这条链路上，"被处理两次"不是小概率意外，几乎一定会发生——重复有四个来源，且都不在订单服务手里。
+
+第一，延迟关单任务本身有两条投递路径。正常路径把 orderSn 放进延迟队列 [E3]；但投递被 try/catch 包住，失败时只记日志，注释写明"投递失败不能影响下单：兜底扫表会覆盖这种情况" [E3]。因此同一条 orderSn 既可能由延迟队列送达，也可能再由兜底扫表补送一次，两条路径叠加就产生重复。
+
+第二，关单任务自身就把重复写进了预期。入口查不到订单时直接返回，注释给出的理由是"延迟消息被重复投递、订单已被清理" [E5]。这说明重复执行属于设计内的正常分支，而不是异常兜底。
+
+第三，支付回调是重推语义。订单侧遇到"订单已支付"时直接返回 true，注释解释为"重复回调：状态已是已支付，直接返回已处理，让支付服务停止重推" [E10]。既然实现者要主动让支付服务"停止重推"，就说明在此之前重推已经发生过，订单侧必须能识别并消化它。
+
+第四，回调入口由 ticket-service 以 HTTP 接口对外暴露 [E9]。外部调用方的超时重试、上游投递的重复语义，都不受订单服务控制。
+
+四点合起来指向同一个判断：重复无法在入口处被消除。因此防护不能押在"调用方只调一次"这个假设上，而必须押在每一次状态推进的那一步——重复请求到来时，由状态前置条件判断它是否已经处理过，把它吸收成"已处理"。这正是整条链路选择条件更新、用影响行数决定"本次是否取得推进权"的原因，也是后面各节展开的基础。
+
+## 统一手法：把判断条件写进 WHERE，用影响行数说话
+
+整条链路的幂等其实只有一个原语：**把状态前置条件写进 WHERE 做条件更新，再用影响行数判断"本次是否取得推进权"**。订单侧、支付侧、票务侧用的是同一套写法 [E11][E17][E20]，围绕它拆开看是四件事。
+
+第一，判断和修改不能分家。票务回调的类注释直接点破了"先查再改"的病灶：查询与修改之间存在并发窗口，两个请求可能都查到"已锁定"，然后先后都去改，把状态改错；把判断条件写进 WHERE，判断与修改就在数据库里原子完成 [E11]。这不是风格偏好，而是把并发控制下沉给数据库的比较语义。
+
+第二，影响行数是"推进权"的凭证，而不是顺带返回的结果。`markOrderPaid` 更新订单时带上 `.eq(OrderDO::getStatus, PENDING_PAYMENT)`，`affectedRows == 0` 就返回 false [E13]；再看它的顺序——只有订单行被改到了，才会继续去改订单明细 [E13]。这说明拿到行数的人才配继续动下游数据，拿不到的人应当原地退场，否则同一笔业务会被两条路径各推一半。
+
+第三，0 行不是错误，是"已经处理过"。`payCallbackOrder` 在 `markOrderPaid` 返回 false 时只打一条 info 日志"订单状态推进未生效，视为已处理"，然后照旧 `return true` [E10]；票务侧的注释也写明影响行数为 0 不抛异常，因为跨服务重试中它就是"已经处理过"的正常语义 [E11]。把 0 行当异常抛出，重试方就会误判为失败而无限重推。
+
+第四，终态本身就是收敛点。状态已是 `ALREADY_PAID` 时直接返回 true 让支付服务停止重推 [E10]；文档里描述的第二次回调同样只是"发现已经处理过 → return true"，不产生任何副作用，因此整条链可以放心重跑 [E18]。重复执行不会把状态推得更远，只会重新落到同一个终态。
+
+这套写法还有一个容易忽略的收益：它不依赖 Redis 之类的中间件，静态可读、离线也能测 [E17]。复习框架把"能说清条件更新 + 影响行数"列为过关标准，同时也提醒它的边界——没有状态可判断的副作用，比如发短信、调外部接口，这套机制管不了 [E20]。记住这条边界，才能判断一段重试逻辑能不能直接套用这个原语。
+
+## 下单与发起支付：订单号作为幂等键的第一道闸门
+
+整条链的前半段并不急着做条件更新，它先解决一个更前置的问题：**同一个请求被重复送达时，能不能在还没产生任何副作用之前就把它识别出来**。因此从下单到发起支付，动作都被安排成"先按订单号找一次，再决定是否写入"。
+
+时序从 `createTicketOrder` 开始。请求进来第一件事是完整性校验：`orderSn`、`userId`、订单明细任一为空就直接抛"订单参数不完整"，避免落下一张没有明细的半成品订单；整个方法带 `@Transactional`，约束的是订单主记录与明细记录的写入 [E4]。校验之后不是立刻插入，而是先 `selectByOrderSn(orderSn)`：若已存在，就走 `assertSameCreateRequest` 判断这是不是同一个创建请求，是则直接返回该 `orderSn`，不再产生第二张订单 [E4]。这一步就是"订单号即幂等键"的第一道闸门——重复请求在这里被吸收成"已处理"，而不是变成第二次写入。
+
+为什么查过之后还要兜一层？因为查询与插入之间存在竞态：两个请求可能同时查到"不存在"。代码对这种情况的处理方式是让唯一约束来串行化，捕获 `DuplicateKeyException` 后再查一次，查到且内容一致就返回同一个 `orderSn`，查不到才把异常抛出去 [E4]。从这段异常分支可以推断，`orderSn` 在存储层承担了唯一键的角色（具体约束定义不在这些片段中，无法确认）。插入主记录之后依次写明细，再投递"20 分钟后检查是否已支付"的延迟任务 [E4]。这里要留意边界：代码注释说明投递会等到事务提交后才真正发出，所以事务的原子性覆盖的是订单与明细的插入，不覆盖这次投递——回滚不会撤回已发出的任务，投递失败也不会回滚订单。
+
+链路进入支付侧时，闸门的形态从"订单号唯一"扩展为"订单号 + 前置状态"。`createPay` 先要求登录态存在，再要求 `orderSn` 非空；随后 `loadOrderDetail` 加载订单并校验归属，不属于当前用户直接拒绝 [E15]。紧接着 `checkOrderCanPay` 做状态前置校验：待支付才放行，已支付抛"订单已支付，无需重复支付"，其余（已取消）抛"订单已取消，无法支付" [E14]。金额由 `sumAmount` 按订单明细在服务端汇总，前端传值一律不采信 [E15][E17]。此时才去按 `orderSn` 找已有支付单：若已存在，已支付的抛异常、已关闭的抛异常，其余复用并返回，绝不新建第二笔；不存在才构造 `PayDO`，用雪花 `paySn` 标识、`orderSn` 绑定、状态置为待支付 [E15]。最后 `buildCashierUrl` 只接收 `PayDO` 生成收银台地址，使支付请求与订单号保持一对一绑定 [E16]。
+
+把这半段放回核心模型看：入口处用的是"订单号作幂等键 + 读后判断 + 唯一约束兜底"，它负责把重复请求挡在副作用之前；正因为第一道闸门已经把重复收敛掉，后续的状态推进才有条件退化为"条件更新 + 影响行数"这一种判断方式。需要说明的是，幂等键是否稳定取决于上游是否为同一笔订单复用同一个 `orderSn`——生成方不在这批证据里，无法确认。
+
+## 回调与关单：状态推进如何做到重复执行不产生副作用
+
+这条支线里每一步的落脚点都是同一个动作：把"当前必须是某状态"写进 WHERE，再看影响行数决定这次要不要继续往下做。按时间顺序走一遍。
+
+支付回调从支付侧进来：`payCallback` [E8] 接渠道回调，`notifyPayResult` [E7] 把结果推给订单侧，订单侧入口是 `payCallbackOrder` [E6]，实现在 [E10]。它先按 orderSn 查订单，查不到直接抛异常——这不是重复，是数据异常；查到后第一件事是看状态：已是"已支付"就 `return true`。这一步的职责不是更新，而是让支付服务停止重推——返回 true 对上游意味着"已处理"，重推循环在此收敛。若状态是"已关闭"却收到支付成功，[E10] 同样返回 true，但打 error 日志留人工核对（真实场景要退款，此处标注为 P3）。
+
+只有既非已支付、也非已关闭，即处于待支付时，才轮到 `markOrderPaid` [E13]。它的更新条件带 orderSn 与 status=待支付，影响行数为 0 就返回 false。注意 false 不是失败：调用点把它记为"状态推进未生效，视为已处理" [E10]。为什么可以这样理解？因为影响行数为 0 只可能意味着别人已经推进过——条件更新把判断与修改压进同一条 SQL，不存在两个线程都读到待支付再都去改的窗口。也正因如此，订单明细的更新被放在拿到推进权之后才执行 [E13]，重复的那一次根本走不到那里。
+
+票务回调的时序同形：`payCallback` 先以 orderSn 把车票从"未支付"推进，只有取得推进权的回调才继续改座位；座位的推进条件是"已锁定"，推不动就回滚本次车票状态变更 [E11]。它把"影响行数为 0 不抛异常"写成公开语义——在跨服务重试里这就是"已经处理过"。
+
+关单时序更长。`closeTimeoutOrder` 先判空，再查订单：订单不存在（延迟消息重投、订单已清理）直接 return [E5]。查到后先看是否已支付——已支付就返回，绝不关单、也绝不回滚座位 [E5]，这是整条支线里最不能退让的一步。只有待支付才调用 `closePendingOrder` 推进本地状态 [E5]。
+
+关键在最后两步：无论本次是否真的推进了状态，`closePayOrder`（最终落到支付侧 `closePayByOrderSn` [E2]）与 `rollbackTicketSeats` 都会执行 [E5]，对应订单侧关单接口 `closeTicketOrder` [E1]。为什么不做成"只有推进成功才执行"？因为下游可能已经成功、只是确认丢了；这两个动作本身幂等，重做不产生二次伤害，却能保证最终一致。重复执行在这条链上的统一表现就是：前面各步的影响行数先变成 0，后面的补偿步骤照走一遍，然后再无变化。
+
+## 边界、失败情形与取舍：这套机制管不了什么
+
+这套幂等机制的能力，完全取决于一件事：**状态里能不能看出"这一步已经做过"**。条件更新之所以成立，是因为有待支付、已支付、已关闭这样的前置状态可以写进 WHERE；一旦某个副作用在数据库里找不到对应的状态字段可以判断，它就不在这套机制的覆盖范围内——发短信、调外部接口这类动作，重复执行不会因为影响行数为 0 而被吸收，机制管不了它们。这是它的适用边界，也是复习框架里把"没有状态可判断的副作用它管不了"列为过关标准的原因 [E20]。
+
+正因为边界清楚，链路里那些看起来"反常"的顺序才是有意为之。`OrderStateService` 类注释直接写明：**本地状态必须比跨服务通知先提交**，并把"改本地状态"抽成独立事务方法，重试时靠"条件更新 + 影响行数"判断是否已经推进过 [E12]。代价是失败时本地与下游会短暂不一致；收益是避免两个更糟的后果：关单链路的后两步（关支付单、回滚座位）是跨服务调用，若与本地关单放进同一事务，下游一失败本地关单就被回滚，重试要从头再来；更严重的是座位一旦释放而订单状态还没落定，就会出现"座位已释放、订单仍可支付"的超卖窗口 [E12]。
+
+同样的取舍出现在支付侧：支付成功后的下游通知失败不回滚支付单，只把通知状态置为未完成，交给补偿任务重推 [E17]。支撑这种"敢重推"的，正是核心模型里那条把重复请求吸收成"已处理"的逻辑——文档把它总结为：幂等的价值之一，就是让失败重试不必精确记录"上一次执行到了第几步"，因此可以整条链重跑 [E18][E19]。可以想象一种没有这层保护的写法：补偿任务必须维护一张"执行进度表"，每一步的推进都要精确落盘，进度与真实状态一旦错位就再也对不齐。
+
+但重跑能对齐的是"可判断的状态"，不是"所有异常"。订单已关闭却收到支付成功回调时，代码只能记一条 error 日志并返回 true，注释明确写着这属于需要人工介入的异常（真实场景要退款），退款处理属后续范围 [E10]。这里要特别澄清 return true 的语义：它不是"支付已被受理"，而是"我收到了，别再重推"；已支付状态下重复回调返回 true 也是同一含义——让支付服务停止重推 [E10]。也就是说，这套机制保证的是**不重复产生副作用**，不保证**异常终态被自动纠正**，后者仍需人工介入或后续补偿方案。
+
+至于为什么最终没有抽一个统一的 `@Idempotent` 组件，复习框架只把这个问题列为待填充的取舍项 [E20]，现有证据无法确认其结论。能确认的相邻取舍是：支付侧的状态推进不依赖 Redis，用条件更新加影响行数实现，因此离线也能测 [E17]——这本身也划出了边界，它换来的简单性，代价是把幂等责任分散在每一个写状态的方法上。
+
+整条链路的答案可以收束为一句话：重复无法在入口被消灭，只能在每一次状态推进处被识别；只要状态可判断，条件更新与影响行数就能把重复请求收敛到同一终态，而无法判断的副作用仍要交给人工或补偿。
+
+Explanation Strategy:
+PROBLEM_SOLUTION
+
+Mental Model:
+整条订单-支付链路的幂等来自同一套机制：把状态前置条件写进 WHERE 做条件更新，用影响行数判断"本次是否取得推进权"，因此重复请求天然被吸收成"已处理"而不会产生二次副作用，跨服务重试可以整条链重跑。
+
+Context:
+  Workspace evidence: 20
+  Bound evidence: 20
+  S1 view: 4
+  S2 view: 6
+  S3 view: 5
+  S4 view: 9
+  S5 view: 6
+
+Generation:
+  5 sections
+  1 targeted revision
+  1 review issues
+
+Sources:
+[E3] services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/mq/OrderDelayCloseProducer.java:54-66 — OrderDelayCloseProducer#doSend
+[E5] services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/service/impl/OrderServiceImpl.java:265-288 — OrderServiceImpl#closeTimeoutOrder
+[E10] services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/service/impl/OrderServiceImpl.java:236-263 — OrderServiceImpl#payCallbackOrder
+[E9] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/controller/TicketController.java:63-66 — TicketController#payCallback
+[E11] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/impl/TicketCallbackServiceImpl.java:45-213 — TicketCallbackServiceImpl#TicketCallbackServiceImpl
+[E17] services/pay-services/src/main/java/edu/swu/fcj/my12306/biz/payservice/service/impl/PayServiceImpl.java:47-329 — PayServiceImpl#PayServiceImpl
+[E20] 6-面试复习/面试复习框架.md > my12306 面试复习框架 > 模块三 · 技术专题（🔴 必背 · 目标：**能答技术追问**） > 3.4 幂等 🟡
+[E13] services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/service/OrderStateService.java:69-90 — OrderStateService#markOrderPaid
+[E18] 7-模块设计文档/1-订单支付-车票.md > Order 的支付回调是幂等的。
+[E4] services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/service/impl/OrderServiceImpl.java:81-155 — OrderServiceImpl#createTicketOrder
+[E15] services/pay-services/src/main/java/edu/swu/fcj/my12306/biz/payservice/service/impl/PayServiceImpl.java:60-112 — PayServiceImpl#createPay
+[E14] services/pay-services/src/main/java/edu/swu/fcj/my12306/biz/payservice/service/impl/PayServiceImpl.java:244-252 — PayServiceImpl#checkOrderCanPay
+[E16] services/pay-services/src/main/java/edu/swu/fcj/my12306/biz/payservice/service/channel/PayChannelHandler.java:21-21 — PayChannelHandler#buildCashierUrl
+[E8] services/pay-services/src/main/java/edu/swu/fcj/my12306/biz/payservice/service/PayService.java:30-30 — PayService#payCallback
+[E7] services/pay-services/src/main/java/edu/swu/fcj/my12306/biz/payservice/service/PayService.java:40-40 — PayService#notifyPayResult
+[E6] services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/service/OrderService.java:37-37 — OrderService#payCallbackOrder
+[E2] services/pay-services/src/main/java/edu/swu/fcj/my12306/biz/payservice/service/PayService.java:35-35 — PayService#closePayByOrderSn
+[E1] services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/service/OrderService.java:30-30 — OrderService#closeTicketOrder
+[E12] services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/service/OrderStateService.java:29-91 — OrderStateService#OrderStateService
+[E19] 新建文件夹/3-订单与支付.md > Order 的支付回调是幂等的。

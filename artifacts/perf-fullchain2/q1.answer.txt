@@ -1,0 +1,112 @@
+Question:
+详细解释当前购票占座的数据一致性是如何保证的
+
+Evidence Plan: llm
+  ER1. 当前项目中购票与占座请求的完整处理链路，包括入口、核心服务方法与最终落库的调用顺序 — CODE
+  ER2. 占座写入时对座位或票量状态的并发控制手段 — CODE
+  ER3. 购票占座涉及的数据写入范围与其事务边界 — CODE
+  ER4. 占座失败、超时或取消时的一致性兜底处理 — CODE
+  ER5. 项目文档中对购票占座数据一致性方案的设计约定 — DOCUMENT
+
+Route: MIXED (rules)
+Sufficiency: enough
+Requirements: ER1 SATISFIED, ER2 SATISFIED, ER3 SATISFIED, ER4 PARTIAL, ER5 SATISFIED
+Retries: 0
+
+Answer:
+## 一句话结论：一致性由一条写链路串起四份数据
+
+**结论先给**：当前购票占座的一致性不是靠某个单点机制（一把锁、一个事务）撑起来的，而是靠一条被串行化的写链路，加上一条不变量——“有占用必然对应一笔订单，本次请求没成功就必须不留下任何占用” [E17]。
+
+需要同时对上的其实是四份数据：座位状态、余票数量、车票记录、订单结果，设计文档把它们画成一条互相牵连的关系链 [E16]。但这四者里只有一个锚点：余票不是独立数据源，它是“可售座位”的计数派生出来的展示口径 [E17]；支付结果与取消结果反过来作用于座位状态，再由座位状态决定可售性和余票展示 [E18]。因此真正必须对齐的是座位状态与车票记录、订单结果之间的一致，余票只是它的投影。
+
+保证手段分三层 [E2]：入口先用令牌桶拦掉无票请求，取不到令牌直接失败；接着在占用任一把分布式锁之前完成登录与乘客归属校验，把非法请求挡在锁外；核心段落在锁内执行 `reserveLocally` 完成占座与车票记录写入，提交后才把 `reservationCommitted` 置为真，然后才做缓存失效、远程创建订单这些周边动作。
+
+失败路径同样是这条链路的一部分：订单被拒绝时走 `compensateKnownFailure` 释放座位，而令牌只有在本地事务未提交时才在 `finally` 中归还，避免成功归还与失败归还各做一次 [E2]。释放侧则靠“只把已锁定改成可售”这一条件堵死超卖 [E18]。
+
+## 为什么占座是个一致性问题：四条关系与三道裂缝
+
+上面这条结论之所以成立，前提是占座本身不是单条 SQL 的原子性问题。假设占座就是一句 `UPDATE seat SET status='已锁定' WHERE ...`，看起来它天然原子，写完了不就一致了吗？要看清问题在哪，得先看这一次请求到底牵扯了多少份数据。项目的设计文档把这归结成四条互相牵制的关系：座位状态 ↔ 余票、座位占用 ↔ 购票结果、购票结果 ↔ 订单结果，以及支付/取消结果反过来决定座位状态 [E17][E18]。关系一旦成网，单条 SQL 的原子性就不再等于业务的一致性——它只锁住了网里的一个节点。
+
+第一道裂缝出现在写集合本身。[E16] 的故障表把“座位分配成功但订单创建失败”列为需要原子性的操作，即“占座 + 写车票记录 + 订单创建”三者的结果一致 [E16]。在 ticket 库内部，座位状态与车票记录由同一个本地事务承担：`PurchaseTicketTxService` 的类注释写明“本事务只操作 ticket 数据库” [E10]，因此这两者在同一事务里同生同死。但订单创建并不在这条事务里——这就是第二道裂缝。
+
+第二道裂缝是事务边界管不到的地方。同一处注释紧接着说“远程调用留在编排层，避免网络等待延长行锁持有时间” [E10]。这句话说明取舍的来由：订单创建、通知下游是远程调用，本地数据库事务覆盖不到它们；若为了表面的“一起成功”把它们塞进事务，行锁就要跨越网络等待被持有，占座链路的吞吐会被下游抖动直接拖住。于是“一致性”必须拆成“本地事务保证什么”和“事务提交后靠什么补偿”两件事。
+
+第三道裂缝在余票。余票不是独立事实，它是可售座位计数的派生量 [E17]，派生量可以被缓存，缓存就可能落后于数据库。E5 里占座提交后删除余票缓存，删除抛出异常时只记 warn、等 key 自然过期 [E5]——这恰恰说明这类不一致是被有意容忍的，因为它的后果只是少卖。真正不能容忍的是另一头：[E18] 的对照表把错误从“余票缓存未失效（少卖）”一路排到“座位被错误改成可售（超卖）”，并强调设计重点就是把这最后一行彻底堵死 [E18]。所以三道裂缝的处置并不对称：前两道要靠锁序与事务边界收窄，第三道则必须分成“可容忍的少卖”和“绝不能发生的超卖”来分别设防。
+
+## 从请求到落库：占座写链路的执行顺序
+
+理解了三道裂缝之后，再看一次请求实际如何穿过这条写链路。把这条链路在脑内走一遍，最省力的方式是把它看成一条“漏斗 + 临界区 + 事务”三段式：并发先被挡在门外，再穿过两把分布式锁，再进入一层本地事务，最后才处理那些即便失败也无伤大雅的周边动作。入口是 [E1] 声明的 `PurchaseTicketService.purchaseTickets`，实现落在 [E2]。
+
+进入方法后第一件事不是查数据，而是跑责任链 `TRAIN_PURCHASE_TICKET_FILTER` 做前置过滤，随后才校验 `UserContext` 里的登录态，并限制单笔订单乘车人不超过 5 位，再按席别聚合出 `seatTypeCounts` [E2]。**限流紧跟在参数准备之后**：以 `trainId + departure + arrival + seatTypeCounts` 为键做令牌桶 `takeToken`，拿不到令牌直接抛“列车站点已无余票”，根本进不了后面的锁与事务 [E2]。这一步的职责很明确——把并发量削到写链路能承受的规模之前，不让请求白白去争锁。
+
+真正的临界区在 `reserveLocally` [E4]。注意加锁顺序：先按 `username + trainId` 拿用户锁，锁住“同一个人对同一车次”的并发；再遍历 `seatTypeCounts.keySet()`，对本次涉及的每个席别逐把获取席别锁 [E4]。两把锁都覆盖了整个占座写过程，释放时席别锁逆序、用户锁最后，都在 `finally` 里兜底 [E4]。顺带一提，`loadPassengers` 的乘车人归属校验发生在拿锁**之前** [E2]，这说明设计上刻意不让远程校验的耗时空转在分布式锁里面。
+
+锁内调用 `purchaseTicketTxService.doPurchaseInTransaction`，方法体带 `@Transactional(rollbackFor = Exception.class)` [E3]，这就是事务真正的起点。事务内依次是：加载车次、按出发到达查区间关系、把乘客按席别分组、由 `SeatAllocator` 选座；随后对选中的座位执行条件更新，只把 `AVAILABLE` 改成 `LOCKED`，并用 `affectedRows != seats.size()` 判定是否被别人抢先 [E3]；最后逐条插入 `TicketDO`，组装订单创建请求与补偿请求返回。因此事务提交的那一刻，落库的只有“座位被占 + 车票已写”这两件本地事实，订单还没创建。[E10] 的类注释把这条边界说得很直白：本事务只操作 ticket 库，远程调用留在编排层，避免网络等待延长行锁持有时间。
+
+事务返回后，控制权回到编排层，剩下的动作都在事务之外：[E5] 的余票缓存失效发生在提交之后，而且删除失败只记 warn、靠缓存过期兜底，不会被反灌成占座失败；接着才远程 `createOrder`，失败则走 `compensateKnownFailure` [E2]。`finally` 里还有一处所有权约定：只有本地占座未提交时才归还令牌，提交之后令牌的归还由回调独占 [E2]。
+
+把这串顺序连起来看，锁边界与事务边界并不重合——锁包住了事务和提交，事务只包住本地写；越是可失败、可重试的动作，越被推到临界区之外。
+
+## 原子性与时序：事务边界、锁粒度和提交后动作
+
+执行顺序给出的是动作先后，但一致性还取决于边界画在哪里。原子性由 ticket 库的本地事务提供，而不是分布式事务，而且这个事务边界是被刻意收窄的。
+
+先看锁是怎么进来的。[E4] 的 `reserveLocally` 先取用户锁（用户名 × 车次），再按 `seatTypeCounts` 的 key 逐个取席别锁（车次 × 席别），全部拿到后才进入临界区，`finally` 里按相反顺序先释放席别锁、再释放用户锁。这里要把两层职责分开：锁解决的是「并发进入」——同一用户同一车次串行、同一席别串行，不同席别之间可以并行；事务解决的是「写入原子」。而 [E10] 的类注释把边界写得很直白：调用方已经完成校验并持有用户锁和全部席别锁，本事务只操作 ticket 数据库，远程调用留在编排层，避免网络等待延长行锁持有时间。原因在于事务存活期里被持有的是数据库行锁，一次慢 RPC 的几秒钟会被放大成同一席别上所有请求的等待。所以把远程调用挤出事务，不是代码整洁问题，而是把「锁 + 事务」的临界区压到最短。
+
+临界区内部的动作可以概括成一次状态机推进。[E11] 中 `seatStatus` 取值为 0 可售、1 已锁定、2 已出售，占座就是把 0 改成 1。关键在于更新的前置条件：回滚时只允许把 1 改回 0，绝不允许把 2 改回 0。[E18] 的一致性对照表把这一条单独标出——座位被错误改成可售，对外影响是超卖，修法是「靠只把已锁定改成可售的条件杜绝」。这说明防超卖靠的是更新语句里带原状态的条件，而不是某段 if 判断；只要 WHERE 带上原状态，并发或重试都无法把已售座位释放回可售。这条条件更新正是「有占用必有订单、没成功必无占用」这个不变量在写入侧的落点。
+
+再看提交之后的动作，它们必须发生在事务成功提交之后，否则回滚会把副作用留在外面。[E12] 的延迟关单消息在 `send` 里先判断是否处于事务同步中，是则注册 `afterCommit` 再发，否则直接发；[E8] 的令牌归还走同样路数：先判断 `TransactionSynchronizationManager.isSynchronizationActive()`，有同步就注册 `afterCommit`，没有才立即执行。为什么必须这样切？如果关单消息在提交前发出而事务随后回滚，订单并不存在，消费者却会去关一张不存在的单；如果令牌提前归还而座位占用没落库，令牌就在描述一个并不存在的可售能力，后续请求会按错误余量放行。
+
+跨服务这一段没有分布式事务。[E18] 给出的修法是补偿重推、重试回滚、删除缓存 key、用条件更新堵住超卖——也就是本地事务保证 ticket 库内部原子，跨服务一致性交给幂等 + 补偿 + 延迟消息。这是有意的取舍：边界之内能拿到强一致，边界之外只能做到最终一致。至于补偿重试的具体次数与幂等键如何设计，从现有证据无法确认。
+
+## 失败、超时与取消：兜底路径和它的边界
+
+正常路径之外，失败、超时与取消才是这条写链路一致性的压力测试。正常状态下，占座链路在本地事务提交时落库的是“座位被占 + 车票已写”，订单此刻还不存在；E12 的 afterCommit 语义侧面印证了这一点——延迟关单消息只在事务同步激活时才注册到提交之后发送，无事务则直接发 [E12]。所以“有占用必有订单”不是由那次本地提交兑现的，而是靠提交之后的建单动作加上失败时的补偿共同维持的最终效果。故障，就是从提交之后的这段链路上某一环断掉开始的。
+
+第一类故障：本地占座事务已提交，但远程建单明确失败。此时状态是座位被占、车票已写、订单不存在，业务上正确的结局是整单失败、座位回到可售。系统做的是同步兜底：compensateKnownFailure 调用 ticketCallbackService.cancelCallback(...) 释放座位，成功则 my12306.purchase.compensation.success 计数加一；一旦抛错，计数打到 my12306.purchase.compensation.fail，日志写明“等待恢复任务” [E14]。这说明补偿本身是一次尽力而为的尝试而非保证——它把“没补成功”这件事转成显式的待恢复信号，由外部恢复任务接手。还要注意，cancelCallback 在这里只是接口声明 [E13]，它是否幂等、被重复调用会不会二次释放，从现有证据看不出来。
+
+第二类故障：建单成功但用户不付款或主动取消。这条路径不靠同步补偿，而靠延迟消息推进。关单消息在事务提交时才真正投递（afterCommit 里执行 doSend，若当前没有事务同步则直接发）[E12]，这避免了“订单还没落库就先去关单”的时序倒置。超时触发关单后，订单侧先按 orderSn 查订单明细，若明细为空则只打日志告警、不发起远程调用 [E15]；有明细才把车厢号、座位号、席别组装成 OrderCancelSeatRemoteDTO，远程调 ticketRemoteService.cancelCallback 回滚座位，返回码非成功或抛异常都统一转成 ServiceException 并记录“等待重投” [E15]。因此超时回滚同样依赖重投：一次失败不会让座位永久丢失，但也不会当场回滚。
+
+第三类故障最轻：主流程已提交，只是余票缓存删不掉。evictRemainingTicketCacheSafely 捕获 RuntimeException，只 warn 并注明“等待缓存过期”，不向上抛 [E5]。也就是说余票这个展示口径允许短暂偏旧，靠 TTL 收敛——这和“余票由座位状态派生”的定位是自洽的，缓存不属于一致性义务的承担者。
+
+边界必须说清。以上证据能证明的是三条兜底动作存在及其语义：同步补偿加计数、提交后延迟关单加远程回滚加重投、缓存删除失败降级。证明不了的是更难的重复性问题：历史文档把“服务调用超时但订单实际已创建”和“用户重复提交导致部分数据重复”统一归到幂等键/唯一键与防重提交之下，并标注为“后续技术问题” [E16]——这是计划口径，不是已实现事实。所以只能给条件判断：如果幂等键与唯一约束尚未落地，那么超时重试路径上就存在重复占座的空间，补偿与关单也可能被重复触发，这属于需要进一步确认的区域。换言之，当前兜底保证的是“占用最终会被释放”，而不是“绝不重复占用”。
+
+总体来看，当前购票占座的数据一致性靠的是一条被锁串行化的写链路：它守住“有占用必有订单、没成功必无占用”的不变量，把强一致收在 ticket 库本地事务之内，把跨服务一致性交给提交后动作、补偿、延迟消息与重投，并明确容忍余票缓存的短暂偏旧。
+
+Explanation Strategy:
+EXECUTION_FLOW
+
+Mental Model:
+购票占座的一致性 = 一条被锁串行化的写链路（校验限流 → 用户锁/席别锁 → 本地事务里条件更新座位状态并写车票 → 提交后才做周边动作 → 失败补偿与超时回滚），它守住的不变量是“有占用必有订单、没成功必无占用”，而余票只是座位状态派生出来的展示口径。
+
+Context:
+  Workspace evidence: 18
+  Bound evidence: 16
+  S1 view: 4
+  S2 view: 5
+  S3 view: 6
+  S4 view: 6
+  S5 view: 7
+
+Generation:
+  5 sections
+  1 targeted revision
+  2 review issues
+
+Sources:
+[E17] 0-历史文档/2-车票模块文档/P1购票与选座功能分析与设计（教学版）.md > P1 购票与选座功能分析与设计（教学版） > 七、横向专题：并发、缓存与一致性 > 7.4 一致性：四条核心关系
+[E16] 0-历史文档/2-车票模块文档/P1——购票写链路功能详细分析文档.md > 《P1——购票写链路功能详细分析文档》 > 八、数据一致性问题
+[E18] 0-历史文档/3-订单与支付模块文档/P2支付与超时取消功能分析与设计（教学版）.md > P2 支付与超时取消功能分析与设计（教学版） > 七、横向专题：幂等、事务、缓存与一致性 > 7.4 一致性：一张对照表
+[E2] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/impl/PurchaseTicketServiceImpl.java:64-116 — PurchaseTicketServiceImpl#purchaseTickets
+[E10] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/impl/PurchaseTicketTxService.java:51-197 — PurchaseTicketTxService#PurchaseTicketTxService
+[E5] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/impl/PurchaseTicketServiceImpl.java:214-222 — PurchaseTicketServiceImpl#evictRemainingTicketCacheSafely
+[E1] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/PurchaseTicketService.java:11-11 — PurchaseTicketService#purchaseTickets
+[E4] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/impl/PurchaseTicketServiceImpl.java:118-154 — PurchaseTicketServiceImpl#reserveLocally
+[E3] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/impl/PurchaseTicketTxService.java:69-172 — PurchaseTicketTxService#doPurchaseInTransaction
+[E11] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/dao/entity/SeatDO.java:9-33 — SeatDO#SeatDO
+[E12] services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/mq/OrderDelayCloseProducer.java:41-52 — OrderDelayCloseProducer#send
+[E8] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/impl/TicketCallbackServiceImpl.java:116-131 — TicketCallbackServiceImpl#returnTokensAfterCommit
+[E14] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/impl/PurchaseTicketServiceImpl.java:203-212 — PurchaseTicketServiceImpl#compensateKnownFailure
+[E13] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/TicketCallbackService.java:21-21 — TicketCallbackService#cancelCallback
+[E15] services/order-services/src/main/java/edu/swu/fcj/my12306/biz/orderservice/service/impl/OrderServiceImpl.java:312-342 — OrderServiceImpl#rollbackTicketSeats

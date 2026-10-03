@@ -1,0 +1,1441 @@
+Question:
+项目为何使用责任链校验
+
+Evidence Plan: llm
+  ER1. 项目中存在责任链校验的实现 — CODE
+  ER2. 项目材料中说明了选择责任链校验的设计原因 — ANY
+  ER3. 责任链校验对应的校验需求特征 — ANY
+  ER4. 责任链校验在项目中被触发和集成的方式 — CODE
+  ER5. 项目中对其他校验实现方式的取舍说明 — ANY
+
+Route: MIXED (rules)
+Sufficiency: enough
+Requirements: ER1 SATISFIED, ER2 SATISFIED, ER3 SATISFIED, ER4 MISSING, ER5 SATISFIED
+Retries: 0
+
+Answer:
+用户真正要问的是：**为什么这里不写一段 if-else，而要为校验单独搭一套责任链？** 一句话答案：因为该项目的校验不是一次性代码，而是一组「持续追加、顺序自带语义、在多个入口反复出现」的规则；责任链把「顺序」和「扩展点」从方法体里搬出来，变成能声明的结构。
+
+## 一、校验规则只会变多，而 if-else 的代价随规则数增长
+
+设计文档记录的问题形状很具体：注册校验项会持续增加（参数非空 → 用户名可用 → 证件黑名单 → 未来实名核验/风控），而 if-else 堆叠带来三项代价——顺序难以控制与复用、新增校验要改 Service 方法体（违反开闭原则）、校验逻辑与业务逻辑耦合导致难单测 [E6]。这是历史设计文档中的问题陈述，不是当前运行时的行为记录，但它解释了后来代码为何长成那个样子。
+
+关键在于这个形状不是注册独有的。车票查询的组合类接口流程被写成「责任链校验 → 四层组装 → 返回」[E11]；同一条链路的设计文档明确预期校验还会演进（预售期、城市兼容、风控），并点出「顺序即优先级」：先保证参数齐全，再做业务规则判断，最后做重一点的依赖查询（存在性）[E9]。购票前有 4 道校验，教学目标是能说清「分别拦什么、按什么顺序执行」，以及**新增一条校验要改哪里** [E12]。查询链路则是「责任链(3环) → 站码转城市 → 城市对取车次列表 → …」[E13]。
+
+把这几处叠起来看，问题的形状是「多段、有序、可增」。顺序本身就是语义：先查库再报空参，既浪费查询又让错误提示不准 [E9]。所以需要的是**一种结构**，而不是一段写得更长的代码。
+
+## 二、mark 分组、order 排序、Handler 承载规则
+
+这套责任链的最小机制，用三个方法就能说完整。`AbstractChainHandler<T>` 只声明三件事：`mark()` 表明属于哪条链，`order()` 表明在链中的位置，`handler(param)` 表明做什么 [E1][E2]。规则内容与规则位置因此被写在同一处。
+
+容器 `AbstractChainContext` 实现 `ApplicationContextAware` 与 `CommandLineRunner`，内部持有 `Map<String, List<AbstractChainHandler>> container`：启动后按 `mark` 收集全部 Handler、按 `order` 排序，业务侧只需调用 `handler(mark, param)` 顺序执行 [E4][E5]。值得注意它为什么用 `CommandLineRunner` + `ApplicationContext` 收集，而不是构造注入——文档注释给出的理由是这样可以避免 Handler 反向依赖 Service 造成的构造循环 [E4]。这说明「扩展点独立」与「依赖方向」在这一个设计里被一并处理了。
+
+于是「新增一条校验」在代码上就是「新增一个类」：`UserRegisterParamNotNullChainHandler` 实现注册链过滤器，`order=0` 表示它最先执行 [E3]。
+
+从 E1/E2 与 E4/E5 的文件路径看，user-services 与 ticket-services 各有一份同形态实现——**因此**这两条链共享的是同一套设计形态，而不是同一个类实例。这一点也解释了为什么车票侧的设计文档会写「用户模块已经实现并验证过同一套责任链容器，直接复用其设计形态」[E9]。
+
+有一处细节现有证据无法对齐：注册链的环数，[E3] 的注释写「注册责任链 1/3」，而 [E10] 的链路概览写「注册：责任链（4 环）」；两者不一致，且各链的具体规则条数与最终顺序无法从现有证据确认。
+
+## 三、收益与代价：什么时候这套结构是赚的
+
+收益在文档里被表述得很干脆：把每一步校验拆成独立 Handler，按 mark 分组、按 order 排序、顺序执行，结果就是**新增规则 = 新增一个 Handler，不动既有代码** [E6]。扩展成本从「修改既有方法体」变成了「新增文件」。
+
+反过来，什么情况下不赚？规则少且稳定时，集中式校验或条件分支更直观、调用链路更短、读一遍就懂；责任链的价值只在规则持续增长、且这套顺序需要在多处复用时才体现出来 [E6]。这是判断标准，不是无条件正确的架构原则。
+
+代价有三层。第一，规则分散到多个类之后，链的全貌只有把 `mark` 与 `order` 聚合起来才读得出，理解容器的收集与排序时机是调试前提 [E4][E5]。第二，顺序从隐式变成显式约束，也就变成了可能配错的约束——教学材料直接要求回答「库存校验（order 20）为什么必须排在参数校验（order 0）之后」[E8]，顺序配置错误正是这类结构的主要失效点。第三，校验阶段的职责边界：它只做拦截、不产生需要补偿的中间态，这是它可以被放进事务内的前提；[E7] 提出的对照问题（把「订单失败后的手工补偿」作为方案是否比回滚更危险）正是从这一点切入——**如果**校验阶段真的只做拦截不做写入，那么它与补偿方案的风险差异就来自「是否需要人工介入」，而这一结论需要以该前提成立为准。
+
+最后是边界：责任链解决的是「加规则、定顺序」，不解决规则本身怎么写，也不解决跨服务一致性；组合类接口在责任链之后仍有四层组装 [E11]。把它当成校验编排的容器，而不是校验逻辑的替代品，才是它在这个项目里的定位。
+
+Explanation Strategy:
+PROBLEM_SOLUTION
+
+Mental Model:
+责任链校验解决的不是「怎么校验」，而是「校验规则只增不减时，如何让每一次新增只发生在新增的代码里」——mark 决定它属于哪条链，order 决定它在链中的位置，Handler 决定它做什么，三者共同把顺序与扩展点都变成显式声明。
+
+Context:
+  Workspace evidence: 15
+  Bound evidence: 13
+
+Generation:
+  0 sections
+  0 targeted revision
+
+Sources:
+[E6] 0-历史文档/1-用户模块文档/v1到v2升级功能分析与设计.md > 用户服务 v1 → v2 升级：详细功能分析与设计 > 四、责任链与黑名单：注册校验框架（批次 2） > 4.1 设计原因
+[E11] 0-历史文档/2-车票模块文档/车票查询读链路功能分析与设计（P0教学版）.md > 车票查询读链路功能分析与设计（P0 教学版） > 四、业务流程与作用链 > 4.1 三类流程概览
+[E9] 0-历史文档/2-车票模块文档/车票查询读链路功能分析与设计（P0教学版）.md > 车票查询读链路功能分析与设计（P0 教学版） > 五、难点与设计决策 > 5.8 责任链三段校验：为什么不是一堆 if
+[E12] 0-历史文档/2-车票模块文档/P1购票写链路代码阅读指导.md > 只跑订单服务测试 > 4. 主线二：购票责任链 > 4.1 目标
+[E13] 6-面试复习/模块2-核心链路深挖.md > 模块二 · 核心链路深挖 > 2.2 查询链路与缓存设计 🔴 > ③ 系统实现 > 执行主线
+[E1] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/common/chain/AbstractChainHandler.java:6-22 — AbstractChainHandler#AbstractChainHandler
+[E2] services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/common/chain/AbstractChainHandler.java:6-16 — AbstractChainHandler#AbstractChainHandler
+[E4] services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/common/chain/AbstractChainContext.java:21-51 — AbstractChainContext#AbstractChainContext
+[E5] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/common/chain/AbstractChainContext.java:18-50 — AbstractChainContext#AbstractChainContext
+[E3] services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/service/handler/filter/user/UserRegisterParamNotNullChainHandler.java:12-44 — UserRegisterParamNotNullChainHandler#UserRegisterParamNotNullChainHandler
+[E10] 6-面试复习/模块1-项目全景.md > 模块一 · 项目全景 > 1.3 四条核心链路 🔴 > 1.3.1 用户链路 🟡 > 【主线】
+[E8] 0-历史文档/2-车票模块文档/P1购票写链路代码阅读指导.md > 只跑订单服务测试 > 4. 主线二：购票责任链 > 4.5 验证任务
+[E7] 0-历史文档/2-车票模块文档/P1购票写链路代码阅读指导.md > 只跑订单服务测试 > 8. 横向专题：事务、锁、口径衔接 > 8.4 验证任务
+
+Trace:
+{
+  "route": {
+    "query_type": "MIXED",
+    "decision_source": "rules",
+    "reason": "union of evidence source requirements",
+    "code_signals": [],
+    "doc_signals": []
+  },
+  "rounds": [
+    {
+      "round_index": 0,
+      "retrieval_query": "责任链 校验 处理器 接口 抽象类 链式传递 校验请求 组装 启动 调用 | 责任链 校验 设计原因 动机 为什么 选择 模式 注释 文档 提交说明 | 校验 规则 独立扩展 组合 顺序执行 动态增删 责任链 动因 | 责任链 校验 调用入口 触发时机 请求进入 业务操作前 启动校验链 | 校验 方式 比较 集中式校验 条件分支 责任链 取舍 未采用 原因",
+      "retrieval_query_type": "MIXED",
+      "selected_chunks": [
+        {
+          "citation_label": "E1",
+          "chunk_id": 8739,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/common/chain/AbstractChainHandler.java",
+          "identity": "AbstractChainHandler#AbstractChainHandler",
+          "retrieval_rank": 1,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1"
+          ]
+        },
+        {
+          "citation_label": "E2",
+          "chunk_id": 8944,
+          "source_type": "CODE",
+          "file_path": "services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/common/chain/AbstractChainHandler.java",
+          "identity": "AbstractChainHandler#AbstractChainHandler",
+          "retrieval_rank": 2,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1"
+          ]
+        },
+        {
+          "citation_label": "E3",
+          "chunk_id": 9037,
+          "source_type": "CODE",
+          "file_path": "services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/service/handler/filter/user/UserRegisterParamNotNullChainHandler.java",
+          "identity": "UserRegisterParamNotNullChainHandler#UserRegisterParamNotNullChainHandler",
+          "retrieval_rank": 3,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1",
+            "ER4"
+          ]
+        },
+        {
+          "citation_label": "E4",
+          "chunk_id": 8940,
+          "source_type": "CODE",
+          "file_path": "services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/common/chain/AbstractChainContext.java",
+          "identity": "AbstractChainContext#AbstractChainContext",
+          "retrieval_rank": 4,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1"
+          ]
+        },
+        {
+          "citation_label": "E5",
+          "chunk_id": 8735,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/common/chain/AbstractChainContext.java",
+          "identity": "AbstractChainContext#AbstractChainContext",
+          "retrieval_rank": 5,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1"
+          ]
+        },
+        {
+          "citation_label": "E6",
+          "chunk_id": 9140,
+          "source_type": "DOCUMENT",
+          "file_path": "0-历史文档/1-用户模块文档/v1到v2升级功能分析与设计.md",
+          "identity": "用户服务 v1 → v2 升级：详细功能分析与设计 > 四、责任链与黑名单：注册校验框架（批次 2） > 4.1 设计原因",
+          "retrieval_rank": 1,
+          "source_role": "HISTORICAL_PLAN",
+          "temporal_status": "HISTORICAL",
+          "authority_priority": 35,
+          "sub_question_ids": [
+            "ER2",
+            "ER3",
+            "ER5"
+          ]
+        },
+        {
+          "citation_label": "E7",
+          "chunk_id": 9693,
+          "source_type": "DOCUMENT",
+          "file_path": "0-历史文档/2-车票模块文档/P1购票写链路代码阅读指导.md",
+          "identity": "只跑订单服务测试 > 8. 横向专题：事务、锁、口径衔接 > 8.4 验证任务",
+          "retrieval_rank": 2,
+          "source_role": "HISTORICAL_PLAN",
+          "temporal_status": "HISTORICAL",
+          "authority_priority": 35,
+          "sub_question_ids": [
+            "ER2"
+          ]
+        },
+        {
+          "citation_label": "E8",
+          "chunk_id": 9674,
+          "source_type": "DOCUMENT",
+          "file_path": "0-历史文档/2-车票模块文档/P1购票写链路代码阅读指导.md",
+          "identity": "只跑订单服务测试 > 4. 主线二：购票责任链 > 4.5 验证任务",
+          "retrieval_rank": 3,
+          "source_role": "HISTORICAL_PLAN",
+          "temporal_status": "HISTORICAL",
+          "authority_priority": 35,
+          "sub_question_ids": [
+            "ER2"
+          ]
+        },
+        {
+          "citation_label": "E9",
+          "chunk_id": 9785,
+          "source_type": "DOCUMENT",
+          "file_path": "0-历史文档/2-车票模块文档/车票查询读链路功能分析与设计（P0教学版）.md",
+          "identity": "车票查询读链路功能分析与设计（P0 教学版） > 五、难点与设计决策 > 5.8 责任链三段校验：为什么不是一堆 if",
+          "retrieval_rank": 4,
+          "source_role": "HISTORICAL_PLAN",
+          "temporal_status": "HISTORICAL",
+          "authority_priority": 35,
+          "sub_question_ids": [
+            "ER2",
+            "ER3"
+          ]
+        },
+        {
+          "citation_label": "E10",
+          "chunk_id": 10942,
+          "source_type": "DOCUMENT",
+          "file_path": "6-面试复习/模块1-项目全景.md",
+          "identity": "模块一 · 项目全景 > 1.3 四条核心链路 🔴 > 1.3.1 用户链路 🟡 > 【主线】",
+          "retrieval_rank": 5,
+          "source_role": "GENERAL_DOCUMENT",
+          "temporal_status": "UNKNOWN",
+          "authority_priority": 55,
+          "sub_question_ids": [
+            "ER2",
+            "ER5"
+          ]
+        },
+        {
+          "citation_label": "E11",
+          "chunk_id": 9770,
+          "source_type": "DOCUMENT",
+          "file_path": "0-历史文档/2-车票模块文档/车票查询读链路功能分析与设计（P0教学版）.md",
+          "identity": "车票查询读链路功能分析与设计（P0 教学版） > 四、业务流程与作用链 > 4.1 三类流程概览",
+          "retrieval_rank": 2,
+          "source_role": "HISTORICAL_PLAN",
+          "temporal_status": "HISTORICAL",
+          "authority_priority": 35,
+          "sub_question_ids": [
+            "ER3",
+            "ER5"
+          ]
+        },
+        {
+          "citation_label": "E12",
+          "chunk_id": 9670,
+          "source_type": "DOCUMENT",
+          "file_path": "0-历史文档/2-车票模块文档/P1购票写链路代码阅读指导.md",
+          "identity": "只跑订单服务测试 > 4. 主线二：购票责任链 > 4.1 目标",
+          "retrieval_rank": 3,
+          "source_role": "HISTORICAL_PLAN",
+          "temporal_status": "HISTORICAL",
+          "authority_priority": 35,
+          "sub_question_ids": [
+            "ER3"
+          ]
+        },
+        {
+          "citation_label": "E13",
+          "chunk_id": 10990,
+          "source_type": "DOCUMENT",
+          "file_path": "6-面试复习/模块2-核心链路深挖.md",
+          "identity": "模块二 · 核心链路深挖 > 2.2 查询链路与缓存设计 🔴 > ③ 系统实现 > 执行主线",
+          "retrieval_rank": 4,
+          "source_role": "GENERAL_DOCUMENT",
+          "temporal_status": "UNKNOWN",
+          "authority_priority": 55,
+          "sub_question_ids": [
+            "ER3"
+          ]
+        }
+      ],
+      "sufficiency": {
+        "enough": true,
+        "missing_aspects": [
+          {
+            "source_type": "CODE",
+            "description": "校验链的调用入口与调用方启动代码",
+            "sub_question_id": "ER4"
+          },
+          {
+            "source_type": "CODE",
+            "description": "触发时机（请求进入时或业务操作前）的说明",
+            "sub_question_id": "ER4"
+          }
+        ],
+        "reason": "all CORE evidence requirements are satisfied",
+        "decision_source": "llm",
+        "statuses": [
+          {
+            "sub_question_id": "ER1",
+            "satisfied": true,
+            "reason": "证据包含处理器接口、具体校验处理器及链容器按 order 组装和顺序执行，满足责任链校验实现。",
+            "state": "SATISFIED"
+          },
+          {
+            "sub_question_id": "ER2",
+            "satisfied": true,
+            "reason": "设计文档直接陈述采用责任链的动机，如避免 if-else 堆叠、便于扩展。",
+            "state": "SATISFIED"
+          },
+          {
+            "sub_question_id": "ER3",
+            "satisfied": true,
+            "reason": "文档描述校验项持续增加、需独立扩展与顺序执行，符合责任链动因特征。",
+            "state": "SATISFIED"
+          },
+          {
+            "sub_question_id": "ER4",
+            "satisfied": false,
+            "reason": "现有证据仅展示处理器接口与具体处理器，未显示校验链的调用入口、触发时机及启动方式。",
+            "state": "MISSING"
+          },
+          {
+            "sub_question_id": "ER5",
+            "satisfied": true,
+            "reason": "文档比较了 if-else 堆叠的问题并说明选择责任链的理由，满足取舍说明。",
+            "state": "SATISFIED"
+          }
+        ]
+      },
+      "rewrite": null,
+      "rewrite_error": null,
+      "rewrites": []
+    }
+  ],
+  "retry_count": 0,
+  "final_sufficiency": {
+    "enough": true,
+    "missing_aspects": [
+      {
+        "source_type": "CODE",
+        "description": "校验链的调用入口与调用方启动代码",
+        "sub_question_id": "ER4"
+      },
+      {
+        "source_type": "CODE",
+        "description": "触发时机（请求进入时或业务操作前）的说明",
+        "sub_question_id": "ER4"
+      }
+    ],
+    "reason": "all CORE evidence requirements are satisfied",
+    "decision_source": "llm",
+    "statuses": [
+      {
+        "sub_question_id": "ER1",
+        "satisfied": true,
+        "reason": "证据包含处理器接口、具体校验处理器及链容器按 order 组装和顺序执行，满足责任链校验实现。",
+        "state": "SATISFIED"
+      },
+      {
+        "sub_question_id": "ER2",
+        "satisfied": true,
+        "reason": "设计文档直接陈述采用责任链的动机，如避免 if-else 堆叠、便于扩展。",
+        "state": "SATISFIED"
+      },
+      {
+        "sub_question_id": "ER3",
+        "satisfied": true,
+        "reason": "文档描述校验项持续增加、需独立扩展与顺序执行，符合责任链动因特征。",
+        "state": "SATISFIED"
+      },
+      {
+        "sub_question_id": "ER4",
+        "satisfied": false,
+        "reason": "现有证据仅展示处理器接口与具体处理器，未显示校验链的调用入口、触发时机及启动方式。",
+        "state": "MISSING"
+      },
+      {
+        "sub_question_id": "ER5",
+        "satisfied": true,
+        "reason": "文档比较了 if-else 堆叠的问题并说明选择责任链的理由，满足取舍说明。",
+        "state": "SATISFIED"
+      }
+    ]
+  },
+  "stop_reason": "ready",
+  "plan": null,
+  "sub_question_traces": [
+    {
+      "sub_question_id": "ER1",
+      "question": "项目中存在责任链校验的实现",
+      "purpose": "代码中包含校验处理者按顺序传递校验请求的链式结构，例如处理器接口或抽象类、链的组装与启动调用，并明确该结构用于执行校验。",
+      "query_type": "CODE",
+      "selected_chunks": [
+        {
+          "citation_label": "C1",
+          "chunk_id": 8739,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/common/chain/AbstractChainHandler.java",
+          "identity": "AbstractChainHandler#AbstractChainHandler",
+          "retrieval_rank": 1,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1"
+          ]
+        },
+        {
+          "citation_label": "C4",
+          "chunk_id": 9037,
+          "source_type": "CODE",
+          "file_path": "services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/service/handler/filter/user/UserRegisterParamNotNullChainHandler.java",
+          "identity": "UserRegisterParamNotNullChainHandler#UserRegisterParamNotNullChainHandler",
+          "retrieval_rank": 4,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1",
+            "ER4"
+          ]
+        },
+        {
+          "citation_label": "C6",
+          "chunk_id": 8944,
+          "source_type": "CODE",
+          "file_path": "services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/common/chain/AbstractChainHandler.java",
+          "identity": "AbstractChainHandler#AbstractChainHandler",
+          "retrieval_rank": 6,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1"
+          ]
+        },
+        {
+          "citation_label": "C9",
+          "chunk_id": 8940,
+          "source_type": "CODE",
+          "file_path": "services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/common/chain/AbstractChainContext.java",
+          "identity": "AbstractChainContext#AbstractChainContext",
+          "retrieval_rank": 9,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1"
+          ]
+        },
+        {
+          "citation_label": "C10",
+          "chunk_id": 8735,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/common/chain/AbstractChainContext.java",
+          "identity": "AbstractChainContext#AbstractChainContext",
+          "retrieval_rank": 10,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1"
+          ]
+        }
+      ]
+    },
+    {
+      "sub_question_id": "ER2",
+      "question": "项目材料中说明了选择责任链校验的设计原因",
+      "purpose": "设计文档、代码注释或提交说明中直接陈述采用责任链模式进行校验的动机或理由，而不仅是描述其用法或结构。",
+      "query_type": "MIXED",
+      "selected_chunks": [
+        {
+          "citation_label": "C2",
+          "chunk_id": 10942,
+          "source_type": "DOCUMENT",
+          "file_path": "6-面试复习/模块1-项目全景.md",
+          "identity": "模块一 · 项目全景 > 1.3 四条核心链路 🔴 > 1.3.1 用户链路 🟡 > 【主线】",
+          "retrieval_rank": 2,
+          "source_role": "GENERAL_DOCUMENT",
+          "temporal_status": "UNKNOWN",
+          "authority_priority": 55,
+          "sub_question_ids": [
+            "ER2",
+            "ER5"
+          ]
+        },
+        {
+          "citation_label": "C5",
+          "chunk_id": 9140,
+          "source_type": "DOCUMENT",
+          "file_path": "0-历史文档/1-用户模块文档/v1到v2升级功能分析与设计.md",
+          "identity": "用户服务 v1 → v2 升级：详细功能分析与设计 > 四、责任链与黑名单：注册校验框架（批次 2） > 4.1 设计原因",
+          "retrieval_rank": 5,
+          "source_role": "HISTORICAL_PLAN",
+          "temporal_status": "HISTORICAL",
+          "authority_priority": 35,
+          "sub_question_ids": [
+            "ER2",
+            "ER3",
+            "ER5"
+          ]
+        },
+        {
+          "citation_label": "C11",
+          "chunk_id": 9693,
+          "source_type": "DOCUMENT",
+          "file_path": "0-历史文档/2-车票模块文档/P1购票写链路代码阅读指导.md",
+          "identity": "只跑订单服务测试 > 8. 横向专题：事务、锁、口径衔接 > 8.4 验证任务",
+          "retrieval_rank": 11,
+          "source_role": "HISTORICAL_PLAN",
+          "temporal_status": "HISTORICAL",
+          "authority_priority": 35,
+          "sub_question_ids": [
+            "ER2"
+          ]
+        }
+      ]
+    },
+    {
+      "sub_question_id": "ER3",
+      "question": "责任链校验对应的校验需求特征",
+      "purpose": "证据描述校验场景需要多个可独立扩展、可组合或按特定顺序执行的校验规则，或需要动态增删校验节点，这些特征是选择责任链的动因。",
+      "query_type": "MIXED",
+      "selected_chunks": [
+        {
+          "citation_label": "C3",
+          "chunk_id": 10990,
+          "source_type": "DOCUMENT",
+          "file_path": "6-面试复习/模块2-核心链路深挖.md",
+          "identity": "模块二 · 核心链路深挖 > 2.2 查询链路与缓存设计 🔴 > ③ 系统实现 > 执行主线",
+          "retrieval_rank": 3,
+          "source_role": "GENERAL_DOCUMENT",
+          "temporal_status": "UNKNOWN",
+          "authority_priority": 55,
+          "sub_question_ids": [
+            "ER3"
+          ]
+        },
+        {
+          "citation_label": "C5",
+          "chunk_id": 9140,
+          "source_type": "DOCUMENT",
+          "file_path": "0-历史文档/1-用户模块文档/v1到v2升级功能分析与设计.md",
+          "identity": "用户服务 v1 → v2 升级：详细功能分析与设计 > 四、责任链与黑名单：注册校验框架（批次 2） > 4.1 设计原因",
+          "retrieval_rank": 5,
+          "source_role": "HISTORICAL_PLAN",
+          "temporal_status": "HISTORICAL",
+          "authority_priority": 35,
+          "sub_question_ids": [
+            "ER2",
+            "ER3",
+            "ER5"
+          ]
+        },
+        {
+          "citation_label": "C12",
+          "chunk_id": 9770,
+          "source_type": "DOCUMENT",
+          "file_path": "0-历史文档/2-车票模块文档/车票查询读链路功能分析与设计（P0教学版）.md",
+          "identity": "车票查询读链路功能分析与设计（P0 教学版） > 四、业务流程与作用链 > 4.1 三类流程概览",
+          "retrieval_rank": 12,
+          "source_role": "HISTORICAL_PLAN",
+          "temporal_status": "HISTORICAL",
+          "authority_priority": 35,
+          "sub_question_ids": [
+            "ER3",
+            "ER5"
+          ]
+        }
+      ]
+    },
+    {
+      "sub_question_id": "ER4",
+      "question": "责任链校验在项目中被触发和集成的方式",
+      "purpose": "代码或文档显示校验链的调用入口、触发时机（如请求进入时或业务操作前）以及调用方如何启动校验链。",
+      "query_type": "CODE",
+      "selected_chunks": [
+        {
+          "citation_label": "C4",
+          "chunk_id": 9037,
+          "source_type": "CODE",
+          "file_path": "services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/service/handler/filter/user/UserRegisterParamNotNullChainHandler.java",
+          "identity": "UserRegisterParamNotNullChainHandler#UserRegisterParamNotNullChainHandler",
+          "retrieval_rank": 4,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1",
+            "ER4"
+          ]
+        },
+        {
+          "citation_label": "C7",
+          "chunk_id": 8742,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/common/chain/AbstractChainHandler.java",
+          "identity": "AbstractChainHandler#handler",
+          "retrieval_rank": 7,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER4"
+          ]
+        },
+        {
+          "citation_label": "C8",
+          "chunk_id": 8947,
+          "source_type": "CODE",
+          "file_path": "services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/common/chain/AbstractChainHandler.java",
+          "identity": "AbstractChainHandler#handler",
+          "retrieval_rank": 8,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER4"
+          ]
+        }
+      ]
+    },
+    {
+      "sub_question_id": "ER5",
+      "question": "项目中对其他校验实现方式的取舍说明",
+      "purpose": "文档、注释或提交记录中包含与其他校验实现方式的比较，或说明为何未采用集中式校验、条件分支等其他方式。",
+      "query_type": "MIXED",
+      "selected_chunks": [
+        {
+          "citation_label": "C2",
+          "chunk_id": 10942,
+          "source_type": "DOCUMENT",
+          "file_path": "6-面试复习/模块1-项目全景.md",
+          "identity": "模块一 · 项目全景 > 1.3 四条核心链路 🔴 > 1.3.1 用户链路 🟡 > 【主线】",
+          "retrieval_rank": 2,
+          "source_role": "GENERAL_DOCUMENT",
+          "temporal_status": "UNKNOWN",
+          "authority_priority": 55,
+          "sub_question_ids": [
+            "ER2",
+            "ER5"
+          ]
+        },
+        {
+          "citation_label": "C5",
+          "chunk_id": 9140,
+          "source_type": "DOCUMENT",
+          "file_path": "0-历史文档/1-用户模块文档/v1到v2升级功能分析与设计.md",
+          "identity": "用户服务 v1 → v2 升级：详细功能分析与设计 > 四、责任链与黑名单：注册校验框架（批次 2） > 4.1 设计原因",
+          "retrieval_rank": 5,
+          "source_role": "HISTORICAL_PLAN",
+          "temporal_status": "HISTORICAL",
+          "authority_priority": 35,
+          "sub_question_ids": [
+            "ER2",
+            "ER3",
+            "ER5"
+          ]
+        },
+        {
+          "citation_label": "C12",
+          "chunk_id": 9770,
+          "source_type": "DOCUMENT",
+          "file_path": "0-历史文档/2-车票模块文档/车票查询读链路功能分析与设计（P0教学版）.md",
+          "identity": "车票查询读链路功能分析与设计（P0 教学版） > 四、业务流程与作用链 > 4.1 三类流程概览",
+          "retrieval_rank": 12,
+          "source_role": "HISTORICAL_PLAN",
+          "temporal_status": "HISTORICAL",
+          "authority_priority": 35,
+          "sub_question_ids": [
+            "ER3",
+            "ER5"
+          ]
+        }
+      ]
+    }
+  ],
+  "citations": {
+    "used_labels": [
+      "E6",
+      "E11",
+      "E9",
+      "E12",
+      "E13",
+      "E1",
+      "E2",
+      "E4",
+      "E5",
+      "E3",
+      "E10",
+      "E8",
+      "E7"
+    ],
+    "invalid_labels": [],
+    "zero_valid": false,
+    "sources": [
+      "[E6] 0-历史文档/1-用户模块文档/v1到v2升级功能分析与设计.md > 用户服务 v1 → v2 升级：详细功能分析与设计 > 四、责任链与黑名单：注册校验框架（批次 2） > 4.1 设计原因",
+      "[E11] 0-历史文档/2-车票模块文档/车票查询读链路功能分析与设计（P0教学版）.md > 车票查询读链路功能分析与设计（P0 教学版） > 四、业务流程与作用链 > 4.1 三类流程概览",
+      "[E9] 0-历史文档/2-车票模块文档/车票查询读链路功能分析与设计（P0教学版）.md > 车票查询读链路功能分析与设计（P0 教学版） > 五、难点与设计决策 > 5.8 责任链三段校验：为什么不是一堆 if",
+      "[E12] 0-历史文档/2-车票模块文档/P1购票写链路代码阅读指导.md > 只跑订单服务测试 > 4. 主线二：购票责任链 > 4.1 目标",
+      "[E13] 6-面试复习/模块2-核心链路深挖.md > 模块二 · 核心链路深挖 > 2.2 查询链路与缓存设计 🔴 > ③ 系统实现 > 执行主线",
+      "[E1] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/common/chain/AbstractChainHandler.java:6-22 — AbstractChainHandler#AbstractChainHandler",
+      "[E2] services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/common/chain/AbstractChainHandler.java:6-16 — AbstractChainHandler#AbstractChainHandler",
+      "[E4] services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/common/chain/AbstractChainContext.java:21-51 — AbstractChainContext#AbstractChainContext",
+      "[E5] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/common/chain/AbstractChainContext.java:18-50 — AbstractChainContext#AbstractChainContext",
+      "[E3] services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/service/handler/filter/user/UserRegisterParamNotNullChainHandler.java:12-44 — UserRegisterParamNotNullChainHandler#UserRegisterParamNotNullChainHandler",
+      "[E10] 6-面试复习/模块1-项目全景.md > 模块一 · 项目全景 > 1.3 四条核心链路 🔴 > 1.3.1 用户链路 🟡 > 【主线】",
+      "[E8] 0-历史文档/2-车票模块文档/P1购票写链路代码阅读指导.md > 只跑订单服务测试 > 4. 主线二：购票责任链 > 4.5 验证任务",
+      "[E7] 0-历史文档/2-车票模块文档/P1购票写链路代码阅读指导.md > 只跑订单服务测试 > 8. 横向专题：事务、锁、口径衔接 > 8.4 验证任务"
+    ]
+  },
+  "sections": {
+    "count": 3,
+    "lengths": [
+      553,
+      897,
+      703
+    ],
+    "max_chars": 897,
+    "over_budget": 3
+  },
+  "answer_plan": null,
+  "source_conflicts": [],
+  "review": null,
+  "stage_usage": [
+    {
+      "stage": "evidence_planning",
+      "latency_ms": 7933.583499980159,
+      "decision_source": "llm",
+      "model": "deepseek-flash",
+      "reasoning_effort": "high",
+      "input_tokens": 474,
+      "output_tokens": 1722,
+      "round_index": null
+    },
+    {
+      "stage": "search_action_planning",
+      "latency_ms": 5818.078399985097,
+      "decision_source": "llm",
+      "model": "deepseek-flash",
+      "reasoning_effort": "low",
+      "input_tokens": 733,
+      "output_tokens": 1156,
+      "round_index": 0
+    },
+    {
+      "stage": "evidence_retrieval",
+      "latency_ms": 4606.386100000236,
+      "decision_source": "policy",
+      "model": null,
+      "reasoning_effort": null,
+      "input_tokens": null,
+      "output_tokens": null,
+      "round_index": 0
+    },
+    {
+      "stage": "coverage_check",
+      "latency_ms": 11764.565599965863,
+      "decision_source": "llm",
+      "model": "deepseek-flash",
+      "reasoning_effort": "low",
+      "input_tokens": 4186,
+      "output_tokens": 2961,
+      "round_index": 0
+    },
+    {
+      "stage": "explanation_planning",
+      "latency_ms": 8609.682100010104,
+      "decision_source": "llm",
+      "model": "deepseek-flash",
+      "reasoning_effort": "high",
+      "input_tokens": 4149,
+      "output_tokens": 1667,
+      "round_index": null
+    },
+    {
+      "stage": "teaching_draft",
+      "latency_ms": 14930.092099995818,
+      "decision_source": "llm",
+      "model": "deepseek-flash",
+      "reasoning_effort": "high",
+      "input_tokens": 4759,
+      "output_tokens": 3178,
+      "round_index": null
+    }
+  ],
+  "evidence_plan": {
+    "schema_version": 2,
+    "original_query": "项目为何使用责任链校验",
+    "requirements": [
+      {
+        "id": "ER1",
+        "target": "项目中存在责任链校验的实现",
+        "success_criteria": "代码中包含校验处理者按顺序传递校验请求的链式结构，例如处理器接口或抽象类、链的组装与启动调用，并明确该结构用于执行校验。",
+        "priority": "CORE",
+        "temporal_scope": "CURRENT",
+        "source_requirement": "CODE"
+      },
+      {
+        "id": "ER2",
+        "target": "项目材料中说明了选择责任链校验的设计原因",
+        "success_criteria": "设计文档、代码注释或提交说明中直接陈述采用责任链模式进行校验的动机或理由，而不仅是描述其用法或结构。",
+        "priority": "CORE",
+        "temporal_scope": "ANY",
+        "source_requirement": "ANY"
+      },
+      {
+        "id": "ER3",
+        "target": "责任链校验对应的校验需求特征",
+        "success_criteria": "证据描述校验场景需要多个可独立扩展、可组合或按特定顺序执行的校验规则，或需要动态增删校验节点，这些特征是选择责任链的动因。",
+        "priority": "CORE",
+        "temporal_scope": "ANY",
+        "source_requirement": "ANY"
+      },
+      {
+        "id": "ER4",
+        "target": "责任链校验在项目中被触发和集成的方式",
+        "success_criteria": "代码或文档显示校验链的调用入口、触发时机（如请求进入时或业务操作前）以及调用方如何启动校验链。",
+        "priority": "SUPPORTING",
+        "temporal_scope": "CURRENT",
+        "source_requirement": "CODE"
+      },
+      {
+        "id": "ER5",
+        "target": "项目中对其他校验实现方式的取舍说明",
+        "success_criteria": "文档、注释或提交记录中包含与其他校验实现方式的比较，或说明为何未采用集中式校验、条件分支等其他方式。",
+        "priority": "SUPPORTING",
+        "temporal_scope": "ANY",
+        "source_requirement": "ANY"
+      }
+    ],
+    "decision_source": "llm"
+  },
+  "requirement_traces": [
+    {
+      "requirement_id": "ER1",
+      "target": "项目中存在责任链校验的实现",
+      "search_history": [
+        {
+          "action_id": "SA1",
+          "requirement_id": "ER1",
+          "round_index": 0,
+          "query": "责任链 校验 处理器 接口 抽象类 链式传递 校验请求 组装 启动 调用",
+          "source_scope": "CODE",
+          "reason": "查找责任链校验的代码实现结构",
+          "decision_source": "llm",
+          "error": null
+        }
+      ],
+      "evidence_ids": [
+        8739,
+        8944,
+        9037,
+        8940,
+        8735
+      ],
+      "coverage_history": [
+        {
+          "requirement_id": "ER1",
+          "state": "SATISFIED",
+          "evidence_ids": [
+            8739,
+            8944,
+            9037,
+            8940,
+            8735
+          ],
+          "missing_criteria": [],
+          "reason": "证据包含处理器接口、具体校验处理器及链容器按 order 组装和顺序执行，满足责任链校验实现。",
+          "decision_source": "llm",
+          "check_error": null
+        }
+      ],
+      "final_state": "SATISFIED"
+    },
+    {
+      "requirement_id": "ER2",
+      "target": "项目材料中说明了选择责任链校验的设计原因",
+      "search_history": [
+        {
+          "action_id": "SA2",
+          "requirement_id": "ER2",
+          "round_index": 0,
+          "query": "责任链 校验 设计原因 动机 为什么 选择 模式 注释 文档 提交说明",
+          "source_scope": "ANY",
+          "reason": "查找选择责任链校验的设计原因说明",
+          "decision_source": "llm",
+          "error": null
+        }
+      ],
+      "evidence_ids": [
+        9140,
+        9785
+      ],
+      "coverage_history": [
+        {
+          "requirement_id": "ER2",
+          "state": "SATISFIED",
+          "evidence_ids": [
+            9140,
+            9785
+          ],
+          "missing_criteria": [],
+          "reason": "设计文档直接陈述采用责任链的动机，如避免 if-else 堆叠、便于扩展。",
+          "decision_source": "llm",
+          "check_error": null
+        }
+      ],
+      "final_state": "SATISFIED"
+    },
+    {
+      "requirement_id": "ER3",
+      "target": "责任链校验对应的校验需求特征",
+      "search_history": [
+        {
+          "action_id": "SA3",
+          "requirement_id": "ER3",
+          "round_index": 0,
+          "query": "校验 规则 独立扩展 组合 顺序执行 动态增删 责任链 动因",
+          "source_scope": "ANY",
+          "reason": "查找责任链校验对应的校验需求特征",
+          "decision_source": "llm",
+          "error": null
+        }
+      ],
+      "evidence_ids": [
+        9140,
+        9785
+      ],
+      "coverage_history": [
+        {
+          "requirement_id": "ER3",
+          "state": "SATISFIED",
+          "evidence_ids": [
+            9140,
+            9785
+          ],
+          "missing_criteria": [],
+          "reason": "文档描述校验项持续增加、需独立扩展与顺序执行，符合责任链动因特征。",
+          "decision_source": "llm",
+          "check_error": null
+        }
+      ],
+      "final_state": "SATISFIED"
+    },
+    {
+      "requirement_id": "ER4",
+      "target": "责任链校验在项目中被触发和集成的方式",
+      "search_history": [
+        {
+          "action_id": "SA4",
+          "requirement_id": "ER4",
+          "round_index": 0,
+          "query": "责任链 校验 调用入口 触发时机 请求进入 业务操作前 启动校验链",
+          "source_scope": "CODE",
+          "reason": "查找责任链校验的触发与集成方式",
+          "decision_source": "llm",
+          "error": null
+        }
+      ],
+      "evidence_ids": [],
+      "coverage_history": [
+        {
+          "requirement_id": "ER4",
+          "state": "MISSING",
+          "evidence_ids": [],
+          "missing_criteria": [
+            "校验链的调用入口与调用方启动代码",
+            "触发时机（请求进入时或业务操作前）的说明"
+          ],
+          "reason": "现有证据仅展示处理器接口与具体处理器，未显示校验链的调用入口、触发时机及启动方式。",
+          "decision_source": "llm",
+          "check_error": null
+        }
+      ],
+      "final_state": "MISSING"
+    },
+    {
+      "requirement_id": "ER5",
+      "target": "项目中对其他校验实现方式的取舍说明",
+      "search_history": [
+        {
+          "action_id": "SA5",
+          "requirement_id": "ER5",
+          "round_index": 0,
+          "query": "校验 方式 比较 集中式校验 条件分支 责任链 取舍 未采用 原因",
+          "source_scope": "ANY",
+          "reason": "查找其他校验实现方式的取舍说明",
+          "decision_source": "llm",
+          "error": null
+        }
+      ],
+      "evidence_ids": [
+        9140
+      ],
+      "coverage_history": [
+        {
+          "requirement_id": "ER5",
+          "state": "SATISFIED",
+          "evidence_ids": [
+            9140
+          ],
+          "missing_criteria": [],
+          "reason": "文档比较了 if-else 堆叠的问题并说明选择责任链的理由，满足取舍说明。",
+          "decision_source": "llm",
+          "check_error": null
+        }
+      ],
+      "final_state": "SATISFIED"
+    }
+  ],
+  "search_actions": [
+    {
+      "action_id": "SA1",
+      "requirement_id": "ER1",
+      "round_index": 0,
+      "query": "责任链 校验 处理器 接口 抽象类 链式传递 校验请求 组装 启动 调用",
+      "source_scope": "CODE",
+      "reason": "查找责任链校验的代码实现结构",
+      "decision_source": "llm",
+      "error": null
+    },
+    {
+      "action_id": "SA2",
+      "requirement_id": "ER2",
+      "round_index": 0,
+      "query": "责任链 校验 设计原因 动机 为什么 选择 模式 注释 文档 提交说明",
+      "source_scope": "ANY",
+      "reason": "查找选择责任链校验的设计原因说明",
+      "decision_source": "llm",
+      "error": null
+    },
+    {
+      "action_id": "SA3",
+      "requirement_id": "ER3",
+      "round_index": 0,
+      "query": "校验 规则 独立扩展 组合 顺序执行 动态增删 责任链 动因",
+      "source_scope": "ANY",
+      "reason": "查找责任链校验对应的校验需求特征",
+      "decision_source": "llm",
+      "error": null
+    },
+    {
+      "action_id": "SA4",
+      "requirement_id": "ER4",
+      "round_index": 0,
+      "query": "责任链 校验 调用入口 触发时机 请求进入 业务操作前 启动校验链",
+      "source_scope": "CODE",
+      "reason": "查找责任链校验的触发与集成方式",
+      "decision_source": "llm",
+      "error": null
+    },
+    {
+      "action_id": "SA5",
+      "requirement_id": "ER5",
+      "round_index": 0,
+      "query": "校验 方式 比较 集中式校验 条件分支 责任链 取舍 未采用 原因",
+      "source_scope": "ANY",
+      "reason": "查找其他校验实现方式的取舍说明",
+      "decision_source": "llm",
+      "error": null
+    }
+  ],
+  "coverage_rounds": [
+    {
+      "round_index": 0,
+      "statuses": [
+        {
+          "requirement_id": "ER1",
+          "state": "SATISFIED",
+          "evidence_ids": [
+            8739,
+            8944,
+            9037,
+            8940,
+            8735
+          ],
+          "missing_criteria": [],
+          "reason": "证据包含处理器接口、具体校验处理器及链容器按 order 组装和顺序执行，满足责任链校验实现。",
+          "decision_source": "llm",
+          "check_error": null
+        },
+        {
+          "requirement_id": "ER2",
+          "state": "SATISFIED",
+          "evidence_ids": [
+            9140,
+            9785
+          ],
+          "missing_criteria": [],
+          "reason": "设计文档直接陈述采用责任链的动机，如避免 if-else 堆叠、便于扩展。",
+          "decision_source": "llm",
+          "check_error": null
+        },
+        {
+          "requirement_id": "ER3",
+          "state": "SATISFIED",
+          "evidence_ids": [
+            9140,
+            9785
+          ],
+          "missing_criteria": [],
+          "reason": "文档描述校验项持续增加、需独立扩展与顺序执行，符合责任链动因特征。",
+          "decision_source": "llm",
+          "check_error": null
+        },
+        {
+          "requirement_id": "ER4",
+          "state": "MISSING",
+          "evidence_ids": [],
+          "missing_criteria": [
+            "校验链的调用入口与调用方启动代码",
+            "触发时机（请求进入时或业务操作前）的说明"
+          ],
+          "reason": "现有证据仅展示处理器接口与具体处理器，未显示校验链的调用入口、触发时机及启动方式。",
+          "decision_source": "llm",
+          "check_error": null
+        },
+        {
+          "requirement_id": "ER5",
+          "state": "SATISFIED",
+          "evidence_ids": [
+            9140
+          ],
+          "missing_criteria": [],
+          "reason": "文档比较了 if-else 堆叠的问题并说明选择责任链的理由，满足取舍说明。",
+          "decision_source": "llm",
+          "check_error": null
+        }
+      ]
+    }
+  ],
+  "final_coverage": [
+    {
+      "requirement_id": "ER1",
+      "state": "SATISFIED",
+      "evidence_ids": [
+        8739,
+        8944,
+        9037,
+        8940,
+        8735
+      ],
+      "missing_criteria": [],
+      "reason": "证据包含处理器接口、具体校验处理器及链容器按 order 组装和顺序执行，满足责任链校验实现。",
+      "decision_source": "llm",
+      "check_error": null
+    },
+    {
+      "requirement_id": "ER2",
+      "state": "SATISFIED",
+      "evidence_ids": [
+        9140,
+        9785
+      ],
+      "missing_criteria": [],
+      "reason": "设计文档直接陈述采用责任链的动机，如避免 if-else 堆叠、便于扩展。",
+      "decision_source": "llm",
+      "check_error": null
+    },
+    {
+      "requirement_id": "ER3",
+      "state": "SATISFIED",
+      "evidence_ids": [
+        9140,
+        9785
+      ],
+      "missing_criteria": [],
+      "reason": "文档描述校验项持续增加、需独立扩展与顺序执行，符合责任链动因特征。",
+      "decision_source": "llm",
+      "check_error": null
+    },
+    {
+      "requirement_id": "ER4",
+      "state": "MISSING",
+      "evidence_ids": [],
+      "missing_criteria": [
+        "校验链的调用入口与调用方启动代码",
+        "触发时机（请求进入时或业务操作前）的说明"
+      ],
+      "reason": "现有证据仅展示处理器接口与具体处理器，未显示校验链的调用入口、触发时机及启动方式。",
+      "decision_source": "llm",
+      "check_error": null
+    },
+    {
+      "requirement_id": "ER5",
+      "state": "SATISFIED",
+      "evidence_ids": [
+        9140
+      ],
+      "missing_criteria": [],
+      "reason": "文档比较了 if-else 堆叠的问题并说明选择责任链的理由，满足取舍说明。",
+      "decision_source": "llm",
+      "check_error": null
+    }
+  ],
+  "evidence_package_state": "READY",
+  "explanation_plan": {
+    "answer_goal": "读者能说清这个项目选择责任链做校验的真正动因——校验规则会持续增长且需要显式顺序，以及责任链用 mark/order/Handler 三个概念如何把这种增长成本从「改业务代码」降为「加一个类」，并能判断什么场景下它不划算。",
+    "direct_answer": "因为该项目的校验规则（参数非空、用户名可用、证件黑名单、库存、预售期等）会持续增加，且必须按固定优先级顺序执行；责任链把每条规则拆成独立 Handler，用 mark 分组、order 排序，使新增校验=新增一个类而不改既有代码，同时把校验与业务逻辑解耦，因此被用户与车票两条链路共同采用。",
+    "audience_model": "熟悉 Java，但需要建立当前项目的实现模型",
+    "core_mental_model": "责任链校验解决的不是「怎么校验」，而是「校验规则只增不减时，如何让每一次新增只发生在新增的代码里」——mark 决定它属于哪条链，order 决定它在链中的位置，Handler 决定它做什么，三者共同把顺序与扩展点都变成显式声明。",
+    "primary_strategy": "PROBLEM_SOLUTION",
+    "secondary_strategies": [],
+    "prerequisite_concepts": [],
+    "likely_misconceptions": [],
+    "sections": [
+      {
+        "id": "S1",
+        "title": "校验规则只会变多，而 if-else 的代价随规则数增长",
+        "section_type": "PROBLEM_SETUP",
+        "teaching_goal": "让读者先接受问题的形状：这里的校验不是一次性的，而是持续演进且对顺序敏感的规则集合，因此才需要一种结构，而不是一段代码。",
+        "key_points": [
+          "校验项沿「参数非空 → 用户名可用 → 证件黑名单 → 未来实名核验/风控」持续追加，是长期演进而非一次性需求",
+          "if-else 堆叠的三项代价：顺序难以控制与复用、新增校验要改 Service 方法体（违反开闭原则）、校验逻辑与业务逻辑耦合难单测",
+          "顺序本身承载语义：先保证参数齐全，再做业务规则判断，最后做较重的依赖查询（存在性），顺序错了会浪费查询且错误提示不准",
+          "同一问题在多条链路重复出现——用户注册、车票查询组合接口、购票前 4 道校验，都是「多段、有序、可增」的校验"
+        ],
+        "claim_plans": [
+          {
+            "claim_goal": "让读者先接受问题的形状：这里的校验不是一次性的，而是持续演进且对顺序敏感的规则集合，因此才需要一种结构，而不是一段代码。",
+            "claim_type": "PROJECT_FACT",
+            "evidence_labels": [
+              "E6",
+              "E9",
+              "E12",
+              "E11",
+              "E13"
+            ],
+            "confidence": "CONFIRMED",
+            "assumptions": [],
+            "conditional": false
+          }
+        ],
+        "evidence_labels": [
+          "E6",
+          "E9",
+          "E12",
+          "E11",
+          "E13"
+        ],
+        "teaching_devices": [
+          "NONE"
+        ],
+        "depends_on": [],
+        "evidence_state": "CONFIRMED",
+        "target_tokens": 420
+      },
+      {
+        "id": "S2",
+        "title": "mark 分组、order 排序、Handler 承载规则：责任链把顺序和扩展点都变成声明",
+        "section_type": "MECHANISM",
+        "teaching_goal": "让读者看清这套责任链的最小机制——三个接口方法即可解释全部设计动因，理解结构本身就是对上述问题的回答。",
+        "key_points": [
+          "处理器抽象只有三项契约：mark() 声明属于哪条链、order() 声明在链中的位置、handler(param) 声明做什么",
+          "容器 AbstractChainContext 在启动时（CommandLineRunner）从 ApplicationContext 按 mark 收集全部 Handler，再按 order 排序存入 Map<mark, List<Handler>>，业务侧只需 handler(mark, param)",
+          "用 CommandLineRunner + ApplicationContext 收集而非构造注入，是为了避免 Handler 反向依赖 Service 造成的构造循环——扩展点的独立性与依赖方向被一并解决",
+          "具体规则即一个类：如注册链的 UserRegisterParamNotNullChainHandler 以 order=0 表示最先执行，规则内容与它在链中的位置在同一处声明",
+          "这套容器在 user-services 与 ticket-services 中各有一份同形态实现，被多条链路复用"
+        ],
+        "claim_plans": [
+          {
+            "claim_goal": "让读者看清这套责任链的最小机制——三个接口方法即可解释全部设计动因，理解结构本身就是对上述问题的回答。",
+            "claim_type": "PROJECT_FACT",
+            "evidence_labels": [
+              "E1",
+              "E2",
+              "E4",
+              "E5",
+              "E3",
+              "E10"
+            ],
+            "confidence": "PARTIAL",
+            "assumptions": [],
+            "conditional": false
+          }
+        ],
+        "evidence_labels": [
+          "E1",
+          "E2",
+          "E4",
+          "E5",
+          "E3",
+          "E10"
+        ],
+        "teaching_devices": [
+          "NONE"
+        ],
+        "depends_on": [
+          "S1"
+        ],
+        "evidence_state": "PARTIAL",
+        "target_tokens": 520
+      },
+      {
+        "id": "S3",
+        "title": "收益与代价：什么时候这套结构是赚的",
+        "section_type": "TRADEOFF",
+        "teaching_goal": "让读者拿到可迁移的判断标准，而不是把「用责任链」当成无条件正确，同时理解项目为何弃用集中式校验或分支堆叠。",
+        "key_points": [
+          "核心收益被明确表述为「新增规则=新增一个 Handler，不动既有代码」，扩展成本从修改既有方法体转为新增文件",
+          "与集中式校验/条件分支的取舍：后者在规则少且稳定时更直观、链路更短，但无法承载持续增长与可复用顺序",
+          "代价面：规则分散到多个类后，链的全貌要靠 mark 与 order 聚合才能读出，调试需要理解容器收集与排序时机",
+          "顺序被显式化后成为约束：库存校验（order 20）必须排在参数校验（order 0）之后，顺序配置错误是这类结构的主要失效点",
+          "校验被放在事务内的前提是该阶段只做拦截不做补偿，与「订单失败后手工补偿」的方案形成对照"
+        ],
+        "claim_plans": [
+          {
+            "claim_goal": "让读者拿到可迁移的判断标准，而不是把「用责任链」当成无条件正确，同时理解项目为何弃用集中式校验或分支堆叠。",
+            "claim_type": "PROJECT_FACT",
+            "evidence_labels": [
+              "E6",
+              "E5",
+              "E8",
+              "E7",
+              "E11"
+            ],
+            "confidence": "CONFIRMED",
+            "assumptions": [],
+            "conditional": false
+          }
+        ],
+        "evidence_labels": [
+          "E6",
+          "E5",
+          "E8",
+          "E7",
+          "E11"
+        ],
+        "teaching_devices": [
+          "NONE"
+        ],
+        "depends_on": [
+          "S2"
+        ],
+        "evidence_state": "CONFIRMED",
+        "target_tokens": 470
+      }
+    ],
+    "unresolved_gaps": [
+      "ER4"
+    ],
+    "conflicts": [],
+    "answer_depth": "standard",
+    "decision_source": "llm"
+  },
+  "teaching": {
+    "decision_source": "llm",
+    "planning_error": null,
+    "primary_strategy": "PROBLEM_SOLUTION",
+    "secondary_strategies": [],
+    "core_mental_model": "责任链校验解决的不是「怎么校验」，而是「校验规则只增不减时，如何让每一次新增只发生在新增的代码里」——mark 决定它属于哪条链，order 决定它在链中的位置，Handler 决定它做什么，三者共同把顺序与扩展点都变成显式声明。",
+    "context_views": {
+      "workspace_evidence": 15,
+      "bound_evidence": 13,
+      "per_section": {}
+    },
+    "section_drafts": [],
+    "section_citations": {},
+    "section_execution": [],
+    "section_confidence": {},
+    "compression_events": [],
+    "revision_trace": null,
+    "output_budget": {
+      "max_output_tokens": 1705,
+      "preferred_sections": 3,
+      "allow_multi_pass": false,
+      "reason": "sized from the explanation plan"
+    },
+    "failed_section_ids": [],
+    "partial_answer": false,
+    "writer_reasoning_reserve": {
+      "tokens": 4352,
+      "estimated": false,
+      "reason": "rounded reasoning_tokens p95 from 64 live high-effort writer calls"
+    },
+    "depth_decision": {
+      "answer_depth": "standard",
+      "decision_source": "default",
+      "preferred_sections": 3,
+      "hard_max_sections": 4
+    },
+    "section_budget": {
+      "preferred_sections": 3,
+      "hard_max_sections": 4,
+      "evidence_backed_requirement_ids": [
+        "ER1",
+        "ER2",
+        "ER3",
+        "ER5"
+      ],
+      "target_sections": 3,
+      "gap_code": null,
+      "gap_reason": null,
+      "unsupported_requirement_ids": []
+    },
+    "locate": {
+      "locate_requirement_ids": [],
+      "locate_evidence_labels": [],
+      "locate_fast_path_used": false,
+      "locate_fast_path_skip_reason": "not a deterministic locate request"
+    }
+  }
+}
+
+================ DevContext Performance ================
+
+Query:            项目为何使用责任链校验
+Mode / depth:     teach / None
+Sample:           first_sample
+Total latency:    53.7 s
+
+LLM calls:        5   (output tokens: 10684)
+Embedding calls:  5
+Retrieval actions:  5
+Sections:         0   (revisions: 0)
+
+--------------------------------------------------------
+Stage                          Round        Time       %
+--------------------------------------------------------
+evidence_planning                           7.9s   14.8%
+search_action_planning             0        5.8s   10.8%
+evidence_retrieval                 0        4.6s    8.6%
+coverage_check                     0       11.8s   21.9%
+explanation_planning                        8.6s   16.0%
+teaching_draft                             14.9s   27.8%
+--------------------------------------------------------
+attributed                                 53.7s
+unattributed                                0.0s    0.0%
+
+Top bottlenecks:
+  1. teaching_draft                  14.9s   27.8%
+  2. coverage_check                  11.8s   21.9%
+  3. explanation_planning             8.6s   16.0%
+  4. evidence_planning                7.9s   14.8%
+  5. search_action_planning           5.8s   10.8%
+
+========================================================
+Performance report written to artifacts\perf-fullchain\q1.json

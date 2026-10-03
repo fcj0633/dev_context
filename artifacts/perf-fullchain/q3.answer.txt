@@ -1,0 +1,97 @@
+Question:
+用户模块，用户表分库分表键为何要使用用户名
+
+Evidence Plan: llm
+  ER1. 用户表分库分表配置中实际采用的分片键 — CODE
+  ER2. 用户模块对用户表的读写路径是否按用户名进行路由或过滤 — CODE
+  ER3. 项目内关于用户表分片键选型的说明 — DOCUMENT
+  ER4. 用户名作为分片键与业务约束及数据特征的匹配关系 — ANY
+  ER5. 其他候选分片键相比用户名不被采用的原因 — ANY
+
+Route: MIXED (rules)
+Sufficiency: insufficient
+Requirements: ER1 PARTIAL, ER2 MISSING, ER3 SATISFIED, ER4 SATISFIED, ER5 PARTIAL
+Retries: 1
+
+Answer:
+用户模块把 `t_user` 的分片键定为 username，直接原因是"分片键必须与查询键一致"这条硬约束在用户模块恰好落在用户名上：登录、注册查重、查资料、查乘车人这些关键路径都以用户名为入口，分片键与它对齐才能单分片命中；换成 id，这些路径会退化成广播查询 [E11][E13][E14]。
+
+## 分片路由的硬约束：查询条件决定能不能定位到某张表
+
+一句话核心模型：**分片算法只吃分片键的值，查询条件里没有这个值，路由就从"定位一张表"退化成"问所有表"。**
+
+把它拆成三个概念来看。
+
+**精确定位是怎么算出来的。** `CustomDbHashModShardingAlgorithm#doSharding` 接收 `PreciseShardingValue`，用 `suffix = |hash| % shardingCount / tableShardingCount` 算出目标后缀，再从可用目标里挑出以该后缀结尾的那一个 [E20]；按类注释的说法，就是 sharding-count 先分库、table-sharding-count 再分表 [E2]。整条计算链的输入只有 `shardingValue` 携带的那个分片键值——没有它，suffix 无从算起。
+
+**哈希本身也只对键值做功。** `hashShardingValue` 把入参的 `hashCode` 取绝对值 [E5]。项目里按 username 做哈希取模并不只出现在分片算法里：`UserReuseUtil.hashShardingIdx` 就是 `Math.abs(username.hashCode() % USER_REGISTER_REUSE_SHARDING_COUNT)`，用来算"已注销用户名复用集合"的分片位置 [E1]，和常量定义 `user-reuse:{hash(username)%1024}` 的写法一致 [E3]。
+
+**拿不到键值时发生什么。** 同一个算法类的 `RangeShardingValue` 分支直接 `return availableTargetNames`，把全部可用目标原样交出去 [E4]。这正是"无法裁剪"的实现形态：算不出唯一的 suffix，就只能承认自己覆盖所有分片。文档把这条机制概括成"分片规则是按分片键路由到具体表，否则 ShardingSphere 无法定位，只能广播" [E12][E16]。
+
+所以选分片键不是挑一个唯一性最好的列（id 显然更"像主键"），而是挑一个**查询条件里一定出现的列**。这是硬约束，不是偏好。
+
+## 用户模块的查询入口为什么收敛在用户名
+
+先看访问模式。`t_user` 的表设计说明把 username 直接标为分片键，理由是"登录、注册、查询都从 username 出发，保证关键路径单分片命中" [E13]；查询清单也给出同样的结论——`t_user` 的主要查询方式是按 username 查，id 只在查详情时用，且不是热点 [E11]。
+
+但真正让 username 站得住的，是它在整个模块里不只是 `t_user` 的查询键，而是**整个用户模块的操作坐标**：
+
+- 注册分布式锁前缀是 `lock:user-register:{username}`，注销锁是 `user-deletion:{username}`，乘车人列表缓存是 `user-passenger-list:{username}`，乘车人写操作锁是 `lock:user-passenger:{username}` [E3]；
+- 用户服务对外的远程接口签名也是 `listPassengerQueryByIds(username, ids)`——票务服务按"当前登录用户名 + 乘车人 ID"取实名信息 [E6]；
+- 连用户名复用的分片工具，方法签名都是 `hashShardingIdx(String username)` [E7][E1]。
+
+因此可以这样推导：缓存键、锁键、远程调用参数、复用集合的分片位置全都锚在 username 上 [E3][E6][E7]，那么把 `t_user` 的分片键也设成 username，分片路由就和业务路由同构——一个登录请求带进来的 username，既能定位它的缓存和锁，也能定位它的数据落在哪个库、哪张表。反过来，如果分片键换成 id，这些已经带着 username 的路径就必须先想办法把 username 换成 id，再多吃一次查询或者一次广播 [E14]。
+
+`t_passenger` 同样按 username 分片，理由是一致性覆盖："乘车人总是跟着某个会员查询，与用户同分片可避免跨库查询" [E14]；对外接口也是按当前用户名发起的 [E6]。这是同一个坐标在相邻表上的延伸。
+
+还有一层是物理可行性：`UNIQUE (username, deletion_time)` 保证未注销时用户名唯一 [E13]，配合哈希取模可以把数据均匀打散 [E2]；文档也把"按用户名哈希天然均匀"列为用户表分片的理由之一 [E12]。
+
+至于代价——按 id 查用户会广播——项目里确实存在这类查询（`queryUserByUserId` 只能扫全部分片），但它不是热点 [E11]。这笔账放到下一节算。
+
+## 换成 id 分片会怎样，以及手机号/邮箱路径如何补偿
+
+把三个候选放在一起比较，差异立刻显出来。
+
+**按 username 分片**：登录、查资料、查乘车人都是单分片命中 [E11][E13][E14]。这是当前方案。
+
+**按 id 分片**：问题不在数据分布，而在入口。登录这个入口只有 username / phone / mail 三种输入，没有 id [E14]；按 id 分片会让登录时的读请求扩散到全部分片 [E14]，历史文档也把这类"按非分片键查询"的后果称为读扩散，并把它列为登录难题的来源 [E18]。文档给出的具体代价形态是 `queryUserByUserId` 只能扫全部分片 [E11]，而广播的规模在分片表清单里是可以数出来的——文档描述为广播到 32 张表查一遍 [E16]。
+
+**手机号 / 邮箱登录路径**：项目没有把 `t_user` 改成多键分片，而是给每条入口单独建一张按各自字段分片的映射表。`t_user_phone` 按 phone 分片，职责是 `phone → username` 以及手机号唯一性；手机号登录时先路由到该手机号所在分片拿到 username，再按 username 路由主表，两次单分片查询、无读扩散 [E15][E12]。`t_user_mail` 同理按 mail 分片 [E12][E16]，查询清单里也把这两张表的存在目的写成"它存在的唯一目的就是按手机号/邮箱查" [E11]。
+
+为什么这是更好的选择，而不是把主表做成复合键？文档显示复合分片键在本项目并非不可行——`t_order` 用了 `user_id + order_sn`、`t_pay` 用了 `order_sn + pay_sn`，前提是"两个维度都是热查询" [E11]。用户模块的形态不同：每条登录路径各自只需要一个键就能唯一命中，把三个入口拆成三张单入口表，换来的是每条路径都保持单分片；代价是表数量增加、注册与改绑手机号/邮箱时要额外维护映射行（这一条是从映射表的职责反推的，不是文档原文）。文档在教学上也建议把"按 id 分片""按 id_card 分片"当反例对比，用来理解分片键由查询入口决定，而不是由主键决定 [E10]。
+
+**关于一份历史文档**：`12306学习开发文档` 里写的是"用户按用户 ID 分片"，并把映射表/广播描述为应对读扩散的手段 [E18]。这与当前设计文档明确写出的"`t_user` 按 username 分片" [E11][E16]、以及表设计说明中 username 标注为分片键 [E13] 是冲突的。回答时应以当前设计为准；那份历史文档的价值在于它把"读扩散"这个代价讲清楚了。
+
+**证据缺口集中说明**：现有材料里没有直接检索到 `shardingsphere-config.yaml` 中 `t_user` 绑定 username 分片键的配置片段，因此"`t_user` 按 username 分片"这一事实主要来自当前设计文档 [E11][E16] 与表设计说明 [E13]；实现层能确认的是分片算法按分片键值计算路由 [E2][E20][E5]，以及项目里存在按 username 哈希取模的工具实现 [E1]。另外历史文档与当前设计在"按 ID 分片"上存在上述冲突 [E18]，如果以历史文档为准，结论会不同。
+
+Explanation Strategy:
+CAUSE_EFFECT
+
+Mental Model:
+分片键不是选主键，而是选最频繁、最关键的查询入口——用户模块的入口收敛在 username，所以 t_user 按 username 分片。
+
+Context:
+  Workspace evidence: 23
+  Bound evidence: 16
+
+Generation:
+  0 sections
+  0 targeted revision
+
+Sources:
+[E11] 4-原项目对标学习/01-全局/数据库设计学习路线.md > 数据库设计学习路线 > L5 · 分库分表设计 > Q2 · 分片键怎么选
+[E13] 0-历史文档/1-用户模块文档/登录注册功能设计与用户表设计.md > 登录注册功能设计与用户表设计（学习文档） > 三、用户表设计详解（为什么这样设计） > 3.2 t_user：会员主表
+[E14] 0-历史文档/1-用户模块文档/登录注册功能设计与用户表设计.md > 登录注册功能设计与用户表设计（学习文档） > 二、业务难点与设计决策 > 2.1 亿级数据量 → 分库分表
+[E20] services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/config/sharding/CustomDbHashModShardingAlgorithm.java:31-38 — CustomDbHashModShardingAlgorithm#doSharding
+[E2] services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/config/sharding/CustomDbHashModShardingAlgorithm.java:17-53 — CustomDbHashModShardingAlgorithm#CustomDbHashModShardingAlgorithm
+[E5] services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/config/sharding/CustomDbHashModShardingAlgorithm.java:45-47 — CustomDbHashModShardingAlgorithm#hashShardingValue
+[E1] services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/common/toolkit/UserReuseUtil.java:13-15 — UserReuseUtil#hashShardingIdx
+[E3] services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/common/constant/RedisKeyConstant.java:6-22 — RedisKeyConstant#RedisKeyConstant
+[E4] services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/config/sharding/CustomDbHashModShardingAlgorithm.java:40-43 — CustomDbHashModShardingAlgorithm#doSharding
+[E12] 6-面试复习/模块3-技术专题.md > 模块三 · 技术专题 > 3.6 数据库 🟡 > 【展开二：分片策略】
+[E16] 6-面试复习/模块2-核心链路深挖.md > 模块二 · 核心链路深挖 > 2.4 用户链路 🟡 > ③ 系统实现 > 分库分表（`shardingsphere-config.yaml`）
+[E6] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/remote/UserRemoteService.java:14-21 — UserRemoteService#UserRemoteService
+[E7] services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/common/toolkit/UserReuseUtil.java:8-16 — UserReuseUtil#UserReuseUtil
+[E18] 0-历史文档/1-用户模块文档/12306学习开发文档.md > 12306 学习项目开发准备文档（开发前规划） > 三、数据库设计 > 3.2 分库分表说明
+[E15] 0-历史文档/1-用户模块文档/登录注册功能设计与用户表设计.md > 登录注册功能设计与用户表设计（学习文档） > 三、用户表设计详解（为什么这样设计） > 3.3 t_user_phone：手机号映射表
+[E10] 0-历史文档/1-用户模块文档/乘车人管理功能分析与设计.md > 乘车人管理功能分析与设计 > 五、难点与设计决策 > 5.1 分片键为什么选 username（决策要点）

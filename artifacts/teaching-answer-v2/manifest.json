@@ -1,0 +1,88 @@
+{
+  "timestamp": "2026-10-03T10:48:36.253833+00:00",
+  "baseline_commit": "4a3a3f2",
+  "implementation_commit": "ce91061af460b68d3cd2ac61880ddd0c3074b3a5",
+  "plan_schema_version": "teaching_v2",
+  "answer_mode": "teach",
+  "depth": "detailed",
+  "top_k": 12,
+  "model": "deepseek-flash",
+  "answer_model": null,
+  "answer_planner_model": null,
+  "reasoning_effort": "high",
+  "context_window": 131072,
+  "max_output_tokens": 32768,
+  "embedding_model": "text-embedding-v4",
+  "embedding_dimensions": 1024,
+  "quality_judge": false,
+  "samples_per_question": 1,
+  "runs": [
+    {
+      "case": "q1",
+      "exit_code": 0,
+      "status": "complete",
+      "total_latency_ms": 110299.965,
+      "llm_calls": 7,
+      "sections_planned": 8,
+      "sections_emitted": 8,
+      "stream_retry_count": 0
+    },
+    {
+      "case": "q3",
+      "exit_code": 0,
+      "status": "complete",
+      "total_latency_ms": 124760.439,
+      "llm_calls": 7,
+      "sections_planned": 9,
+      "sections_emitted": 9,
+      "stream_retry_count": 0
+    }
+  ],
+  "v1_source_directory": "D:\\Java-learning\\DevContext\\artifacts\\single-stream-experiment",
+  "config": {
+    "deepseek_base_url": "https://api.deepseek.com",
+    "deepseek_model": "deepseek-flash",
+    "deepseek_planner_model": null,
+    "deepseek_answer_planner_model": null,
+    "deepseek_answer_model": null,
+    "deepseek_reviewer_model": null,
+    "deepseek_context_window": 131072,
+    "deepseek_max_output_tokens": 32768,
+    "embedding_model": "text-embedding-v4",
+    "embedding_dimensions": 1024,
+    "embedding_transport": "curl",
+    "repository_name": "my12306",
+    "source_policy_path": null
+  },
+  "v1_sample_commit": "2ddb45a0fa69656a188af33fa59a3c065e69f1c7",
+  "balance_preflight": {
+    "status": "available",
+    "is_available": true
+  },
+  "index_before": [
+    {
+      "source_type": "CODE",
+      "chunks": 538,
+      "fingerprint": "3819490ed3530ab89095dbd073fa90b7"
+    },
+    {
+      "source_type": "DOCUMENT",
+      "chunks": 2574,
+      "fingerprint": "476fb108a090c14733b95ed9369b4336"
+    }
+  ],
+  "index_matches_v1": true,
+  "index_after": [
+    {
+      "source_type": "CODE",
+      "chunks": 538,
+      "fingerprint": "3819490ed3530ab89095dbd073fa90b7"
+    },
+    {
+      "source_type": "DOCUMENT",
+      "chunks": 2574,
+      "fingerprint": "476fb108a090c14733b95ed9369b4336"
+    }
+  ],
+  "index_unchanged": true
+}

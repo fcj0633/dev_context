@@ -1,0 +1,85 @@
+{
+  "timestamp": "2026-10-03T07:46:15.436836+00:00",
+  "baseline_commit": "63c6380",
+  "implementation_commit": "2ddb45a0fa69656a188af33fa59a3c065e69f1c7",
+  "config": {
+    "deepseek_base_url": "https://api.deepseek.com",
+    "deepseek_model": "deepseek-flash",
+    "deepseek_planner_model": null,
+    "deepseek_answer_planner_model": null,
+    "deepseek_answer_model": null,
+    "deepseek_reviewer_model": null,
+    "deepseek_context_window": 131072,
+    "deepseek_max_output_tokens": 32768,
+    "embedding_model": "text-embedding-v4",
+    "embedding_dimensions": 1024,
+    "embedding_transport": "curl",
+    "repository_name": "my12306",
+    "source_policy_path": null
+  },
+  "index_before": [
+    {
+      "source_type": "CODE",
+      "chunks": 538,
+      "fingerprint": "3819490ed3530ab89095dbd073fa90b7"
+    },
+    {
+      "source_type": "DOCUMENT",
+      "chunks": 2574,
+      "fingerprint": "476fb108a090c14733b95ed9369b4336"
+    }
+  ],
+  "answer_mode": "teach",
+  "depth": "detailed",
+  "top_k": 12,
+  "teaching_reasoning_effort": "high",
+  "samples_per_question_per_mode": 1,
+  "quality_ab": false,
+  "runs": [
+    {
+      "name": "q1-multi_pass",
+      "question": "详细解释当前购票占座的数据一致性是如何保证的",
+      "mode": "multi_pass",
+      "exit_code": 0,
+      "total_latency_ms": 401888.794,
+      "completion_status": "legacy_result"
+    },
+    {
+      "name": "q1-single_stream",
+      "question": "详细解释当前购票占座的数据一致性是如何保证的",
+      "mode": "single_stream",
+      "exit_code": 0,
+      "total_latency_ms": 111350.438,
+      "completion_status": "complete"
+    },
+    {
+      "name": "q3-single_stream",
+      "question": "详细解释当前订单和支付链路是如何保证幂等的",
+      "mode": "single_stream",
+      "exit_code": 0,
+      "total_latency_ms": 101097.413,
+      "completion_status": "partial"
+    },
+    {
+      "name": "q3-multi_pass",
+      "question": "详细解释当前订单和支付链路是如何保证幂等的",
+      "mode": "multi_pass",
+      "exit_code": 0,
+      "total_latency_ms": 52937.796,
+      "completion_status": "legacy_result"
+    }
+  ],
+  "index_after": [
+    {
+      "source_type": "CODE",
+      "chunks": 538,
+      "fingerprint": "3819490ed3530ab89095dbd073fa90b7"
+    },
+    {
+      "source_type": "DOCUMENT",
+      "chunks": 2574,
+      "fingerprint": "476fb108a090c14733b95ed9369b4336"
+    }
+  ],
+  "index_unchanged": true
+}

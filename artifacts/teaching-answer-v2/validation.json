@@ -1,0 +1,11 @@
+{
+  "baseline_commit": "4a3a3f2",
+  "baseline_tests_passed": 531,
+  "v2_tests_passed": 584,
+  "ordinary_tests_passed": 583,
+  "postgresql_integration_tests_passed": 1,
+  "integration_enabled": true,
+  "duration_seconds": 7.23,
+  "diff_check": "passed",
+  "new_online_judge": false
+}

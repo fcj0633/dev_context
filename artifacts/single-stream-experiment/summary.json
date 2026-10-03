@@ -1,0 +1,55 @@
+{
+  "baseline_commit": "63c6380",
+  "sampled_implementation_commit": "2ddb45a0fa69656a188af33fa59a3c065e69f1c7",
+  "index_unchanged": true,
+  "samples": [
+    {
+      "name": "q1-multi_pass",
+      "total_latency_ms": 401888.794,
+      "generation_latency_ms": 356814.49540005997,
+      "llm_calls": 17,
+      "generation_llm_calls": 14,
+      "status": "完成；Composer 回退拼接",
+      "invalid_citations": [],
+      "zero_valid_citation": false,
+      "first_content_token_ms": null,
+      "first_section_ready_ms": null
+    },
+    {
+      "name": "q1-single_stream",
+      "total_latency_ms": 111350.438,
+      "generation_latency_ms": 89111.45729996497,
+      "llm_calls": 5,
+      "generation_llm_calls": 2,
+      "status": "complete，11/11",
+      "invalid_citations": [],
+      "zero_valid_citation": false,
+      "first_content_token_ms": 102365.66380003933,
+      "first_section_ready_ms": 103416.46730003413
+    },
+    {
+      "name": "q3-single_stream",
+      "total_latency_ms": 101097.413,
+      "generation_latency_ms": 47278.6647999892,
+      "llm_calls": 7,
+      "generation_llm_calls": 2,
+      "status": "partial，5/10",
+      "invalid_citations": [],
+      "zero_valid_citation": false,
+      "first_content_token_ms": 87323.69420002215,
+      "first_section_ready_ms": 88876.19629997062
+    },
+    {
+      "name": "q3-multi_pass",
+      "total_latency_ms": 52937.796,
+      "generation_latency_ms": 1118.0507999961264,
+      "llm_calls": 7,
+      "generation_llm_calls": 2,
+      "status": "失败；HTTP 402",
+      "invalid_citations": [],
+      "zero_valid_citation": true,
+      "first_content_token_ms": null,
+      "first_section_ready_ms": null
+    }
+  ]
+}

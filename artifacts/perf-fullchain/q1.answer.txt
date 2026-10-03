@@ -1,0 +1,76 @@
+Question:
+项目为何使用责任链校验
+
+Evidence Plan: llm
+  ER1. 项目中存在责任链校验的实现 — CODE
+  ER2. 项目材料中说明了选择责任链校验的设计原因 — ANY
+  ER3. 责任链校验对应的校验需求特征 — ANY
+  ER4. 责任链校验在项目中被触发和集成的方式 — CODE
+  ER5. 项目中对其他校验实现方式的取舍说明 — ANY
+
+Route: MIXED (rules)
+Sufficiency: enough
+Requirements: ER1 SATISFIED, ER2 SATISFIED, ER3 SATISFIED, ER4 MISSING, ER5 SATISFIED
+Retries: 0
+
+Answer:
+用户真正要问的是：**为什么这里不写一段 if-else，而要为校验单独搭一套责任链？** 一句话答案：因为该项目的校验不是一次性代码，而是一组「持续追加、顺序自带语义、在多个入口反复出现」的规则；责任链把「顺序」和「扩展点」从方法体里搬出来，变成能声明的结构。
+
+## 一、校验规则只会变多，而 if-else 的代价随规则数增长
+
+设计文档记录的问题形状很具体：注册校验项会持续增加（参数非空 → 用户名可用 → 证件黑名单 → 未来实名核验/风控），而 if-else 堆叠带来三项代价——顺序难以控制与复用、新增校验要改 Service 方法体（违反开闭原则）、校验逻辑与业务逻辑耦合导致难单测 [E6]。这是历史设计文档中的问题陈述，不是当前运行时的行为记录，但它解释了后来代码为何长成那个样子。
+
+关键在于这个形状不是注册独有的。车票查询的组合类接口流程被写成「责任链校验 → 四层组装 → 返回」[E11]；同一条链路的设计文档明确预期校验还会演进（预售期、城市兼容、风控），并点出「顺序即优先级」：先保证参数齐全，再做业务规则判断，最后做重一点的依赖查询（存在性）[E9]。购票前有 4 道校验，教学目标是能说清「分别拦什么、按什么顺序执行」，以及**新增一条校验要改哪里** [E12]。查询链路则是「责任链(3环) → 站码转城市 → 城市对取车次列表 → …」[E13]。
+
+把这几处叠起来看，问题的形状是「多段、有序、可增」。顺序本身就是语义：先查库再报空参，既浪费查询又让错误提示不准 [E9]。所以需要的是**一种结构**，而不是一段写得更长的代码。
+
+## 二、mark 分组、order 排序、Handler 承载规则
+
+这套责任链的最小机制，用三个方法就能说完整。`AbstractChainHandler<T>` 只声明三件事：`mark()` 表明属于哪条链，`order()` 表明在链中的位置，`handler(param)` 表明做什么 [E1][E2]。规则内容与规则位置因此被写在同一处。
+
+容器 `AbstractChainContext` 实现 `ApplicationContextAware` 与 `CommandLineRunner`，内部持有 `Map<String, List<AbstractChainHandler>> container`：启动后按 `mark` 收集全部 Handler、按 `order` 排序，业务侧只需调用 `handler(mark, param)` 顺序执行 [E4][E5]。值得注意它为什么用 `CommandLineRunner` + `ApplicationContext` 收集，而不是构造注入——文档注释给出的理由是这样可以避免 Handler 反向依赖 Service 造成的构造循环 [E4]。这说明「扩展点独立」与「依赖方向」在这一个设计里被一并处理了。
+
+于是「新增一条校验」在代码上就是「新增一个类」：`UserRegisterParamNotNullChainHandler` 实现注册链过滤器，`order=0` 表示它最先执行 [E3]。
+
+从 E1/E2 与 E4/E5 的文件路径看，user-services 与 ticket-services 各有一份同形态实现——**因此**这两条链共享的是同一套设计形态，而不是同一个类实例。这一点也解释了为什么车票侧的设计文档会写「用户模块已经实现并验证过同一套责任链容器，直接复用其设计形态」[E9]。
+
+有一处细节现有证据无法对齐：注册链的环数，[E3] 的注释写「注册责任链 1/3」，而 [E10] 的链路概览写「注册：责任链（4 环）」；两者不一致，且各链的具体规则条数与最终顺序无法从现有证据确认。
+
+## 三、收益与代价：什么时候这套结构是赚的
+
+收益在文档里被表述得很干脆：把每一步校验拆成独立 Handler，按 mark 分组、按 order 排序、顺序执行，结果就是**新增规则 = 新增一个 Handler，不动既有代码** [E6]。扩展成本从「修改既有方法体」变成了「新增文件」。
+
+反过来，什么情况下不赚？规则少且稳定时，集中式校验或条件分支更直观、调用链路更短、读一遍就懂；责任链的价值只在规则持续增长、且这套顺序需要在多处复用时才体现出来 [E6]。这是判断标准，不是无条件正确的架构原则。
+
+代价有三层。第一，规则分散到多个类之后，链的全貌只有把 `mark` 与 `order` 聚合起来才读得出，理解容器的收集与排序时机是调试前提 [E4][E5]。第二，顺序从隐式变成显式约束，也就变成了可能配错的约束——教学材料直接要求回答「库存校验（order 20）为什么必须排在参数校验（order 0）之后」[E8]，顺序配置错误正是这类结构的主要失效点。第三，校验阶段的职责边界：它只做拦截、不产生需要补偿的中间态，这是它可以被放进事务内的前提；[E7] 提出的对照问题（把「订单失败后的手工补偿」作为方案是否比回滚更危险）正是从这一点切入——**如果**校验阶段真的只做拦截不做写入，那么它与补偿方案的风险差异就来自「是否需要人工介入」，而这一结论需要以该前提成立为准。
+
+最后是边界：责任链解决的是「加规则、定顺序」，不解决规则本身怎么写，也不解决跨服务一致性；组合类接口在责任链之后仍有四层组装 [E11]。把它当成校验编排的容器，而不是校验逻辑的替代品，才是它在这个项目里的定位。
+
+Explanation Strategy:
+PROBLEM_SOLUTION
+
+Mental Model:
+责任链校验解决的不是「怎么校验」，而是「校验规则只增不减时，如何让每一次新增只发生在新增的代码里」——mark 决定它属于哪条链，order 决定它在链中的位置，Handler 决定它做什么，三者共同把顺序与扩展点都变成显式声明。
+
+Context:
+  Workspace evidence: 15
+  Bound evidence: 13
+
+Generation:
+  0 sections
+  0 targeted revision
+
+Sources:
+[E6] 0-历史文档/1-用户模块文档/v1到v2升级功能分析与设计.md > 用户服务 v1 → v2 升级：详细功能分析与设计 > 四、责任链与黑名单：注册校验框架（批次 2） > 4.1 设计原因
+[E11] 0-历史文档/2-车票模块文档/车票查询读链路功能分析与设计（P0教学版）.md > 车票查询读链路功能分析与设计（P0 教学版） > 四、业务流程与作用链 > 4.1 三类流程概览
+[E9] 0-历史文档/2-车票模块文档/车票查询读链路功能分析与设计（P0教学版）.md > 车票查询读链路功能分析与设计（P0 教学版） > 五、难点与设计决策 > 5.8 责任链三段校验：为什么不是一堆 if
+[E12] 0-历史文档/2-车票模块文档/P1购票写链路代码阅读指导.md > 只跑订单服务测试 > 4. 主线二：购票责任链 > 4.1 目标
+[E13] 6-面试复习/模块2-核心链路深挖.md > 模块二 · 核心链路深挖 > 2.2 查询链路与缓存设计 🔴 > ③ 系统实现 > 执行主线
+[E1] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/common/chain/AbstractChainHandler.java:6-22 — AbstractChainHandler#AbstractChainHandler
+[E2] services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/common/chain/AbstractChainHandler.java:6-16 — AbstractChainHandler#AbstractChainHandler
+[E4] services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/common/chain/AbstractChainContext.java:21-51 — AbstractChainContext#AbstractChainContext
+[E5] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/common/chain/AbstractChainContext.java:18-50 — AbstractChainContext#AbstractChainContext
+[E3] services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/service/handler/filter/user/UserRegisterParamNotNullChainHandler.java:12-44 — UserRegisterParamNotNullChainHandler#UserRegisterParamNotNullChainHandler
+[E10] 6-面试复习/模块1-项目全景.md > 模块一 · 项目全景 > 1.3 四条核心链路 🔴 > 1.3.1 用户链路 🟡 > 【主线】
+[E8] 0-历史文档/2-车票模块文档/P1购票写链路代码阅读指导.md > 只跑订单服务测试 > 4. 主线二：购票责任链 > 4.5 验证任务
+[E7] 0-历史文档/2-车票模块文档/P1购票写链路代码阅读指导.md > 只跑订单服务测试 > 8. 横向专题：事务、锁、口径衔接 > 8.4 验证任务

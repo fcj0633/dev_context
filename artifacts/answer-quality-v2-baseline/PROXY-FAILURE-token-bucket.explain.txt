@@ -1,0 +1,1173 @@
+Question:
+详细解释项目的余票桶是如何设计的
+
+Evidence Plan: llm
+  ER1. 项目中余票桶的核心数据结构与字段定义 — CODE
+  ER2. 余票桶的创建、初始化及与业务对象的关联方式 — BOTH
+  ER3. 余票桶的扣减与释放或回滚逻辑 — CODE
+  ER4. 余票桶在并发场景下的一致性保障机制 — CODE
+  ER5. 余票桶的存储与读写路径 — BOTH
+  ER6. 余票桶对业务约束与库存一致性的处理 — CODE
+
+Route: MIXED (rules)
+Sufficiency: insufficient
+Requirements: ER1 missing, ER2 missing, ER3 missing, ER4 missing, ER5 missing, ER6 missing
+Retries: 1
+
+Answer:
+当前没有检索到足够的项目上下文，无法可靠回答该问题。 当前仍缺少：项目中余票桶的核心数据结构与字段定义；余票桶的创建、初始化及与业务对象的关联方式；余票桶的扣减与释放或回滚逻辑；余票桶在并发场景下的一致性保障机制；余票桶的存储与读写路径；余票桶对业务约束与库存一致性的处理。
+
+Sources:
+(none)
+
+Trace:
+{
+  "route": {
+    "query_type": "MIXED",
+    "decision_source": "rules",
+    "reason": "union of evidence source requirements",
+    "code_signals": [],
+    "doc_signals": []
+  },
+  "rounds": [
+    {
+      "round_index": 0,
+      "retrieval_query": "余票桶 数据结构 类 定义 字段 数量 状态 容量 版本 业务标识 | 余票桶 创建 初始化 关联 业务对象 业务维度 规则 | 余票桶 扣减 释放 回滚 触发条件 判断 数量变更 失败处理 | 余票桶 并发 一致性 锁 版本 事务 保障机制 | 余票桶 存储 读写 缓存 数据库 持久化 代码路径 | 余票桶 库存约束 超卖 少卖 一致性 校验 规则",
+      "retrieval_query_type": "MIXED",
+      "selected_chunks": [],
+      "sufficiency": {
+        "enough": false,
+        "missing_aspects": [
+          {
+            "source_type": "CODE",
+            "description": "缺少直接相关的 CODE 证据",
+            "sub_question_id": "ER1"
+          },
+          {
+            "source_type": "MIXED",
+            "description": "缺少直接相关的 CODE 证据",
+            "sub_question_id": "ER2"
+          },
+          {
+            "source_type": "MIXED",
+            "description": "缺少直接相关的 DOCUMENT 证据",
+            "sub_question_id": "ER2"
+          },
+          {
+            "source_type": "CODE",
+            "description": "缺少直接相关的 CODE 证据",
+            "sub_question_id": "ER3"
+          },
+          {
+            "source_type": "CODE",
+            "description": "缺少直接相关的 CODE 证据",
+            "sub_question_id": "ER4"
+          },
+          {
+            "source_type": "MIXED",
+            "description": "缺少直接相关的 CODE 证据",
+            "sub_question_id": "ER5"
+          },
+          {
+            "source_type": "MIXED",
+            "description": "缺少直接相关的 DOCUMENT 证据",
+            "sub_question_id": "ER5"
+          },
+          {
+            "source_type": "CODE",
+            "description": "缺少直接相关的 CODE 证据",
+            "sub_question_id": "ER6"
+          }
+        ],
+        "reason": "no direct project evidence reached the final context",
+        "decision_source": "rules",
+        "statuses": [
+          {
+            "sub_question_id": "ER1",
+            "satisfied": false,
+            "reason": "所需证据来源尚未完整进入最终 Context"
+          },
+          {
+            "sub_question_id": "ER2",
+            "satisfied": false,
+            "reason": "所需证据来源尚未完整进入最终 Context"
+          },
+          {
+            "sub_question_id": "ER3",
+            "satisfied": false,
+            "reason": "所需证据来源尚未完整进入最终 Context"
+          },
+          {
+            "sub_question_id": "ER4",
+            "satisfied": false,
+            "reason": "所需证据来源尚未完整进入最终 Context"
+          },
+          {
+            "sub_question_id": "ER5",
+            "satisfied": false,
+            "reason": "所需证据来源尚未完整进入最终 Context"
+          },
+          {
+            "sub_question_id": "ER6",
+            "satisfied": false,
+            "reason": "所需证据来源尚未完整进入最终 Context"
+          }
+        ]
+      },
+      "rewrite": null,
+      "rewrite_error": null,
+      "rewrites": []
+    },
+    {
+      "round_index": 1,
+      "retrieval_query": "详细解释项目的余票桶是如何设计的 项目中余票桶的核心数据结构与字段定义 缺少直接相关的 CODE 证据 | 详细解释项目的余票桶是如何设计的 余票桶的创建、初始化及与业务对象的关联方式 缺少直接相关的 CODE 证据 缺少直接相关的 DOCUMENT 证据 | 详细解释项目的余票桶是如何设计的 余票桶的扣减与释放或回滚逻辑 缺少直接相关的 CODE 证据 | 详细解释项目的余票桶是如何设计的 余票桶在并发场景下的一致性保障机制 缺少直接相关的 CODE 证据",
+      "retrieval_query_type": "MIXED",
+      "selected_chunks": [],
+      "sufficiency": {
+        "enough": false,
+        "missing_aspects": [
+          {
+            "source_type": "CODE",
+            "description": "缺少直接相关的 CODE 证据",
+            "sub_question_id": "ER1"
+          },
+          {
+            "source_type": "MIXED",
+            "description": "缺少直接相关的 CODE 证据",
+            "sub_question_id": "ER2"
+          },
+          {
+            "source_type": "MIXED",
+            "description": "缺少直接相关的 DOCUMENT 证据",
+            "sub_question_id": "ER2"
+          },
+          {
+            "source_type": "CODE",
+            "description": "缺少直接相关的 CODE 证据",
+            "sub_question_id": "ER3"
+          },
+          {
+            "source_type": "CODE",
+            "description": "缺少直接相关的 CODE 证据",
+            "sub_question_id": "ER4"
+          },
+          {
+            "source_type": "MIXED",
+            "description": "缺少直接相关的 CODE 证据",
+            "sub_question_id": "ER5"
+          },
+          {
+            "source_type": "MIXED",
+            "description": "缺少直接相关的 DOCUMENT 证据",
+            "sub_question_id": "ER5"
+          },
+          {
+            "source_type": "CODE",
+            "description": "缺少直接相关的 CODE 证据",
+            "sub_question_id": "ER6"
+          }
+        ],
+        "reason": "no direct project evidence reached the final context",
+        "decision_source": "rules",
+        "statuses": [
+          {
+            "sub_question_id": "ER1",
+            "satisfied": false,
+            "reason": "所需证据来源尚未完整进入最终 Context"
+          },
+          {
+            "sub_question_id": "ER2",
+            "satisfied": false,
+            "reason": "所需证据来源尚未完整进入最终 Context"
+          },
+          {
+            "sub_question_id": "ER3",
+            "satisfied": false,
+            "reason": "所需证据来源尚未完整进入最终 Context"
+          },
+          {
+            "sub_question_id": "ER4",
+            "satisfied": false,
+            "reason": "所需证据来源尚未完整进入最终 Context"
+          },
+          {
+            "sub_question_id": "ER5",
+            "satisfied": false,
+            "reason": "所需证据来源尚未完整进入最终 Context"
+          },
+          {
+            "sub_question_id": "ER6",
+            "satisfied": false,
+            "reason": "所需证据来源尚未完整进入最终 Context"
+          }
+        ]
+      },
+      "rewrite": null,
+      "rewrite_error": null,
+      "rewrites": []
+    }
+  ],
+  "retry_count": 1,
+  "final_sufficiency": {
+    "enough": false,
+    "missing_aspects": [
+      {
+        "source_type": "CODE",
+        "description": "缺少直接相关的 CODE 证据",
+        "sub_question_id": "ER1"
+      },
+      {
+        "source_type": "MIXED",
+        "description": "缺少直接相关的 CODE 证据",
+        "sub_question_id": "ER2"
+      },
+      {
+        "source_type": "MIXED",
+        "description": "缺少直接相关的 DOCUMENT 证据",
+        "sub_question_id": "ER2"
+      },
+      {
+        "source_type": "CODE",
+        "description": "缺少直接相关的 CODE 证据",
+        "sub_question_id": "ER3"
+      },
+      {
+        "source_type": "CODE",
+        "description": "缺少直接相关的 CODE 证据",
+        "sub_question_id": "ER4"
+      },
+      {
+        "source_type": "MIXED",
+        "description": "缺少直接相关的 CODE 证据",
+        "sub_question_id": "ER5"
+      },
+      {
+        "source_type": "MIXED",
+        "description": "缺少直接相关的 DOCUMENT 证据",
+        "sub_question_id": "ER5"
+      },
+      {
+        "source_type": "CODE",
+        "description": "缺少直接相关的 CODE 证据",
+        "sub_question_id": "ER6"
+      }
+    ],
+    "reason": "no direct project evidence reached the final context",
+    "decision_source": "rules",
+    "statuses": [
+      {
+        "sub_question_id": "ER1",
+        "satisfied": false,
+        "reason": "所需证据来源尚未完整进入最终 Context"
+      },
+      {
+        "sub_question_id": "ER2",
+        "satisfied": false,
+        "reason": "所需证据来源尚未完整进入最终 Context"
+      },
+      {
+        "sub_question_id": "ER3",
+        "satisfied": false,
+        "reason": "所需证据来源尚未完整进入最终 Context"
+      },
+      {
+        "sub_question_id": "ER4",
+        "satisfied": false,
+        "reason": "所需证据来源尚未完整进入最终 Context"
+      },
+      {
+        "sub_question_id": "ER5",
+        "satisfied": false,
+        "reason": "所需证据来源尚未完整进入最终 Context"
+      },
+      {
+        "sub_question_id": "ER6",
+        "satisfied": false,
+        "reason": "所需证据来源尚未完整进入最终 Context"
+      }
+    ]
+  },
+  "stop_reason": "empty",
+  "plan": {
+    "original_query": "详细解释项目的余票桶是如何设计的",
+    "intent_summary": "详细解释项目的余票桶是如何设计的",
+    "answer_depth": "detailed",
+    "decision_source": "llm",
+    "answer_goal": "详细解释项目的余票桶是如何设计的",
+    "explanation_strategy": "mixed",
+    "sub_questions": [
+      {
+        "id": "ER1",
+        "question": "项目中余票桶的核心数据结构与字段定义",
+        "purpose": "证据必须包含余票桶的类/结构/模型定义，以及数量、状态、容量、版本或业务标识等核心字段及其含义。",
+        "evidence_description": "证据必须包含余票桶的类/结构/模型定义，以及数量、状态、容量、版本或业务标识等核心字段及其含义。",
+        "preferred_sources": [
+          "CODE"
+        ],
+        "retrieval_query": "",
+        "importance": "CORE",
+        "temporal_scope": "CURRENT"
+      },
+      {
+        "id": "ER2",
+        "question": "余票桶的创建、初始化及与业务对象的关联方式",
+        "purpose": "证据必须包含余票桶在何时、依据什么规则被创建或初始化，以及它与哪些业务对象或业务维度建立关联。",
+        "evidence_description": "证据必须包含余票桶在何时、依据什么规则被创建或初始化，以及它与哪些业务对象或业务维度建立关联。",
+        "preferred_sources": [
+          "CODE",
+          "DOCUMENT"
+        ],
+        "retrieval_query": "",
+        "importance": "CORE",
+        "temporal_scope": "CURRENT"
+      },
+      {
+        "id": "ER3",
+        "question": "余票桶的扣减与释放或回滚逻辑",
+        "purpose": "证据必须包含余票扣减和释放或回滚的触发条件、核心判断条件、数量变更方式及失败处理。",
+        "evidence_description": "证据必须包含余票扣减和释放或回滚的触发条件、核心判断条件、数量变更方式及失败处理。",
+        "preferred_sources": [
+          "CODE"
+        ],
+        "retrieval_query": "",
+        "importance": "CORE",
+        "temporal_scope": "CURRENT"
+      },
+      {
+        "id": "ER4",
+        "question": "余票桶在并发场景下的一致性保障机制",
+        "purpose": "证据必须包含项目实际采用的并发控制或一致性保障方式及其作用范围。",
+        "evidence_description": "证据必须包含项目实际采用的并发控制或一致性保障方式及其作用范围。",
+        "preferred_sources": [
+          "CODE"
+        ],
+        "retrieval_query": "",
+        "importance": "CORE",
+        "temporal_scope": "CURRENT"
+      },
+      {
+        "id": "ER5",
+        "question": "余票桶的存储与读写路径",
+        "purpose": "证据必须包含余票桶数据实际存放的位置或介质，以及读取、更新、持久化或缓存同步的主要代码路径。",
+        "evidence_description": "证据必须包含余票桶数据实际存放的位置或介质，以及读取、更新、持久化或缓存同步的主要代码路径。",
+        "preferred_sources": [
+          "CODE",
+          "DOCUMENT"
+        ],
+        "retrieval_query": "",
+        "importance": "SUPPORTING",
+        "temporal_scope": "CURRENT"
+      },
+      {
+        "id": "ER6",
+        "question": "余票桶对业务约束与库存一致性的处理",
+        "purpose": "证据必须包含余票桶设计中对库存数量约束、超卖或少卖防护或库存不一致的处理规则与校验逻辑。",
+        "evidence_description": "证据必须包含余票桶设计中对库存数量约束、超卖或少卖防护或库存不一致的处理规则与校验逻辑。",
+        "preferred_sources": [
+          "CODE"
+        ],
+        "retrieval_query": "",
+        "importance": "SUPPORTING",
+        "temporal_scope": "CURRENT"
+      }
+    ]
+  },
+  "sub_question_traces": [
+    {
+      "sub_question_id": "ER1",
+      "question": "项目中余票桶的核心数据结构与字段定义",
+      "purpose": "证据必须包含余票桶的类/结构/模型定义，以及数量、状态、容量、版本或业务标识等核心字段及其含义。",
+      "query_type": "CODE",
+      "selected_chunks": []
+    },
+    {
+      "sub_question_id": "ER2",
+      "question": "余票桶的创建、初始化及与业务对象的关联方式",
+      "purpose": "证据必须包含余票桶在何时、依据什么规则被创建或初始化，以及它与哪些业务对象或业务维度建立关联。",
+      "query_type": "MIXED",
+      "selected_chunks": []
+    },
+    {
+      "sub_question_id": "ER3",
+      "question": "余票桶的扣减与释放或回滚逻辑",
+      "purpose": "证据必须包含余票扣减和释放或回滚的触发条件、核心判断条件、数量变更方式及失败处理。",
+      "query_type": "CODE",
+      "selected_chunks": []
+    },
+    {
+      "sub_question_id": "ER4",
+      "question": "余票桶在并发场景下的一致性保障机制",
+      "purpose": "证据必须包含项目实际采用的并发控制或一致性保障方式及其作用范围。",
+      "query_type": "CODE",
+      "selected_chunks": []
+    },
+    {
+      "sub_question_id": "ER5",
+      "question": "余票桶的存储与读写路径",
+      "purpose": "证据必须包含余票桶数据实际存放的位置或介质，以及读取、更新、持久化或缓存同步的主要代码路径。",
+      "query_type": "MIXED",
+      "selected_chunks": []
+    },
+    {
+      "sub_question_id": "ER6",
+      "question": "余票桶对业务约束与库存一致性的处理",
+      "purpose": "证据必须包含余票桶设计中对库存数量约束、超卖或少卖防护或库存不一致的处理规则与校验逻辑。",
+      "query_type": "CODE",
+      "selected_chunks": []
+    }
+  ],
+  "citations": {
+    "used_labels": [],
+    "invalid_labels": [],
+    "zero_valid": false,
+    "sources": []
+  },
+  "sections": {
+    "count": 0,
+    "lengths": [],
+    "max_chars": 0,
+    "over_budget": 0
+  },
+  "answer_plan": null,
+  "source_conflicts": [],
+  "review": null,
+  "stage_usage": [
+    {
+      "stage": "evidence_planning",
+      "latency_ms": 11703.65270000184,
+      "decision_source": "llm",
+      "model": "deepseek-flash",
+      "reasoning_effort": "high",
+      "input_tokens": 476,
+      "output_tokens": 2539
+    },
+    {
+      "stage": "search_action_planning",
+      "latency_ms": 2812.3035000171512,
+      "decision_source": "llm",
+      "model": "deepseek-flash",
+      "reasoning_effort": "low",
+      "input_tokens": 804,
+      "output_tokens": 596
+    },
+    {
+      "stage": "evidence_retrieval",
+      "latency_ms": 58217.904599994654,
+      "decision_source": "policy",
+      "model": null,
+      "reasoning_effort": null,
+      "input_tokens": null,
+      "output_tokens": null
+    },
+    {
+      "stage": "coverage_check",
+      "latency_ms": 0.09370001498609781,
+      "decision_source": "rules",
+      "model": null,
+      "reasoning_effort": "low",
+      "input_tokens": null,
+      "output_tokens": null
+    },
+    {
+      "stage": "search_action_planning",
+      "latency_ms": 7907.274700002745,
+      "decision_source": "fallback",
+      "model": "deepseek-flash",
+      "reasoning_effort": "low",
+      "input_tokens": 747,
+      "output_tokens": 1719
+    },
+    {
+      "stage": "evidence_retrieval",
+      "latency_ms": 38846.3766000059,
+      "decision_source": "policy",
+      "model": null,
+      "reasoning_effort": null,
+      "input_tokens": null,
+      "output_tokens": null
+    },
+    {
+      "stage": "coverage_check",
+      "latency_ms": 0.06269998266361654,
+      "decision_source": "rules",
+      "model": null,
+      "reasoning_effort": "low",
+      "input_tokens": null,
+      "output_tokens": null
+    }
+  ],
+  "evidence_plan": {
+    "schema_version": 2,
+    "original_query": "详细解释项目的余票桶是如何设计的",
+    "requirements": [
+      {
+        "id": "ER1",
+        "target": "项目中余票桶的核心数据结构与字段定义",
+        "success_criteria": "证据必须包含余票桶的类/结构/模型定义，以及数量、状态、容量、版本或业务标识等核心字段及其含义。",
+        "priority": "CORE",
+        "temporal_scope": "CURRENT",
+        "source_requirement": "CODE"
+      },
+      {
+        "id": "ER2",
+        "target": "余票桶的创建、初始化及与业务对象的关联方式",
+        "success_criteria": "证据必须包含余票桶在何时、依据什么规则被创建或初始化，以及它与哪些业务对象或业务维度建立关联。",
+        "priority": "CORE",
+        "temporal_scope": "CURRENT",
+        "source_requirement": "BOTH"
+      },
+      {
+        "id": "ER3",
+        "target": "余票桶的扣减与释放或回滚逻辑",
+        "success_criteria": "证据必须包含余票扣减和释放或回滚的触发条件、核心判断条件、数量变更方式及失败处理。",
+        "priority": "CORE",
+        "temporal_scope": "CURRENT",
+        "source_requirement": "CODE"
+      },
+      {
+        "id": "ER4",
+        "target": "余票桶在并发场景下的一致性保障机制",
+        "success_criteria": "证据必须包含项目实际采用的并发控制或一致性保障方式及其作用范围。",
+        "priority": "CORE",
+        "temporal_scope": "CURRENT",
+        "source_requirement": "CODE"
+      },
+      {
+        "id": "ER5",
+        "target": "余票桶的存储与读写路径",
+        "success_criteria": "证据必须包含余票桶数据实际存放的位置或介质，以及读取、更新、持久化或缓存同步的主要代码路径。",
+        "priority": "SUPPORTING",
+        "temporal_scope": "CURRENT",
+        "source_requirement": "BOTH"
+      },
+      {
+        "id": "ER6",
+        "target": "余票桶对业务约束与库存一致性的处理",
+        "success_criteria": "证据必须包含余票桶设计中对库存数量约束、超卖或少卖防护或库存不一致的处理规则与校验逻辑。",
+        "priority": "SUPPORTING",
+        "temporal_scope": "CURRENT",
+        "source_requirement": "CODE"
+      }
+    ],
+    "decision_source": "llm"
+  },
+  "requirement_traces": [
+    {
+      "requirement_id": "ER1",
+      "target": "项目中余票桶的核心数据结构与字段定义",
+      "search_history": [
+        {
+          "action_id": "SA1",
+          "requirement_id": "ER1",
+          "round_index": 0,
+          "query": "余票桶 数据结构 类 定义 字段 数量 状态 容量 版本 业务标识",
+          "source_scope": "CODE",
+          "reason": "查找余票桶核心数据结构与字段定义",
+          "decision_source": "llm",
+          "error": "RuntimeError"
+        },
+        {
+          "action_id": "SA7",
+          "requirement_id": "ER1",
+          "round_index": 1,
+          "query": "详细解释项目的余票桶是如何设计的 项目中余票桶的核心数据结构与字段定义 缺少直接相关的 CODE 证据",
+          "source_scope": "CODE",
+          "reason": "按证据目标和当前缺口生成确定性查询",
+          "decision_source": "fallback",
+          "error": "RuntimeError"
+        }
+      ],
+      "evidence_ids": [],
+      "coverage_history": [
+        {
+          "requirement_id": "ER1",
+          "state": "MISSING",
+          "evidence_ids": [],
+          "missing_criteria": [
+            "缺少直接相关的 CODE 证据"
+          ],
+          "reason": "所需证据来源尚未完整进入最终 Context",
+          "decision_source": "rules",
+          "check_error": null
+        },
+        {
+          "requirement_id": "ER1",
+          "state": "MISSING",
+          "evidence_ids": [],
+          "missing_criteria": [
+            "缺少直接相关的 CODE 证据"
+          ],
+          "reason": "所需证据来源尚未完整进入最终 Context",
+          "decision_source": "rules",
+          "check_error": null
+        }
+      ],
+      "final_state": "MISSING"
+    },
+    {
+      "requirement_id": "ER2",
+      "target": "余票桶的创建、初始化及与业务对象的关联方式",
+      "search_history": [
+        {
+          "action_id": "SA2",
+          "requirement_id": "ER2",
+          "round_index": 0,
+          "query": "余票桶 创建 初始化 关联 业务对象 业务维度 规则",
+          "source_scope": "BOTH",
+          "reason": "查找余票桶创建初始化及业务关联方式",
+          "decision_source": "llm",
+          "error": "RuntimeError"
+        },
+        {
+          "action_id": "SA8",
+          "requirement_id": "ER2",
+          "round_index": 1,
+          "query": "详细解释项目的余票桶是如何设计的 余票桶的创建、初始化及与业务对象的关联方式 缺少直接相关的 CODE 证据 缺少直接相关的 DOCUMENT 证据",
+          "source_scope": "BOTH",
+          "reason": "按证据目标和当前缺口生成确定性查询",
+          "decision_source": "fallback",
+          "error": "RuntimeError"
+        }
+      ],
+      "evidence_ids": [],
+      "coverage_history": [
+        {
+          "requirement_id": "ER2",
+          "state": "MISSING",
+          "evidence_ids": [],
+          "missing_criteria": [
+            "缺少直接相关的 CODE 证据",
+            "缺少直接相关的 DOCUMENT 证据"
+          ],
+          "reason": "所需证据来源尚未完整进入最终 Context",
+          "decision_source": "rules",
+          "check_error": null
+        },
+        {
+          "requirement_id": "ER2",
+          "state": "MISSING",
+          "evidence_ids": [],
+          "missing_criteria": [
+            "缺少直接相关的 CODE 证据",
+            "缺少直接相关的 DOCUMENT 证据"
+          ],
+          "reason": "所需证据来源尚未完整进入最终 Context",
+          "decision_source": "rules",
+          "check_error": null
+        }
+      ],
+      "final_state": "MISSING"
+    },
+    {
+      "requirement_id": "ER3",
+      "target": "余票桶的扣减与释放或回滚逻辑",
+      "search_history": [
+        {
+          "action_id": "SA3",
+          "requirement_id": "ER3",
+          "round_index": 0,
+          "query": "余票桶 扣减 释放 回滚 触发条件 判断 数量变更 失败处理",
+          "source_scope": "CODE",
+          "reason": "查找余票桶扣减释放回滚逻辑",
+          "decision_source": "llm",
+          "error": "RuntimeError"
+        },
+        {
+          "action_id": "SA9",
+          "requirement_id": "ER3",
+          "round_index": 1,
+          "query": "详细解释项目的余票桶是如何设计的 余票桶的扣减与释放或回滚逻辑 缺少直接相关的 CODE 证据",
+          "source_scope": "CODE",
+          "reason": "按证据目标和当前缺口生成确定性查询",
+          "decision_source": "fallback",
+          "error": "RuntimeError"
+        }
+      ],
+      "evidence_ids": [],
+      "coverage_history": [
+        {
+          "requirement_id": "ER3",
+          "state": "MISSING",
+          "evidence_ids": [],
+          "missing_criteria": [
+            "缺少直接相关的 CODE 证据"
+          ],
+          "reason": "所需证据来源尚未完整进入最终 Context",
+          "decision_source": "rules",
+          "check_error": null
+        },
+        {
+          "requirement_id": "ER3",
+          "state": "MISSING",
+          "evidence_ids": [],
+          "missing_criteria": [
+            "缺少直接相关的 CODE 证据"
+          ],
+          "reason": "所需证据来源尚未完整进入最终 Context",
+          "decision_source": "rules",
+          "check_error": null
+        }
+      ],
+      "final_state": "MISSING"
+    },
+    {
+      "requirement_id": "ER4",
+      "target": "余票桶在并发场景下的一致性保障机制",
+      "search_history": [
+        {
+          "action_id": "SA4",
+          "requirement_id": "ER4",
+          "round_index": 0,
+          "query": "余票桶 并发 一致性 锁 版本 事务 保障机制",
+          "source_scope": "CODE",
+          "reason": "查找余票桶并发一致性保障机制",
+          "decision_source": "llm",
+          "error": "RuntimeError"
+        },
+        {
+          "action_id": "SA10",
+          "requirement_id": "ER4",
+          "round_index": 1,
+          "query": "详细解释项目的余票桶是如何设计的 余票桶在并发场景下的一致性保障机制 缺少直接相关的 CODE 证据",
+          "source_scope": "CODE",
+          "reason": "按证据目标和当前缺口生成确定性查询",
+          "decision_source": "fallback",
+          "error": "RuntimeError"
+        }
+      ],
+      "evidence_ids": [],
+      "coverage_history": [
+        {
+          "requirement_id": "ER4",
+          "state": "MISSING",
+          "evidence_ids": [],
+          "missing_criteria": [
+            "缺少直接相关的 CODE 证据"
+          ],
+          "reason": "所需证据来源尚未完整进入最终 Context",
+          "decision_source": "rules",
+          "check_error": null
+        },
+        {
+          "requirement_id": "ER4",
+          "state": "MISSING",
+          "evidence_ids": [],
+          "missing_criteria": [
+            "缺少直接相关的 CODE 证据"
+          ],
+          "reason": "所需证据来源尚未完整进入最终 Context",
+          "decision_source": "rules",
+          "check_error": null
+        }
+      ],
+      "final_state": "MISSING"
+    },
+    {
+      "requirement_id": "ER5",
+      "target": "余票桶的存储与读写路径",
+      "search_history": [
+        {
+          "action_id": "SA5",
+          "requirement_id": "ER5",
+          "round_index": 0,
+          "query": "余票桶 存储 读写 缓存 数据库 持久化 代码路径",
+          "source_scope": "BOTH",
+          "reason": "查找余票桶存储与读写路径",
+          "decision_source": "llm",
+          "error": "RuntimeError"
+        }
+      ],
+      "evidence_ids": [],
+      "coverage_history": [
+        {
+          "requirement_id": "ER5",
+          "state": "MISSING",
+          "evidence_ids": [],
+          "missing_criteria": [
+            "缺少直接相关的 CODE 证据",
+            "缺少直接相关的 DOCUMENT 证据"
+          ],
+          "reason": "所需证据来源尚未完整进入最终 Context",
+          "decision_source": "rules",
+          "check_error": null
+        },
+        {
+          "requirement_id": "ER5",
+          "state": "MISSING",
+          "evidence_ids": [],
+          "missing_criteria": [
+            "缺少直接相关的 CODE 证据",
+            "缺少直接相关的 DOCUMENT 证据"
+          ],
+          "reason": "所需证据来源尚未完整进入最终 Context",
+          "decision_source": "rules",
+          "check_error": null
+        }
+      ],
+      "final_state": "MISSING"
+    },
+    {
+      "requirement_id": "ER6",
+      "target": "余票桶对业务约束与库存一致性的处理",
+      "search_history": [
+        {
+          "action_id": "SA6",
+          "requirement_id": "ER6",
+          "round_index": 0,
+          "query": "余票桶 库存约束 超卖 少卖 一致性 校验 规则",
+          "source_scope": "CODE",
+          "reason": "查找余票桶业务约束与库存一致性处理",
+          "decision_source": "llm",
+          "error": "RuntimeError"
+        }
+      ],
+      "evidence_ids": [],
+      "coverage_history": [
+        {
+          "requirement_id": "ER6",
+          "state": "MISSING",
+          "evidence_ids": [],
+          "missing_criteria": [
+            "缺少直接相关的 CODE 证据"
+          ],
+          "reason": "所需证据来源尚未完整进入最终 Context",
+          "decision_source": "rules",
+          "check_error": null
+        },
+        {
+          "requirement_id": "ER6",
+          "state": "MISSING",
+          "evidence_ids": [],
+          "missing_criteria": [
+            "缺少直接相关的 CODE 证据"
+          ],
+          "reason": "所需证据来源尚未完整进入最终 Context",
+          "decision_source": "rules",
+          "check_error": null
+        }
+      ],
+      "final_state": "MISSING"
+    }
+  ],
+  "search_actions": [
+    {
+      "action_id": "SA1",
+      "requirement_id": "ER1",
+      "round_index": 0,
+      "query": "余票桶 数据结构 类 定义 字段 数量 状态 容量 版本 业务标识",
+      "source_scope": "CODE",
+      "reason": "查找余票桶核心数据结构与字段定义",
+      "decision_source": "llm",
+      "error": "RuntimeError"
+    },
+    {
+      "action_id": "SA2",
+      "requirement_id": "ER2",
+      "round_index": 0,
+      "query": "余票桶 创建 初始化 关联 业务对象 业务维度 规则",
+      "source_scope": "BOTH",
+      "reason": "查找余票桶创建初始化及业务关联方式",
+      "decision_source": "llm",
+      "error": "RuntimeError"
+    },
+    {
+      "action_id": "SA3",
+      "requirement_id": "ER3",
+      "round_index": 0,
+      "query": "余票桶 扣减 释放 回滚 触发条件 判断 数量变更 失败处理",
+      "source_scope": "CODE",
+      "reason": "查找余票桶扣减释放回滚逻辑",
+      "decision_source": "llm",
+      "error": "RuntimeError"
+    },
+    {
+      "action_id": "SA4",
+      "requirement_id": "ER4",
+      "round_index": 0,
+      "query": "余票桶 并发 一致性 锁 版本 事务 保障机制",
+      "source_scope": "CODE",
+      "reason": "查找余票桶并发一致性保障机制",
+      "decision_source": "llm",
+      "error": "RuntimeError"
+    },
+    {
+      "action_id": "SA5",
+      "requirement_id": "ER5",
+      "round_index": 0,
+      "query": "余票桶 存储 读写 缓存 数据库 持久化 代码路径",
+      "source_scope": "BOTH",
+      "reason": "查找余票桶存储与读写路径",
+      "decision_source": "llm",
+      "error": "RuntimeError"
+    },
+    {
+      "action_id": "SA6",
+      "requirement_id": "ER6",
+      "round_index": 0,
+      "query": "余票桶 库存约束 超卖 少卖 一致性 校验 规则",
+      "source_scope": "CODE",
+      "reason": "查找余票桶业务约束与库存一致性处理",
+      "decision_source": "llm",
+      "error": "RuntimeError"
+    },
+    {
+      "action_id": "SA7",
+      "requirement_id": "ER1",
+      "round_index": 1,
+      "query": "详细解释项目的余票桶是如何设计的 项目中余票桶的核心数据结构与字段定义 缺少直接相关的 CODE 证据",
+      "source_scope": "CODE",
+      "reason": "按证据目标和当前缺口生成确定性查询",
+      "decision_source": "fallback",
+      "error": "RuntimeError"
+    },
+    {
+      "action_id": "SA8",
+      "requirement_id": "ER2",
+      "round_index": 1,
+      "query": "详细解释项目的余票桶是如何设计的 余票桶的创建、初始化及与业务对象的关联方式 缺少直接相关的 CODE 证据 缺少直接相关的 DOCUMENT 证据",
+      "source_scope": "BOTH",
+      "reason": "按证据目标和当前缺口生成确定性查询",
+      "decision_source": "fallback",
+      "error": "RuntimeError"
+    },
+    {
+      "action_id": "SA9",
+      "requirement_id": "ER3",
+      "round_index": 1,
+      "query": "详细解释项目的余票桶是如何设计的 余票桶的扣减与释放或回滚逻辑 缺少直接相关的 CODE 证据",
+      "source_scope": "CODE",
+      "reason": "按证据目标和当前缺口生成确定性查询",
+      "decision_source": "fallback",
+      "error": "RuntimeError"
+    },
+    {
+      "action_id": "SA10",
+      "requirement_id": "ER4",
+      "round_index": 1,
+      "query": "详细解释项目的余票桶是如何设计的 余票桶在并发场景下的一致性保障机制 缺少直接相关的 CODE 证据",
+      "source_scope": "CODE",
+      "reason": "按证据目标和当前缺口生成确定性查询",
+      "decision_source": "fallback",
+      "error": "RuntimeError"
+    }
+  ],
+  "coverage_rounds": [
+    {
+      "round_index": 0,
+      "statuses": [
+        {
+          "requirement_id": "ER1",
+          "state": "MISSING",
+          "evidence_ids": [],
+          "missing_criteria": [
+            "缺少直接相关的 CODE 证据"
+          ],
+          "reason": "所需证据来源尚未完整进入最终 Context",
+          "decision_source": "rules",
+          "check_error": null
+        },
+        {
+          "requirement_id": "ER2",
+          "state": "MISSING",
+          "evidence_ids": [],
+          "missing_criteria": [
+            "缺少直接相关的 CODE 证据",
+            "缺少直接相关的 DOCUMENT 证据"
+          ],
+          "reason": "所需证据来源尚未完整进入最终 Context",
+          "decision_source": "rules",
+          "check_error": null
+        },
+        {
+          "requirement_id": "ER3",
+          "state": "MISSING",
+          "evidence_ids": [],
+          "missing_criteria": [
+            "缺少直接相关的 CODE 证据"
+          ],
+          "reason": "所需证据来源尚未完整进入最终 Context",
+          "decision_source": "rules",
+          "check_error": null
+        },
+        {
+          "requirement_id": "ER4",
+          "state": "MISSING",
+          "evidence_ids": [],
+          "missing_criteria": [
+            "缺少直接相关的 CODE 证据"
+          ],
+          "reason": "所需证据来源尚未完整进入最终 Context",
+          "decision_source": "rules",
+          "check_error": null
+        },
+        {
+          "requirement_id": "ER5",
+          "state": "MISSING",
+          "evidence_ids": [],
+          "missing_criteria": [
+            "缺少直接相关的 CODE 证据",
+            "缺少直接相关的 DOCUMENT 证据"
+          ],
+          "reason": "所需证据来源尚未完整进入最终 Context",
+          "decision_source": "rules",
+          "check_error": null
+        },
+        {
+          "requirement_id": "ER6",
+          "state": "MISSING",
+          "evidence_ids": [],
+          "missing_criteria": [
+            "缺少直接相关的 CODE 证据"
+          ],
+          "reason": "所需证据来源尚未完整进入最终 Context",
+          "decision_source": "rules",
+          "check_error": null
+        }
+      ]
+    },
+    {
+      "round_index": 1,
+      "statuses": [
+        {
+          "requirement_id": "ER1",
+          "state": "MISSING",
+          "evidence_ids": [],
+          "missing_criteria": [
+            "缺少直接相关的 CODE 证据"
+          ],
+          "reason": "所需证据来源尚未完整进入最终 Context",
+          "decision_source": "rules",
+          "check_error": null
+        },
+        {
+          "requirement_id": "ER2",
+          "state": "MISSING",
+          "evidence_ids": [],
+          "missing_criteria": [
+            "缺少直接相关的 CODE 证据",
+            "缺少直接相关的 DOCUMENT 证据"
+          ],
+          "reason": "所需证据来源尚未完整进入最终 Context",
+          "decision_source": "rules",
+          "check_error": null
+        },
+        {
+          "requirement_id": "ER3",
+          "state": "MISSING",
+          "evidence_ids": [],
+          "missing_criteria": [
+            "缺少直接相关的 CODE 证据"
+          ],
+          "reason": "所需证据来源尚未完整进入最终 Context",
+          "decision_source": "rules",
+          "check_error": null
+        },
+        {
+          "requirement_id": "ER4",
+          "state": "MISSING",
+          "evidence_ids": [],
+          "missing_criteria": [
+            "缺少直接相关的 CODE 证据"
+          ],
+          "reason": "所需证据来源尚未完整进入最终 Context",
+          "decision_source": "rules",
+          "check_error": null
+        },
+        {
+          "requirement_id": "ER5",
+          "state": "MISSING",
+          "evidence_ids": [],
+          "missing_criteria": [
+            "缺少直接相关的 CODE 证据",
+            "缺少直接相关的 DOCUMENT 证据"
+          ],
+          "reason": "所需证据来源尚未完整进入最终 Context",
+          "decision_source": "rules",
+          "check_error": null
+        },
+        {
+          "requirement_id": "ER6",
+          "state": "MISSING",
+          "evidence_ids": [],
+          "missing_criteria": [
+            "缺少直接相关的 CODE 证据"
+          ],
+          "reason": "所需证据来源尚未完整进入最终 Context",
+          "decision_source": "rules",
+          "check_error": null
+        }
+      ]
+    }
+  ],
+  "final_coverage": [
+    {
+      "requirement_id": "ER1",
+      "state": "MISSING",
+      "evidence_ids": [],
+      "missing_criteria": [
+        "缺少直接相关的 CODE 证据"
+      ],
+      "reason": "所需证据来源尚未完整进入最终 Context",
+      "decision_source": "rules",
+      "check_error": null
+    },
+    {
+      "requirement_id": "ER2",
+      "state": "MISSING",
+      "evidence_ids": [],
+      "missing_criteria": [
+        "缺少直接相关的 CODE 证据",
+        "缺少直接相关的 DOCUMENT 证据"
+      ],
+      "reason": "所需证据来源尚未完整进入最终 Context",
+      "decision_source": "rules",
+      "check_error": null
+    },
+    {
+      "requirement_id": "ER3",
+      "state": "MISSING",
+      "evidence_ids": [],
+      "missing_criteria": [
+        "缺少直接相关的 CODE 证据"
+      ],
+      "reason": "所需证据来源尚未完整进入最终 Context",
+      "decision_source": "rules",
+      "check_error": null
+    },
+    {
+      "requirement_id": "ER4",
+      "state": "MISSING",
+      "evidence_ids": [],
+      "missing_criteria": [
+        "缺少直接相关的 CODE 证据"
+      ],
+      "reason": "所需证据来源尚未完整进入最终 Context",
+      "decision_source": "rules",
+      "check_error": null
+    },
+    {
+      "requirement_id": "ER5",
+      "state": "MISSING",
+      "evidence_ids": [],
+      "missing_criteria": [
+        "缺少直接相关的 CODE 证据",
+        "缺少直接相关的 DOCUMENT 证据"
+      ],
+      "reason": "所需证据来源尚未完整进入最终 Context",
+      "decision_source": "rules",
+      "check_error": null
+    },
+    {
+      "requirement_id": "ER6",
+      "state": "MISSING",
+      "evidence_ids": [],
+      "missing_criteria": [
+        "缺少直接相关的 CODE 证据"
+      ],
+      "reason": "所需证据来源尚未完整进入最终 Context",
+      "decision_source": "rules",
+      "check_error": null
+    }
+  ],
+  "evidence_package_state": "EMPTY"
+}

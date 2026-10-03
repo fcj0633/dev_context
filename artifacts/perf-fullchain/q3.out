@@ -1,0 +1,2040 @@
+Question:
+用户模块，用户表分库分表键为何要使用用户名
+
+Evidence Plan: llm
+  ER1. 用户表分库分表配置中实际采用的分片键 — CODE
+  ER2. 用户模块对用户表的读写路径是否按用户名进行路由或过滤 — CODE
+  ER3. 项目内关于用户表分片键选型的说明 — DOCUMENT
+  ER4. 用户名作为分片键与业务约束及数据特征的匹配关系 — ANY
+  ER5. 其他候选分片键相比用户名不被采用的原因 — ANY
+
+Route: MIXED (rules)
+Sufficiency: insufficient
+Requirements: ER1 PARTIAL, ER2 MISSING, ER3 SATISFIED, ER4 SATISFIED, ER5 PARTIAL
+Retries: 1
+
+Answer:
+用户模块把 `t_user` 的分片键定为 username，直接原因是"分片键必须与查询键一致"这条硬约束在用户模块恰好落在用户名上：登录、注册查重、查资料、查乘车人这些关键路径都以用户名为入口，分片键与它对齐才能单分片命中；换成 id，这些路径会退化成广播查询 [E11][E13][E14]。
+
+## 分片路由的硬约束：查询条件决定能不能定位到某张表
+
+一句话核心模型：**分片算法只吃分片键的值，查询条件里没有这个值，路由就从"定位一张表"退化成"问所有表"。**
+
+把它拆成三个概念来看。
+
+**精确定位是怎么算出来的。** `CustomDbHashModShardingAlgorithm#doSharding` 接收 `PreciseShardingValue`，用 `suffix = |hash| % shardingCount / tableShardingCount` 算出目标后缀，再从可用目标里挑出以该后缀结尾的那一个 [E20]；按类注释的说法，就是 sharding-count 先分库、table-sharding-count 再分表 [E2]。整条计算链的输入只有 `shardingValue` 携带的那个分片键值——没有它，suffix 无从算起。
+
+**哈希本身也只对键值做功。** `hashShardingValue` 把入参的 `hashCode` 取绝对值 [E5]。项目里按 username 做哈希取模并不只出现在分片算法里：`UserReuseUtil.hashShardingIdx` 就是 `Math.abs(username.hashCode() % USER_REGISTER_REUSE_SHARDING_COUNT)`，用来算"已注销用户名复用集合"的分片位置 [E1]，和常量定义 `user-reuse:{hash(username)%1024}` 的写法一致 [E3]。
+
+**拿不到键值时发生什么。** 同一个算法类的 `RangeShardingValue` 分支直接 `return availableTargetNames`，把全部可用目标原样交出去 [E4]。这正是"无法裁剪"的实现形态：算不出唯一的 suffix，就只能承认自己覆盖所有分片。文档把这条机制概括成"分片规则是按分片键路由到具体表，否则 ShardingSphere 无法定位，只能广播" [E12][E16]。
+
+所以选分片键不是挑一个唯一性最好的列（id 显然更"像主键"），而是挑一个**查询条件里一定出现的列**。这是硬约束，不是偏好。
+
+## 用户模块的查询入口为什么收敛在用户名
+
+先看访问模式。`t_user` 的表设计说明把 username 直接标为分片键，理由是"登录、注册、查询都从 username 出发，保证关键路径单分片命中" [E13]；查询清单也给出同样的结论——`t_user` 的主要查询方式是按 username 查，id 只在查详情时用，且不是热点 [E11]。
+
+但真正让 username 站得住的，是它在整个模块里不只是 `t_user` 的查询键，而是**整个用户模块的操作坐标**：
+
+- 注册分布式锁前缀是 `lock:user-register:{username}`，注销锁是 `user-deletion:{username}`，乘车人列表缓存是 `user-passenger-list:{username}`，乘车人写操作锁是 `lock:user-passenger:{username}` [E3]；
+- 用户服务对外的远程接口签名也是 `listPassengerQueryByIds(username, ids)`——票务服务按"当前登录用户名 + 乘车人 ID"取实名信息 [E6]；
+- 连用户名复用的分片工具，方法签名都是 `hashShardingIdx(String username)` [E7][E1]。
+
+因此可以这样推导：缓存键、锁键、远程调用参数、复用集合的分片位置全都锚在 username 上 [E3][E6][E7]，那么把 `t_user` 的分片键也设成 username，分片路由就和业务路由同构——一个登录请求带进来的 username，既能定位它的缓存和锁，也能定位它的数据落在哪个库、哪张表。反过来，如果分片键换成 id，这些已经带着 username 的路径就必须先想办法把 username 换成 id，再多吃一次查询或者一次广播 [E14]。
+
+`t_passenger` 同样按 username 分片，理由是一致性覆盖："乘车人总是跟着某个会员查询，与用户同分片可避免跨库查询" [E14]；对外接口也是按当前用户名发起的 [E6]。这是同一个坐标在相邻表上的延伸。
+
+还有一层是物理可行性：`UNIQUE (username, deletion_time)` 保证未注销时用户名唯一 [E13]，配合哈希取模可以把数据均匀打散 [E2]；文档也把"按用户名哈希天然均匀"列为用户表分片的理由之一 [E12]。
+
+至于代价——按 id 查用户会广播——项目里确实存在这类查询（`queryUserByUserId` 只能扫全部分片），但它不是热点 [E11]。这笔账放到下一节算。
+
+## 换成 id 分片会怎样，以及手机号/邮箱路径如何补偿
+
+把三个候选放在一起比较，差异立刻显出来。
+
+**按 username 分片**：登录、查资料、查乘车人都是单分片命中 [E11][E13][E14]。这是当前方案。
+
+**按 id 分片**：问题不在数据分布，而在入口。登录这个入口只有 username / phone / mail 三种输入，没有 id [E14]；按 id 分片会让登录时的读请求扩散到全部分片 [E14]，历史文档也把这类"按非分片键查询"的后果称为读扩散，并把它列为登录难题的来源 [E18]。文档给出的具体代价形态是 `queryUserByUserId` 只能扫全部分片 [E11]，而广播的规模在分片表清单里是可以数出来的——文档描述为广播到 32 张表查一遍 [E16]。
+
+**手机号 / 邮箱登录路径**：项目没有把 `t_user` 改成多键分片，而是给每条入口单独建一张按各自字段分片的映射表。`t_user_phone` 按 phone 分片，职责是 `phone → username` 以及手机号唯一性；手机号登录时先路由到该手机号所在分片拿到 username，再按 username 路由主表，两次单分片查询、无读扩散 [E15][E12]。`t_user_mail` 同理按 mail 分片 [E12][E16]，查询清单里也把这两张表的存在目的写成"它存在的唯一目的就是按手机号/邮箱查" [E11]。
+
+为什么这是更好的选择，而不是把主表做成复合键？文档显示复合分片键在本项目并非不可行——`t_order` 用了 `user_id + order_sn`、`t_pay` 用了 `order_sn + pay_sn`，前提是"两个维度都是热查询" [E11]。用户模块的形态不同：每条登录路径各自只需要一个键就能唯一命中，把三个入口拆成三张单入口表，换来的是每条路径都保持单分片；代价是表数量增加、注册与改绑手机号/邮箱时要额外维护映射行（这一条是从映射表的职责反推的，不是文档原文）。文档在教学上也建议把"按 id 分片""按 id_card 分片"当反例对比，用来理解分片键由查询入口决定，而不是由主键决定 [E10]。
+
+**关于一份历史文档**：`12306学习开发文档` 里写的是"用户按用户 ID 分片"，并把映射表/广播描述为应对读扩散的手段 [E18]。这与当前设计文档明确写出的"`t_user` 按 username 分片" [E11][E16]、以及表设计说明中 username 标注为分片键 [E13] 是冲突的。回答时应以当前设计为准；那份历史文档的价值在于它把"读扩散"这个代价讲清楚了。
+
+**证据缺口集中说明**：现有材料里没有直接检索到 `shardingsphere-config.yaml` 中 `t_user` 绑定 username 分片键的配置片段，因此"`t_user` 按 username 分片"这一事实主要来自当前设计文档 [E11][E16] 与表设计说明 [E13]；实现层能确认的是分片算法按分片键值计算路由 [E2][E20][E5]，以及项目里存在按 username 哈希取模的工具实现 [E1]。另外历史文档与当前设计在"按 ID 分片"上存在上述冲突 [E18]，如果以历史文档为准，结论会不同。
+
+Explanation Strategy:
+CAUSE_EFFECT
+
+Mental Model:
+分片键不是选主键，而是选最频繁、最关键的查询入口——用户模块的入口收敛在 username，所以 t_user 按 username 分片。
+
+Context:
+  Workspace evidence: 23
+  Bound evidence: 16
+
+Generation:
+  0 sections
+  0 targeted revision
+
+Sources:
+[E11] 4-原项目对标学习/01-全局/数据库设计学习路线.md > 数据库设计学习路线 > L5 · 分库分表设计 > Q2 · 分片键怎么选
+[E13] 0-历史文档/1-用户模块文档/登录注册功能设计与用户表设计.md > 登录注册功能设计与用户表设计（学习文档） > 三、用户表设计详解（为什么这样设计） > 3.2 t_user：会员主表
+[E14] 0-历史文档/1-用户模块文档/登录注册功能设计与用户表设计.md > 登录注册功能设计与用户表设计（学习文档） > 二、业务难点与设计决策 > 2.1 亿级数据量 → 分库分表
+[E20] services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/config/sharding/CustomDbHashModShardingAlgorithm.java:31-38 — CustomDbHashModShardingAlgorithm#doSharding
+[E2] services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/config/sharding/CustomDbHashModShardingAlgorithm.java:17-53 — CustomDbHashModShardingAlgorithm#CustomDbHashModShardingAlgorithm
+[E5] services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/config/sharding/CustomDbHashModShardingAlgorithm.java:45-47 — CustomDbHashModShardingAlgorithm#hashShardingValue
+[E1] services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/common/toolkit/UserReuseUtil.java:13-15 — UserReuseUtil#hashShardingIdx
+[E3] services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/common/constant/RedisKeyConstant.java:6-22 — RedisKeyConstant#RedisKeyConstant
+[E4] services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/config/sharding/CustomDbHashModShardingAlgorithm.java:40-43 — CustomDbHashModShardingAlgorithm#doSharding
+[E12] 6-面试复习/模块3-技术专题.md > 模块三 · 技术专题 > 3.6 数据库 🟡 > 【展开二：分片策略】
+[E16] 6-面试复习/模块2-核心链路深挖.md > 模块二 · 核心链路深挖 > 2.4 用户链路 🟡 > ③ 系统实现 > 分库分表（`shardingsphere-config.yaml`）
+[E6] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/remote/UserRemoteService.java:14-21 — UserRemoteService#UserRemoteService
+[E7] services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/common/toolkit/UserReuseUtil.java:8-16 — UserReuseUtil#UserReuseUtil
+[E18] 0-历史文档/1-用户模块文档/12306学习开发文档.md > 12306 学习项目开发准备文档（开发前规划） > 三、数据库设计 > 3.2 分库分表说明
+[E15] 0-历史文档/1-用户模块文档/登录注册功能设计与用户表设计.md > 登录注册功能设计与用户表设计（学习文档） > 三、用户表设计详解（为什么这样设计） > 3.3 t_user_phone：手机号映射表
+[E10] 0-历史文档/1-用户模块文档/乘车人管理功能分析与设计.md > 乘车人管理功能分析与设计 > 五、难点与设计决策 > 5.1 分片键为什么选 username（决策要点）
+
+Trace:
+{
+  "route": {
+    "query_type": "MIXED",
+    "decision_source": "rules",
+    "reason": "union of evidence source requirements",
+    "code_signals": [],
+    "doc_signals": []
+  },
+  "rounds": [
+    {
+      "round_index": 0,
+      "retrieval_query": "用户表 分库分表 分片键 路由字段 配置 用户名 sharding key | 用户模块 用户表 查询 写入 更新 按用户名 路由 分片条件 SQL | 用户表 分片键 选型 为什么 使用用户名 设计文档 注释 决策记录 | 用户名 唯一性约束 登录 账户定位 按用户名查询 频率 分布 分片键 匹配 | 替代分片键 评估 排除 用户ID 生成时序 查询模式 分布均衡 为何不用",
+      "retrieval_query_type": "MIXED",
+      "selected_chunks": [
+        {
+          "citation_label": "E1",
+          "chunk_id": 8965,
+          "source_type": "CODE",
+          "file_path": "services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/common/toolkit/UserReuseUtil.java",
+          "identity": "UserReuseUtil#hashShardingIdx",
+          "retrieval_rank": 1,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1",
+            "ER2"
+          ]
+        },
+        {
+          "citation_label": "E2",
+          "chunk_id": 8983,
+          "source_type": "CODE",
+          "file_path": "services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/config/sharding/CustomDbHashModShardingAlgorithm.java",
+          "identity": "CustomDbHashModShardingAlgorithm#CustomDbHashModShardingAlgorithm",
+          "retrieval_rank": 2,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1"
+          ]
+        },
+        {
+          "citation_label": "E3",
+          "chunk_id": 8949,
+          "source_type": "CODE",
+          "file_path": "services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/common/constant/RedisKeyConstant.java",
+          "identity": "RedisKeyConstant#RedisKeyConstant",
+          "retrieval_rank": 3,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1"
+          ]
+        },
+        {
+          "citation_label": "E4",
+          "chunk_id": 8986,
+          "source_type": "CODE",
+          "file_path": "services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/config/sharding/CustomDbHashModShardingAlgorithm.java",
+          "identity": "CustomDbHashModShardingAlgorithm#doSharding",
+          "retrieval_rank": 4,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1"
+          ]
+        },
+        {
+          "citation_label": "E5",
+          "chunk_id": 8987,
+          "source_type": "CODE",
+          "file_path": "services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/config/sharding/CustomDbHashModShardingAlgorithm.java",
+          "identity": "CustomDbHashModShardingAlgorithm#hashShardingValue",
+          "retrieval_rank": 5,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1"
+          ]
+        },
+        {
+          "citation_label": "E6",
+          "chunk_id": 8839,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/remote/UserRemoteService.java",
+          "identity": "UserRemoteService#UserRemoteService",
+          "retrieval_rank": 1,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER2"
+          ]
+        },
+        {
+          "citation_label": "E7",
+          "chunk_id": 8964,
+          "source_type": "CODE",
+          "file_path": "services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/common/toolkit/UserReuseUtil.java",
+          "identity": "UserReuseUtil#UserReuseUtil",
+          "retrieval_rank": 2,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER2"
+          ]
+        },
+        {
+          "citation_label": "E10",
+          "chunk_id": 9225,
+          "source_type": "DOCUMENT",
+          "file_path": "0-历史文档/1-用户模块文档/乘车人管理功能分析与设计.md",
+          "identity": "乘车人管理功能分析与设计 > 五、难点与设计决策 > 5.1 分片键为什么选 username（决策要点）",
+          "retrieval_rank": 1,
+          "source_role": "HISTORICAL_PLAN",
+          "temporal_status": "HISTORICAL",
+          "authority_priority": 35,
+          "sub_question_ids": [
+            "ER3",
+            "ER5"
+          ]
+        },
+        {
+          "citation_label": "E11",
+          "chunk_id": 10173,
+          "source_type": "DOCUMENT",
+          "file_path": "4-原项目对标学习/01-全局/数据库设计学习路线.md",
+          "identity": "数据库设计学习路线 > L5 · 分库分表设计 > Q2 · 分片键怎么选",
+          "retrieval_rank": 2,
+          "source_role": "CURRENT_DESIGN",
+          "temporal_status": "UNKNOWN",
+          "authority_priority": 70,
+          "sub_question_ids": [
+            "ER3"
+          ]
+        },
+        {
+          "citation_label": "E12",
+          "chunk_id": 11069,
+          "source_type": "DOCUMENT",
+          "file_path": "6-面试复习/模块3-技术专题.md",
+          "identity": "模块三 · 技术专题 > 3.6 数据库 🟡 > 【展开二：分片策略】",
+          "retrieval_rank": 3,
+          "source_role": "GENERAL_DOCUMENT",
+          "temporal_status": "UNKNOWN",
+          "authority_priority": 55,
+          "sub_question_ids": [
+            "ER3"
+          ]
+        },
+        {
+          "citation_label": "E13",
+          "chunk_id": 9464,
+          "source_type": "DOCUMENT",
+          "file_path": "0-历史文档/1-用户模块文档/登录注册功能设计与用户表设计.md",
+          "identity": "登录注册功能设计与用户表设计（学习文档） > 三、用户表设计详解（为什么这样设计） > 3.2 t_user：会员主表",
+          "retrieval_rank": 4,
+          "source_role": "HISTORICAL_PLAN",
+          "temporal_status": "HISTORICAL",
+          "authority_priority": 35,
+          "sub_question_ids": [
+            "ER3"
+          ]
+        },
+        {
+          "citation_label": "E14",
+          "chunk_id": 9456,
+          "source_type": "DOCUMENT",
+          "file_path": "0-历史文档/1-用户模块文档/登录注册功能设计与用户表设计.md",
+          "identity": "登录注册功能设计与用户表设计（学习文档） > 二、业务难点与设计决策 > 2.1 亿级数据量 → 分库分表",
+          "retrieval_rank": 5,
+          "source_role": "HISTORICAL_PLAN",
+          "temporal_status": "HISTORICAL",
+          "authority_priority": 35,
+          "sub_question_ids": [
+            "ER3"
+          ]
+        },
+        {
+          "citation_label": "E15",
+          "chunk_id": 9465,
+          "source_type": "DOCUMENT",
+          "file_path": "0-历史文档/1-用户模块文档/登录注册功能设计与用户表设计.md",
+          "identity": "登录注册功能设计与用户表设计（学习文档） > 三、用户表设计详解（为什么这样设计） > 3.3 t_user_phone：手机号映射表",
+          "retrieval_rank": 1,
+          "source_role": "HISTORICAL_PLAN",
+          "temporal_status": "HISTORICAL",
+          "authority_priority": 35,
+          "sub_question_ids": [
+            "ER4"
+          ]
+        },
+        {
+          "citation_label": "E16",
+          "chunk_id": 11018,
+          "source_type": "DOCUMENT",
+          "file_path": "6-面试复习/模块2-核心链路深挖.md",
+          "identity": "模块二 · 核心链路深挖 > 2.4 用户链路 🟡 > ③ 系统实现 > 分库分表（`shardingsphere-config.yaml`）",
+          "retrieval_rank": 2,
+          "source_role": "GENERAL_DOCUMENT",
+          "temporal_status": "UNKNOWN",
+          "authority_priority": 55,
+          "sub_question_ids": [
+            "ER4"
+          ]
+        },
+        {
+          "citation_label": "E18",
+          "chunk_id": 9094,
+          "source_type": "DOCUMENT",
+          "file_path": "0-历史文档/1-用户模块文档/12306学习开发文档.md",
+          "identity": "12306 学习项目开发准备文档（开发前规划） > 三、数据库设计 > 3.2 分库分表说明",
+          "retrieval_rank": 2,
+          "source_role": "HISTORICAL_PLAN",
+          "temporal_status": "HISTORICAL",
+          "authority_priority": 35,
+          "sub_question_ids": [
+            "ER5"
+          ]
+        },
+        {
+          "citation_label": "E20",
+          "chunk_id": 8985,
+          "source_type": "CODE",
+          "file_path": "services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/config/sharding/CustomDbHashModShardingAlgorithm.java",
+          "identity": "CustomDbHashModShardingAlgorithm#doSharding",
+          "retrieval_rank": 3,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1"
+          ]
+        }
+      ],
+      "sufficiency": {
+        "enough": false,
+        "missing_aspects": [
+          {
+            "source_type": "CODE",
+            "description": "缺少用户表分片配置中显式指定分片键为 username 的配置内容",
+            "sub_question_id": "ER1"
+          },
+          {
+            "source_type": "CODE",
+            "description": "缺少用户表路由字段配置或等效声明",
+            "sub_question_id": "ER1"
+          },
+          {
+            "source_type": "CODE",
+            "description": "缺少用户模块对用户表进行读写时以 username 作为路由或查询条件的代码或 SQL",
+            "sub_question_id": "ER2"
+          },
+          {
+            "source_type": "CODE",
+            "description": "缺少用户表 Mapper 或 Repository 中按用户名过滤的实现",
+            "sub_question_id": "ER2"
+          },
+          {
+            "source_type": "ANY",
+            "description": "缺少对按 id、id_card 等替代分片键的具体限制或排除依据的说明",
+            "sub_question_id": "ER5"
+          },
+          {
+            "source_type": "ANY",
+            "description": "缺少对生成时序、分布均衡等约束的评估",
+            "sub_question_id": "ER5"
+          }
+        ],
+        "reason": "some CORE evidence requirements remain unresolved",
+        "decision_source": "llm",
+        "statuses": [
+          {
+            "sub_question_id": "ER1",
+            "satisfied": false,
+            "reason": "仅有分片算法实现，未指明具体分片键字段。",
+            "state": "PARTIAL"
+          },
+          {
+            "sub_question_id": "ER2",
+            "satisfied": false,
+            "reason": "证据仅涉及用户名校验的缓存操作或非用户表 Mapper。",
+            "state": "MISSING"
+          },
+          {
+            "sub_question_id": "ER3",
+            "satisfied": true,
+            "reason": "多个文档直接说明选 username 作为分片键的原因及解决的问题。",
+            "state": "SATISFIED"
+          },
+          {
+            "sub_question_id": "ER4",
+            "satisfied": true,
+            "reason": "证据说明登录按用户名定位及分片键与查询键一致，支持匹配关系。",
+            "state": "SATISFIED"
+          },
+          {
+            "sub_question_id": "ER5",
+            "satisfied": false,
+            "reason": "仅提及替代键反例或早期设计，未给出详细评估。",
+            "state": "PARTIAL"
+          }
+        ]
+      },
+      "rewrite": null,
+      "rewrite_error": null,
+      "rewrites": []
+    },
+    {
+      "round_index": 1,
+      "retrieval_query": "用户表 分片键 username sharding-column CustomDbHashModShardingAlgorithm 配置 | UserReuseUtil hashShardingIdx username 用户表 Mapper 查询 写入 路由 分片条件",
+      "retrieval_query_type": "MIXED",
+      "selected_chunks": [
+        {
+          "citation_label": "E1",
+          "chunk_id": 8965,
+          "source_type": "CODE",
+          "file_path": "services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/common/toolkit/UserReuseUtil.java",
+          "identity": "UserReuseUtil#hashShardingIdx",
+          "retrieval_rank": 1,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1",
+            "ER2"
+          ]
+        },
+        {
+          "citation_label": "E2",
+          "chunk_id": 8983,
+          "source_type": "CODE",
+          "file_path": "services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/config/sharding/CustomDbHashModShardingAlgorithm.java",
+          "identity": "CustomDbHashModShardingAlgorithm#CustomDbHashModShardingAlgorithm",
+          "retrieval_rank": 2,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1"
+          ]
+        },
+        {
+          "citation_label": "E3",
+          "chunk_id": 8949,
+          "source_type": "CODE",
+          "file_path": "services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/common/constant/RedisKeyConstant.java",
+          "identity": "RedisKeyConstant#RedisKeyConstant",
+          "retrieval_rank": 3,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1"
+          ]
+        },
+        {
+          "citation_label": "E4",
+          "chunk_id": 8986,
+          "source_type": "CODE",
+          "file_path": "services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/config/sharding/CustomDbHashModShardingAlgorithm.java",
+          "identity": "CustomDbHashModShardingAlgorithm#doSharding",
+          "retrieval_rank": 4,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1"
+          ]
+        },
+        {
+          "citation_label": "E5",
+          "chunk_id": 8987,
+          "source_type": "CODE",
+          "file_path": "services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/config/sharding/CustomDbHashModShardingAlgorithm.java",
+          "identity": "CustomDbHashModShardingAlgorithm#hashShardingValue",
+          "retrieval_rank": 5,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1"
+          ]
+        },
+        {
+          "citation_label": "E6",
+          "chunk_id": 8839,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/remote/UserRemoteService.java",
+          "identity": "UserRemoteService#UserRemoteService",
+          "retrieval_rank": 1,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER2"
+          ]
+        },
+        {
+          "citation_label": "E7",
+          "chunk_id": 8964,
+          "source_type": "CODE",
+          "file_path": "services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/common/toolkit/UserReuseUtil.java",
+          "identity": "UserReuseUtil#UserReuseUtil",
+          "retrieval_rank": 2,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER2"
+          ]
+        },
+        {
+          "citation_label": "E10",
+          "chunk_id": 9225,
+          "source_type": "DOCUMENT",
+          "file_path": "0-历史文档/1-用户模块文档/乘车人管理功能分析与设计.md",
+          "identity": "乘车人管理功能分析与设计 > 五、难点与设计决策 > 5.1 分片键为什么选 username（决策要点）",
+          "retrieval_rank": 1,
+          "source_role": "HISTORICAL_PLAN",
+          "temporal_status": "HISTORICAL",
+          "authority_priority": 35,
+          "sub_question_ids": [
+            "ER3",
+            "ER5"
+          ]
+        },
+        {
+          "citation_label": "E11",
+          "chunk_id": 10173,
+          "source_type": "DOCUMENT",
+          "file_path": "4-原项目对标学习/01-全局/数据库设计学习路线.md",
+          "identity": "数据库设计学习路线 > L5 · 分库分表设计 > Q2 · 分片键怎么选",
+          "retrieval_rank": 2,
+          "source_role": "CURRENT_DESIGN",
+          "temporal_status": "UNKNOWN",
+          "authority_priority": 70,
+          "sub_question_ids": [
+            "ER3"
+          ]
+        },
+        {
+          "citation_label": "E12",
+          "chunk_id": 11069,
+          "source_type": "DOCUMENT",
+          "file_path": "6-面试复习/模块3-技术专题.md",
+          "identity": "模块三 · 技术专题 > 3.6 数据库 🟡 > 【展开二：分片策略】",
+          "retrieval_rank": 3,
+          "source_role": "GENERAL_DOCUMENT",
+          "temporal_status": "UNKNOWN",
+          "authority_priority": 55,
+          "sub_question_ids": [
+            "ER3"
+          ]
+        },
+        {
+          "citation_label": "E13",
+          "chunk_id": 9464,
+          "source_type": "DOCUMENT",
+          "file_path": "0-历史文档/1-用户模块文档/登录注册功能设计与用户表设计.md",
+          "identity": "登录注册功能设计与用户表设计（学习文档） > 三、用户表设计详解（为什么这样设计） > 3.2 t_user：会员主表",
+          "retrieval_rank": 4,
+          "source_role": "HISTORICAL_PLAN",
+          "temporal_status": "HISTORICAL",
+          "authority_priority": 35,
+          "sub_question_ids": [
+            "ER3"
+          ]
+        },
+        {
+          "citation_label": "E14",
+          "chunk_id": 9456,
+          "source_type": "DOCUMENT",
+          "file_path": "0-历史文档/1-用户模块文档/登录注册功能设计与用户表设计.md",
+          "identity": "登录注册功能设计与用户表设计（学习文档） > 二、业务难点与设计决策 > 2.1 亿级数据量 → 分库分表",
+          "retrieval_rank": 5,
+          "source_role": "HISTORICAL_PLAN",
+          "temporal_status": "HISTORICAL",
+          "authority_priority": 35,
+          "sub_question_ids": [
+            "ER3"
+          ]
+        },
+        {
+          "citation_label": "E15",
+          "chunk_id": 9465,
+          "source_type": "DOCUMENT",
+          "file_path": "0-历史文档/1-用户模块文档/登录注册功能设计与用户表设计.md",
+          "identity": "登录注册功能设计与用户表设计（学习文档） > 三、用户表设计详解（为什么这样设计） > 3.3 t_user_phone：手机号映射表",
+          "retrieval_rank": 1,
+          "source_role": "HISTORICAL_PLAN",
+          "temporal_status": "HISTORICAL",
+          "authority_priority": 35,
+          "sub_question_ids": [
+            "ER4"
+          ]
+        },
+        {
+          "citation_label": "E16",
+          "chunk_id": 11018,
+          "source_type": "DOCUMENT",
+          "file_path": "6-面试复习/模块2-核心链路深挖.md",
+          "identity": "模块二 · 核心链路深挖 > 2.4 用户链路 🟡 > ③ 系统实现 > 分库分表（`shardingsphere-config.yaml`）",
+          "retrieval_rank": 2,
+          "source_role": "GENERAL_DOCUMENT",
+          "temporal_status": "UNKNOWN",
+          "authority_priority": 55,
+          "sub_question_ids": [
+            "ER4"
+          ]
+        },
+        {
+          "citation_label": "E18",
+          "chunk_id": 9094,
+          "source_type": "DOCUMENT",
+          "file_path": "0-历史文档/1-用户模块文档/12306学习开发文档.md",
+          "identity": "12306 学习项目开发准备文档（开发前规划） > 三、数据库设计 > 3.2 分库分表说明",
+          "retrieval_rank": 2,
+          "source_role": "HISTORICAL_PLAN",
+          "temporal_status": "HISTORICAL",
+          "authority_priority": 35,
+          "sub_question_ids": [
+            "ER5"
+          ]
+        },
+        {
+          "citation_label": "E20",
+          "chunk_id": 8985,
+          "source_type": "CODE",
+          "file_path": "services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/config/sharding/CustomDbHashModShardingAlgorithm.java",
+          "identity": "CustomDbHashModShardingAlgorithm#doSharding",
+          "retrieval_rank": 3,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1"
+          ]
+        }
+      ],
+      "sufficiency": {
+        "enough": false,
+        "missing_aspects": [
+          {
+            "source_type": "CODE",
+            "description": "缺少用户表分片配置中显式指定分片键为 username 的配置内容",
+            "sub_question_id": "ER1"
+          },
+          {
+            "source_type": "CODE",
+            "description": "缺少用户表路由字段配置或等效声明",
+            "sub_question_id": "ER1"
+          },
+          {
+            "source_type": "CODE",
+            "description": "缺少用户模块对用户表进行读写时以 username 作为路由或查询条件的代码或 SQL",
+            "sub_question_id": "ER2"
+          },
+          {
+            "source_type": "CODE",
+            "description": "缺少用户表 Mapper 或 Repository 中按用户名过滤的实现",
+            "sub_question_id": "ER2"
+          },
+          {
+            "source_type": "ANY",
+            "description": "缺少对按 id、id_card 等替代分片键的具体限制或排除依据的说明",
+            "sub_question_id": "ER5"
+          },
+          {
+            "source_type": "ANY",
+            "description": "缺少对生成时序、分布均衡等约束的评估",
+            "sub_question_id": "ER5"
+          }
+        ],
+        "reason": "some CORE evidence requirements remain unresolved",
+        "decision_source": "llm",
+        "statuses": [
+          {
+            "sub_question_id": "ER1",
+            "satisfied": false,
+            "reason": "仅有分片算法实现，未指明具体分片键字段。",
+            "state": "PARTIAL"
+          },
+          {
+            "sub_question_id": "ER2",
+            "satisfied": false,
+            "reason": "证据仅涉及用户名校验的缓存操作或非用户表 Mapper。",
+            "state": "MISSING"
+          },
+          {
+            "sub_question_id": "ER3",
+            "satisfied": true,
+            "reason": "多个文档直接说明选 username 作为分片键的原因及解决的问题。",
+            "state": "SATISFIED"
+          },
+          {
+            "sub_question_id": "ER4",
+            "satisfied": true,
+            "reason": "证据说明登录按用户名定位及分片键与查询键一致，支持匹配关系。",
+            "state": "SATISFIED"
+          },
+          {
+            "sub_question_id": "ER5",
+            "satisfied": false,
+            "reason": "仅提及替代键反例或早期设计，未给出详细评估。",
+            "state": "PARTIAL"
+          }
+        ]
+      },
+      "rewrite": null,
+      "rewrite_error": null,
+      "rewrites": []
+    }
+  ],
+  "retry_count": 1,
+  "final_sufficiency": {
+    "enough": false,
+    "missing_aspects": [
+      {
+        "source_type": "CODE",
+        "description": "缺少用户表分片配置中显式指定分片键为 username 的配置内容",
+        "sub_question_id": "ER1"
+      },
+      {
+        "source_type": "CODE",
+        "description": "缺少用户表路由字段配置或等效声明",
+        "sub_question_id": "ER1"
+      },
+      {
+        "source_type": "CODE",
+        "description": "缺少用户模块对用户表进行读写时以 username 作为路由或查询条件的代码或 SQL",
+        "sub_question_id": "ER2"
+      },
+      {
+        "source_type": "CODE",
+        "description": "缺少用户表 Mapper 或 Repository 中按用户名过滤的实现",
+        "sub_question_id": "ER2"
+      },
+      {
+        "source_type": "ANY",
+        "description": "缺少对按 id、id_card 等替代分片键的具体限制或排除依据的说明",
+        "sub_question_id": "ER5"
+      },
+      {
+        "source_type": "ANY",
+        "description": "缺少对生成时序、分布均衡等约束的评估",
+        "sub_question_id": "ER5"
+      }
+    ],
+    "reason": "some CORE evidence requirements remain unresolved",
+    "decision_source": "llm",
+    "statuses": [
+      {
+        "sub_question_id": "ER1",
+        "satisfied": false,
+        "reason": "仅有分片算法实现，未指明具体分片键字段。",
+        "state": "PARTIAL"
+      },
+      {
+        "sub_question_id": "ER2",
+        "satisfied": false,
+        "reason": "证据仅涉及用户名校验的缓存操作或非用户表 Mapper。",
+        "state": "MISSING"
+      },
+      {
+        "sub_question_id": "ER3",
+        "satisfied": true,
+        "reason": "多个文档直接说明选 username 作为分片键的原因及解决的问题。",
+        "state": "SATISFIED"
+      },
+      {
+        "sub_question_id": "ER4",
+        "satisfied": true,
+        "reason": "证据说明登录按用户名定位及分片键与查询键一致，支持匹配关系。",
+        "state": "SATISFIED"
+      },
+      {
+        "sub_question_id": "ER5",
+        "satisfied": false,
+        "reason": "仅提及替代键反例或早期设计，未给出详细评估。",
+        "state": "PARTIAL"
+      }
+    ]
+  },
+  "stop_reason": "partial",
+  "plan": null,
+  "sub_question_traces": [
+    {
+      "sub_question_id": "ER1",
+      "question": "用户表分库分表配置中实际采用的分片键",
+      "purpose": "包含用户表的分库分表规则、路由字段配置或等效代码/配置文件，能确认分片键字段是用户名",
+      "query_type": "CODE",
+      "selected_chunks": [
+        {
+          "citation_label": "C1",
+          "chunk_id": 8965,
+          "source_type": "CODE",
+          "file_path": "services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/common/toolkit/UserReuseUtil.java",
+          "identity": "UserReuseUtil#hashShardingIdx",
+          "retrieval_rank": 1,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1",
+            "ER2"
+          ]
+        },
+        {
+          "citation_label": "C6",
+          "chunk_id": 8983,
+          "source_type": "CODE",
+          "file_path": "services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/config/sharding/CustomDbHashModShardingAlgorithm.java",
+          "identity": "CustomDbHashModShardingAlgorithm#CustomDbHashModShardingAlgorithm",
+          "retrieval_rank": 6,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1"
+          ]
+        },
+        {
+          "citation_label": "C8",
+          "chunk_id": 8949,
+          "source_type": "CODE",
+          "file_path": "services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/common/constant/RedisKeyConstant.java",
+          "identity": "RedisKeyConstant#RedisKeyConstant",
+          "retrieval_rank": 8,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1"
+          ]
+        },
+        {
+          "citation_label": "C9",
+          "chunk_id": 8986,
+          "source_type": "CODE",
+          "file_path": "services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/config/sharding/CustomDbHashModShardingAlgorithm.java",
+          "identity": "CustomDbHashModShardingAlgorithm#doSharding",
+          "retrieval_rank": 9,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1"
+          ]
+        },
+        {
+          "citation_label": "C11",
+          "chunk_id": 8987,
+          "source_type": "CODE",
+          "file_path": "services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/config/sharding/CustomDbHashModShardingAlgorithm.java",
+          "identity": "CustomDbHashModShardingAlgorithm#hashShardingValue",
+          "retrieval_rank": 11,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1"
+          ]
+        }
+      ]
+    },
+    {
+      "sub_question_id": "ER2",
+      "question": "用户模块对用户表的读写路径是否按用户名进行路由或过滤",
+      "purpose": "包含用户模块查询、写入或更新用户表时使用用户名作为分片路由条件或查询条件的代码、SQL 或等效实现",
+      "query_type": "CODE",
+      "selected_chunks": [
+        {
+          "citation_label": "C1",
+          "chunk_id": 8965,
+          "source_type": "CODE",
+          "file_path": "services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/common/toolkit/UserReuseUtil.java",
+          "identity": "UserReuseUtil#hashShardingIdx",
+          "retrieval_rank": 1,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER1",
+            "ER2"
+          ]
+        },
+        {
+          "citation_label": "C3",
+          "chunk_id": 8839,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/remote/UserRemoteService.java",
+          "identity": "UserRemoteService#UserRemoteService",
+          "retrieval_rank": 2,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER2"
+          ]
+        },
+        {
+          "citation_label": "C7",
+          "chunk_id": 8964,
+          "source_type": "CODE",
+          "file_path": "services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/common/toolkit/UserReuseUtil.java",
+          "identity": "UserReuseUtil#UserReuseUtil",
+          "retrieval_rank": 7,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER2"
+          ]
+        },
+        {
+          "citation_label": "C10",
+          "chunk_id": 9010,
+          "source_type": "CODE",
+          "file_path": "services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/dao/mapper/PassengerMapper.java",
+          "identity": "PassengerMapper#PassengerMapper",
+          "retrieval_rank": 10,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER2"
+          ]
+        },
+        {
+          "citation_label": "C12",
+          "chunk_id": 8876,
+          "source_type": "CODE",
+          "file_path": "services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/service/handler/ticket/tokenbucket/TicketAvailabilityTokenBucket.java",
+          "identity": "TicketAvailabilityTokenBucket#loadBucket",
+          "retrieval_rank": 12,
+          "source_role": "IMPLEMENTATION",
+          "temporal_status": "CURRENT",
+          "authority_priority": 100,
+          "sub_question_ids": [
+            "ER2"
+          ]
+        }
+      ]
+    },
+    {
+      "sub_question_id": "ER3",
+      "question": "项目内关于用户表分片键选型的说明",
+      "purpose": "包含设计文档、代码注释或决策记录，说明为何将用户名作为用户表分片键，或说明该选择要解决的问题",
+      "query_type": "DOC",
+      "selected_chunks": [
+        {
+          "citation_label": "C2",
+          "chunk_id": 10173,
+          "source_type": "DOCUMENT",
+          "file_path": "4-原项目对标学习/01-全局/数据库设计学习路线.md",
+          "identity": "数据库设计学习路线 > L5 · 分库分表设计 > Q2 · 分片键怎么选",
+          "retrieval_rank": 3,
+          "source_role": "CURRENT_DESIGN",
+          "temporal_status": "UNKNOWN",
+          "authority_priority": 70,
+          "sub_question_ids": [
+            "ER3"
+          ]
+        }
+      ]
+    },
+    {
+      "sub_question_id": "ER4",
+      "question": "用户名作为分片键与业务约束及数据特征的匹配关系",
+      "purpose": "包含用户名的唯一性约束、登录或账户定位方式、或按用户名查询的频率与分布特征等证据，可用于判断该分片键是否与访问模式一致",
+      "query_type": "MIXED",
+      "selected_chunks": [
+        {
+          "citation_label": "C4",
+          "chunk_id": 11018,
+          "source_type": "DOCUMENT",
+          "file_path": "6-面试复习/模块2-核心链路深挖.md",
+          "identity": "模块二 · 核心链路深挖 > 2.4 用户链路 🟡 > ③ 系统实现 > 分库分表（`shardingsphere-config.yaml`）",
+          "retrieval_rank": 4,
+          "source_role": "GENERAL_DOCUMENT",
+          "temporal_status": "UNKNOWN",
+          "authority_priority": 55,
+          "sub_question_ids": [
+            "ER4"
+          ]
+        }
+      ]
+    },
+    {
+      "sub_question_id": "ER5",
+      "question": "其他候选分片键相比用户名不被采用的原因",
+      "purpose": "包含对替代分片键的评估、限制或排除依据，例如生成时序、查询模式或分布均衡方面的约束说明",
+      "query_type": "MIXED",
+      "selected_chunks": [
+        {
+          "citation_label": "C5",
+          "chunk_id": 11512,
+          "source_type": "DOCUMENT",
+          "file_path": "新建文件夹/1-概述.md",
+          "identity": "九、阶段 3：补齐另外三条链路",
+          "retrieval_rank": 5,
+          "source_role": "GENERAL_DOCUMENT",
+          "temporal_status": "UNKNOWN",
+          "authority_priority": 55,
+          "sub_question_ids": [
+            "ER5"
+          ]
+        }
+      ]
+    }
+  ],
+  "citations": {
+    "used_labels": [
+      "E11",
+      "E13",
+      "E14",
+      "E20",
+      "E2",
+      "E5",
+      "E1",
+      "E3",
+      "E4",
+      "E12",
+      "E16",
+      "E6",
+      "E7",
+      "E18",
+      "E15",
+      "E10"
+    ],
+    "invalid_labels": [],
+    "zero_valid": false,
+    "sources": [
+      "[E11] 4-原项目对标学习/01-全局/数据库设计学习路线.md > 数据库设计学习路线 > L5 · 分库分表设计 > Q2 · 分片键怎么选",
+      "[E13] 0-历史文档/1-用户模块文档/登录注册功能设计与用户表设计.md > 登录注册功能设计与用户表设计（学习文档） > 三、用户表设计详解（为什么这样设计） > 3.2 t_user：会员主表",
+      "[E14] 0-历史文档/1-用户模块文档/登录注册功能设计与用户表设计.md > 登录注册功能设计与用户表设计（学习文档） > 二、业务难点与设计决策 > 2.1 亿级数据量 → 分库分表",
+      "[E20] services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/config/sharding/CustomDbHashModShardingAlgorithm.java:31-38 — CustomDbHashModShardingAlgorithm#doSharding",
+      "[E2] services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/config/sharding/CustomDbHashModShardingAlgorithm.java:17-53 — CustomDbHashModShardingAlgorithm#CustomDbHashModShardingAlgorithm",
+      "[E5] services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/config/sharding/CustomDbHashModShardingAlgorithm.java:45-47 — CustomDbHashModShardingAlgorithm#hashShardingValue",
+      "[E1] services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/common/toolkit/UserReuseUtil.java:13-15 — UserReuseUtil#hashShardingIdx",
+      "[E3] services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/common/constant/RedisKeyConstant.java:6-22 — RedisKeyConstant#RedisKeyConstant",
+      "[E4] services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/config/sharding/CustomDbHashModShardingAlgorithm.java:40-43 — CustomDbHashModShardingAlgorithm#doSharding",
+      "[E12] 6-面试复习/模块3-技术专题.md > 模块三 · 技术专题 > 3.6 数据库 🟡 > 【展开二：分片策略】",
+      "[E16] 6-面试复习/模块2-核心链路深挖.md > 模块二 · 核心链路深挖 > 2.4 用户链路 🟡 > ③ 系统实现 > 分库分表（`shardingsphere-config.yaml`）",
+      "[E6] services/ticket-services/src/main/java/edu/swu/fcj/my12306/biz/ticketservice/remote/UserRemoteService.java:14-21 — UserRemoteService#UserRemoteService",
+      "[E7] services/user-services/src/main/java/edu/swu/fcj/my12306/biz/userservice/common/toolkit/UserReuseUtil.java:8-16 — UserReuseUtil#UserReuseUtil",
+      "[E18] 0-历史文档/1-用户模块文档/12306学习开发文档.md > 12306 学习项目开发准备文档（开发前规划） > 三、数据库设计 > 3.2 分库分表说明",
+      "[E15] 0-历史文档/1-用户模块文档/登录注册功能设计与用户表设计.md > 登录注册功能设计与用户表设计（学习文档） > 三、用户表设计详解（为什么这样设计） > 3.3 t_user_phone：手机号映射表",
+      "[E10] 0-历史文档/1-用户模块文档/乘车人管理功能分析与设计.md > 乘车人管理功能分析与设计 > 五、难点与设计决策 > 5.1 分片键为什么选 username（决策要点）"
+    ]
+  },
+  "sections": {
+    "count": 3,
+    "lengths": [
+      944,
+      1122,
+      1416
+    ],
+    "max_chars": 1416,
+    "over_budget": 3
+  },
+  "answer_plan": null,
+  "source_conflicts": [],
+  "review": null,
+  "stage_usage": [
+    {
+      "stage": "evidence_planning",
+      "latency_ms": 8343.564499984495,
+      "decision_source": "llm",
+      "model": "deepseek-flash",
+      "reasoning_effort": "high",
+      "input_tokens": 482,
+      "output_tokens": 1705,
+      "round_index": null
+    },
+    {
+      "stage": "search_action_planning",
+      "latency_ms": 3206.3666000030935,
+      "decision_source": "llm",
+      "model": "deepseek-flash",
+      "reasoning_effort": "low",
+      "input_tokens": 743,
+      "output_tokens": 629,
+      "round_index": 0
+    },
+    {
+      "stage": "evidence_retrieval",
+      "latency_ms": 3774.5082000037655,
+      "decision_source": "policy",
+      "model": null,
+      "reasoning_effort": null,
+      "input_tokens": null,
+      "output_tokens": null,
+      "round_index": 0
+    },
+    {
+      "stage": "coverage_check",
+      "latency_ms": 13458.777499967255,
+      "decision_source": "llm",
+      "model": "deepseek-flash",
+      "reasoning_effort": "low",
+      "input_tokens": 6111,
+      "output_tokens": 2910,
+      "round_index": 0
+    },
+    {
+      "stage": "search_action_planning",
+      "latency_ms": 8752.697099989746,
+      "decision_source": "llm",
+      "model": "deepseek-flash",
+      "reasoning_effort": "low",
+      "input_tokens": 815,
+      "output_tokens": 1999,
+      "round_index": 1
+    },
+    {
+      "stage": "evidence_retrieval",
+      "latency_ms": 1146.1127999937162,
+      "decision_source": "policy",
+      "model": null,
+      "reasoning_effort": null,
+      "input_tokens": null,
+      "output_tokens": null,
+      "round_index": 1
+    },
+    {
+      "stage": "coverage_check",
+      "latency_ms": 20449.407599982806,
+      "decision_source": "llm",
+      "model": "deepseek-flash",
+      "reasoning_effort": "low",
+      "input_tokens": 6619,
+      "output_tokens": 4818,
+      "round_index": 1
+    },
+    {
+      "stage": "explanation_planning",
+      "latency_ms": 6669.613100006245,
+      "decision_source": "llm",
+      "model": "deepseek-flash",
+      "reasoning_effort": "high",
+      "input_tokens": 7326,
+      "output_tokens": 1434,
+      "round_index": null
+    },
+    {
+      "stage": "teaching_draft",
+      "latency_ms": 24762.317800021265,
+      "decision_source": "llm",
+      "model": "deepseek-flash",
+      "reasoning_effort": "high",
+      "input_tokens": 6702,
+      "output_tokens": 5441,
+      "round_index": null
+    }
+  ],
+  "evidence_plan": {
+    "schema_version": 2,
+    "original_query": "用户模块，用户表分库分表键为何要使用用户名",
+    "requirements": [
+      {
+        "id": "ER1",
+        "target": "用户表分库分表配置中实际采用的分片键",
+        "success_criteria": "包含用户表的分库分表规则、路由字段配置或等效代码/配置文件，能确认分片键字段是用户名",
+        "priority": "CORE",
+        "temporal_scope": "CURRENT",
+        "source_requirement": "CODE"
+      },
+      {
+        "id": "ER2",
+        "target": "用户模块对用户表的读写路径是否按用户名进行路由或过滤",
+        "success_criteria": "包含用户模块查询、写入或更新用户表时使用用户名作为分片路由条件或查询条件的代码、SQL 或等效实现",
+        "priority": "CORE",
+        "temporal_scope": "CURRENT",
+        "source_requirement": "CODE"
+      },
+      {
+        "id": "ER3",
+        "target": "项目内关于用户表分片键选型的说明",
+        "success_criteria": "包含设计文档、代码注释或决策记录，说明为何将用户名作为用户表分片键，或说明该选择要解决的问题",
+        "priority": "CORE",
+        "temporal_scope": "CURRENT",
+        "source_requirement": "DOCUMENT"
+      },
+      {
+        "id": "ER4",
+        "target": "用户名作为分片键与业务约束及数据特征的匹配关系",
+        "success_criteria": "包含用户名的唯一性约束、登录或账户定位方式、或按用户名查询的频率与分布特征等证据，可用于判断该分片键是否与访问模式一致",
+        "priority": "SUPPORTING",
+        "temporal_scope": "CURRENT",
+        "source_requirement": "ANY"
+      },
+      {
+        "id": "ER5",
+        "target": "其他候选分片键相比用户名不被采用的原因",
+        "success_criteria": "包含对替代分片键的评估、限制或排除依据，例如生成时序、查询模式或分布均衡方面的约束说明",
+        "priority": "SUPPORTING",
+        "temporal_scope": "CURRENT",
+        "source_requirement": "ANY"
+      }
+    ],
+    "decision_source": "llm"
+  },
+  "requirement_traces": [
+    {
+      "requirement_id": "ER1",
+      "target": "用户表分库分表配置中实际采用的分片键",
+      "search_history": [
+        {
+          "action_id": "SA1",
+          "requirement_id": "ER1",
+          "round_index": 0,
+          "query": "用户表 分库分表 分片键 路由字段 配置 用户名 sharding key",
+          "source_scope": "CODE",
+          "reason": "查找用户表实际分片键配置与规则",
+          "decision_source": "llm",
+          "error": null
+        },
+        {
+          "action_id": "SA6",
+          "requirement_id": "ER1",
+          "round_index": 1,
+          "query": "用户表 分片键 username sharding-column CustomDbHashModShardingAlgorithm 配置",
+          "source_scope": "CODE",
+          "reason": "聚焦已发现的分片算法类，查找用户表分片键字段为username的配置证据。",
+          "decision_source": "llm",
+          "error": null
+        }
+      ],
+      "evidence_ids": [
+        8983,
+        8985
+      ],
+      "coverage_history": [
+        {
+          "requirement_id": "ER1",
+          "state": "PARTIAL",
+          "evidence_ids": [
+            8965,
+            8983
+          ],
+          "missing_criteria": [
+            "用户表分库分表配置中明确指定分片键为username的规则或配置文件",
+            "用户表路由字段配置能确认分片键字段是用户名的等效证据"
+          ],
+          "reason": "有分片算法和username哈希代码，但未给出用户表分片键配置。",
+          "decision_source": "llm",
+          "check_error": null
+        },
+        {
+          "requirement_id": "ER1",
+          "state": "PARTIAL",
+          "evidence_ids": [
+            8983,
+            8985
+          ],
+          "missing_criteria": [
+            "缺少用户表分片配置中显式指定分片键为 username 的配置内容",
+            "缺少用户表路由字段配置或等效声明"
+          ],
+          "reason": "仅有分片算法实现，未指明具体分片键字段。",
+          "decision_source": "llm",
+          "check_error": null
+        }
+      ],
+      "final_state": "PARTIAL"
+    },
+    {
+      "requirement_id": "ER2",
+      "target": "用户模块对用户表的读写路径是否按用户名进行路由或过滤",
+      "search_history": [
+        {
+          "action_id": "SA2",
+          "requirement_id": "ER2",
+          "round_index": 0,
+          "query": "用户模块 用户表 查询 写入 更新 按用户名 路由 分片条件 SQL",
+          "source_scope": "CODE",
+          "reason": "查找用户模块读写路径是否按用户名路由或过滤",
+          "decision_source": "llm",
+          "error": null
+        },
+        {
+          "action_id": "SA7",
+          "requirement_id": "ER2",
+          "round_index": 1,
+          "query": "UserReuseUtil hashShardingIdx username 用户表 Mapper 查询 写入 路由 分片条件",
+          "source_scope": "CODE",
+          "reason": "复用已发现的工具方法，查找用户表读写路径中按用户名路由或过滤的实现。",
+          "decision_source": "llm",
+          "error": null
+        }
+      ],
+      "evidence_ids": [],
+      "coverage_history": [
+        {
+          "requirement_id": "ER2",
+          "state": "MISSING",
+          "evidence_ids": [
+            8964,
+            8965
+          ],
+          "missing_criteria": [
+            "用户模块查询、写入或更新用户表时以username作为分片路由条件或查询条件的代码/SQL",
+            "用户表Mapper或持久层中按username路由/过滤的实现"
+          ],
+          "reason": "现有证据是复用工具或乘车人/远程调用，非用户表读写路由。",
+          "decision_source": "llm",
+          "check_error": null
+        },
+        {
+          "requirement_id": "ER2",
+          "state": "MISSING",
+          "evidence_ids": [],
+          "missing_criteria": [
+            "缺少用户模块对用户表进行读写时以 username 作为路由或查询条件的代码或 SQL",
+            "缺少用户表 Mapper 或 Repository 中按用户名过滤的实现"
+          ],
+          "reason": "证据仅涉及用户名校验的缓存操作或非用户表 Mapper。",
+          "decision_source": "llm",
+          "check_error": null
+        }
+      ],
+      "final_state": "MISSING"
+    },
+    {
+      "requirement_id": "ER3",
+      "target": "项目内关于用户表分片键选型的说明",
+      "search_history": [
+        {
+          "action_id": "SA3",
+          "requirement_id": "ER3",
+          "round_index": 0,
+          "query": "用户表 分片键 选型 为什么 使用用户名 设计文档 注释 决策记录",
+          "source_scope": "DOCUMENT",
+          "reason": "查找分片键选型说明文档或记录",
+          "decision_source": "llm",
+          "error": null
+        }
+      ],
+      "evidence_ids": [
+        9225,
+        10173,
+        11069,
+        9464,
+        9456
+      ],
+      "coverage_history": [
+        {
+          "requirement_id": "ER3",
+          "state": "SATISFIED",
+          "evidence_ids": [
+            9225,
+            10173,
+            11069,
+            9464,
+            9456
+          ],
+          "missing_criteria": [],
+          "reason": "多份设计文档和面试复习材料说明t_user按username分片的原因。",
+          "decision_source": "llm",
+          "check_error": null
+        },
+        {
+          "requirement_id": "ER3",
+          "state": "SATISFIED",
+          "evidence_ids": [
+            9225,
+            10173,
+            11069,
+            9464,
+            9456
+          ],
+          "missing_criteria": [],
+          "reason": "多个文档直接说明选 username 作为分片键的原因及解决的问题。",
+          "decision_source": "llm",
+          "check_error": null
+        }
+      ],
+      "final_state": "SATISFIED"
+    },
+    {
+      "requirement_id": "ER4",
+      "target": "用户名作为分片键与业务约束及数据特征的匹配关系",
+      "search_history": [
+        {
+          "action_id": "SA4",
+          "requirement_id": "ER4",
+          "round_index": 0,
+          "query": "用户名 唯一性约束 登录 账户定位 按用户名查询 频率 分布 分片键 匹配",
+          "source_scope": "ANY",
+          "reason": "查找用户名业务约束与访问特征证据",
+          "decision_source": "llm",
+          "error": null
+        }
+      ],
+      "evidence_ids": [
+        11018,
+        9214
+      ],
+      "coverage_history": [
+        {
+          "requirement_id": "ER4",
+          "state": "SATISFIED",
+          "evidence_ids": [
+            9465,
+            11018,
+            9214
+          ],
+          "missing_criteria": [],
+          "reason": "证据说明登录/账户定位按username，且分片键须与查询键一致。",
+          "decision_source": "llm",
+          "check_error": null
+        },
+        {
+          "requirement_id": "ER4",
+          "state": "SATISFIED",
+          "evidence_ids": [
+            11018,
+            9214
+          ],
+          "missing_criteria": [],
+          "reason": "证据说明登录按用户名定位及分片键与查询键一致，支持匹配关系。",
+          "decision_source": "llm",
+          "check_error": null
+        }
+      ],
+      "final_state": "SATISFIED"
+    },
+    {
+      "requirement_id": "ER5",
+      "target": "其他候选分片键相比用户名不被采用的原因",
+      "search_history": [
+        {
+          "action_id": "SA5",
+          "requirement_id": "ER5",
+          "round_index": 0,
+          "query": "替代分片键 评估 排除 用户ID 生成时序 查询模式 分布均衡 为何不用",
+          "source_scope": "ANY",
+          "reason": "查找其他候选分片键不被采用的原因",
+          "decision_source": "llm",
+          "error": null
+        }
+      ],
+      "evidence_ids": [
+        9225,
+        9094
+      ],
+      "coverage_history": [
+        {
+          "requirement_id": "ER5",
+          "state": "PARTIAL",
+          "evidence_ids": [
+            9225,
+            9094
+          ],
+          "missing_criteria": [
+            "对id、id_card等替代分片键在查询模式或分布均衡方面被排除的具体依据",
+            "从旧规划按用户ID分片改为按username分片的决策说明"
+          ],
+          "reason": "仅提到可与id/id_card反例对比，缺少具体评估和排除依据。",
+          "decision_source": "llm",
+          "check_error": null
+        },
+        {
+          "requirement_id": "ER5",
+          "state": "PARTIAL",
+          "evidence_ids": [
+            9225,
+            9094
+          ],
+          "missing_criteria": [
+            "缺少对按 id、id_card 等替代分片键的具体限制或排除依据的说明",
+            "缺少对生成时序、分布均衡等约束的评估"
+          ],
+          "reason": "仅提及替代键反例或早期设计，未给出详细评估。",
+          "decision_source": "llm",
+          "check_error": null
+        }
+      ],
+      "final_state": "PARTIAL"
+    }
+  ],
+  "search_actions": [
+    {
+      "action_id": "SA1",
+      "requirement_id": "ER1",
+      "round_index": 0,
+      "query": "用户表 分库分表 分片键 路由字段 配置 用户名 sharding key",
+      "source_scope": "CODE",
+      "reason": "查找用户表实际分片键配置与规则",
+      "decision_source": "llm",
+      "error": null
+    },
+    {
+      "action_id": "SA2",
+      "requirement_id": "ER2",
+      "round_index": 0,
+      "query": "用户模块 用户表 查询 写入 更新 按用户名 路由 分片条件 SQL",
+      "source_scope": "CODE",
+      "reason": "查找用户模块读写路径是否按用户名路由或过滤",
+      "decision_source": "llm",
+      "error": null
+    },
+    {
+      "action_id": "SA3",
+      "requirement_id": "ER3",
+      "round_index": 0,
+      "query": "用户表 分片键 选型 为什么 使用用户名 设计文档 注释 决策记录",
+      "source_scope": "DOCUMENT",
+      "reason": "查找分片键选型说明文档或记录",
+      "decision_source": "llm",
+      "error": null
+    },
+    {
+      "action_id": "SA4",
+      "requirement_id": "ER4",
+      "round_index": 0,
+      "query": "用户名 唯一性约束 登录 账户定位 按用户名查询 频率 分布 分片键 匹配",
+      "source_scope": "ANY",
+      "reason": "查找用户名业务约束与访问特征证据",
+      "decision_source": "llm",
+      "error": null
+    },
+    {
+      "action_id": "SA5",
+      "requirement_id": "ER5",
+      "round_index": 0,
+      "query": "替代分片键 评估 排除 用户ID 生成时序 查询模式 分布均衡 为何不用",
+      "source_scope": "ANY",
+      "reason": "查找其他候选分片键不被采用的原因",
+      "decision_source": "llm",
+      "error": null
+    },
+    {
+      "action_id": "SA6",
+      "requirement_id": "ER1",
+      "round_index": 1,
+      "query": "用户表 分片键 username sharding-column CustomDbHashModShardingAlgorithm 配置",
+      "source_scope": "CODE",
+      "reason": "聚焦已发现的分片算法类，查找用户表分片键字段为username的配置证据。",
+      "decision_source": "llm",
+      "error": null
+    },
+    {
+      "action_id": "SA7",
+      "requirement_id": "ER2",
+      "round_index": 1,
+      "query": "UserReuseUtil hashShardingIdx username 用户表 Mapper 查询 写入 路由 分片条件",
+      "source_scope": "CODE",
+      "reason": "复用已发现的工具方法，查找用户表读写路径中按用户名路由或过滤的实现。",
+      "decision_source": "llm",
+      "error": null
+    }
+  ],
+  "coverage_rounds": [
+    {
+      "round_index": 0,
+      "statuses": [
+        {
+          "requirement_id": "ER1",
+          "state": "PARTIAL",
+          "evidence_ids": [
+            8965,
+            8983
+          ],
+          "missing_criteria": [
+            "用户表分库分表配置中明确指定分片键为username的规则或配置文件",
+            "用户表路由字段配置能确认分片键字段是用户名的等效证据"
+          ],
+          "reason": "有分片算法和username哈希代码，但未给出用户表分片键配置。",
+          "decision_source": "llm",
+          "check_error": null
+        },
+        {
+          "requirement_id": "ER2",
+          "state": "MISSING",
+          "evidence_ids": [
+            8964,
+            8965
+          ],
+          "missing_criteria": [
+            "用户模块查询、写入或更新用户表时以username作为分片路由条件或查询条件的代码/SQL",
+            "用户表Mapper或持久层中按username路由/过滤的实现"
+          ],
+          "reason": "现有证据是复用工具或乘车人/远程调用，非用户表读写路由。",
+          "decision_source": "llm",
+          "check_error": null
+        },
+        {
+          "requirement_id": "ER3",
+          "state": "SATISFIED",
+          "evidence_ids": [
+            9225,
+            10173,
+            11069,
+            9464,
+            9456
+          ],
+          "missing_criteria": [],
+          "reason": "多份设计文档和面试复习材料说明t_user按username分片的原因。",
+          "decision_source": "llm",
+          "check_error": null
+        },
+        {
+          "requirement_id": "ER4",
+          "state": "SATISFIED",
+          "evidence_ids": [
+            9465,
+            11018,
+            9214
+          ],
+          "missing_criteria": [],
+          "reason": "证据说明登录/账户定位按username，且分片键须与查询键一致。",
+          "decision_source": "llm",
+          "check_error": null
+        },
+        {
+          "requirement_id": "ER5",
+          "state": "PARTIAL",
+          "evidence_ids": [
+            9225,
+            9094
+          ],
+          "missing_criteria": [
+            "对id、id_card等替代分片键在查询模式或分布均衡方面被排除的具体依据",
+            "从旧规划按用户ID分片改为按username分片的决策说明"
+          ],
+          "reason": "仅提到可与id/id_card反例对比，缺少具体评估和排除依据。",
+          "decision_source": "llm",
+          "check_error": null
+        }
+      ]
+    },
+    {
+      "round_index": 1,
+      "statuses": [
+        {
+          "requirement_id": "ER1",
+          "state": "PARTIAL",
+          "evidence_ids": [
+            8983,
+            8985
+          ],
+          "missing_criteria": [
+            "缺少用户表分片配置中显式指定分片键为 username 的配置内容",
+            "缺少用户表路由字段配置或等效声明"
+          ],
+          "reason": "仅有分片算法实现，未指明具体分片键字段。",
+          "decision_source": "llm",
+          "check_error": null
+        },
+        {
+          "requirement_id": "ER2",
+          "state": "MISSING",
+          "evidence_ids": [],
+          "missing_criteria": [
+            "缺少用户模块对用户表进行读写时以 username 作为路由或查询条件的代码或 SQL",
+            "缺少用户表 Mapper 或 Repository 中按用户名过滤的实现"
+          ],
+          "reason": "证据仅涉及用户名校验的缓存操作或非用户表 Mapper。",
+          "decision_source": "llm",
+          "check_error": null
+        },
+        {
+          "requirement_id": "ER3",
+          "state": "SATISFIED",
+          "evidence_ids": [
+            9225,
+            10173,
+            11069,
+            9464,
+            9456
+          ],
+          "missing_criteria": [],
+          "reason": "多个文档直接说明选 username 作为分片键的原因及解决的问题。",
+          "decision_source": "llm",
+          "check_error": null
+        },
+        {
+          "requirement_id": "ER4",
+          "state": "SATISFIED",
+          "evidence_ids": [
+            11018,
+            9214
+          ],
+          "missing_criteria": [],
+          "reason": "证据说明登录按用户名定位及分片键与查询键一致，支持匹配关系。",
+          "decision_source": "llm",
+          "check_error": null
+        },
+        {
+          "requirement_id": "ER5",
+          "state": "PARTIAL",
+          "evidence_ids": [
+            9225,
+            9094
+          ],
+          "missing_criteria": [
+            "缺少对按 id、id_card 等替代分片键的具体限制或排除依据的说明",
+            "缺少对生成时序、分布均衡等约束的评估"
+          ],
+          "reason": "仅提及替代键反例或早期设计，未给出详细评估。",
+          "decision_source": "llm",
+          "check_error": null
+        }
+      ]
+    }
+  ],
+  "final_coverage": [
+    {
+      "requirement_id": "ER1",
+      "state": "PARTIAL",
+      "evidence_ids": [
+        8983,
+        8985
+      ],
+      "missing_criteria": [
+        "缺少用户表分片配置中显式指定分片键为 username 的配置内容",
+        "缺少用户表路由字段配置或等效声明"
+      ],
+      "reason": "仅有分片算法实现，未指明具体分片键字段。",
+      "decision_source": "llm",
+      "check_error": null
+    },
+    {
+      "requirement_id": "ER2",
+      "state": "MISSING",
+      "evidence_ids": [],
+      "missing_criteria": [
+        "缺少用户模块对用户表进行读写时以 username 作为路由或查询条件的代码或 SQL",
+        "缺少用户表 Mapper 或 Repository 中按用户名过滤的实现"
+      ],
+      "reason": "证据仅涉及用户名校验的缓存操作或非用户表 Mapper。",
+      "decision_source": "llm",
+      "check_error": null
+    },
+    {
+      "requirement_id": "ER3",
+      "state": "SATISFIED",
+      "evidence_ids": [
+        9225,
+        10173,
+        11069,
+        9464,
+        9456
+      ],
+      "missing_criteria": [],
+      "reason": "多个文档直接说明选 username 作为分片键的原因及解决的问题。",
+      "decision_source": "llm",
+      "check_error": null
+    },
+    {
+      "requirement_id": "ER4",
+      "state": "SATISFIED",
+      "evidence_ids": [
+        11018,
+        9214
+      ],
+      "missing_criteria": [],
+      "reason": "证据说明登录按用户名定位及分片键与查询键一致，支持匹配关系。",
+      "decision_source": "llm",
+      "check_error": null
+    },
+    {
+      "requirement_id": "ER5",
+      "state": "PARTIAL",
+      "evidence_ids": [
+        9225,
+        9094
+      ],
+      "missing_criteria": [
+        "缺少对按 id、id_card 等替代分片键的具体限制或排除依据的说明",
+        "缺少对生成时序、分布均衡等约束的评估"
+      ],
+      "reason": "仅提及替代键反例或早期设计，未给出详细评估。",
+      "decision_source": "llm",
+      "check_error": null
+    }
+  ],
+  "evidence_package_state": "PARTIAL",
+  "explanation_plan": {
+    "answer_goal": "读者读完能理解：用户表分片键选 username 不是偏好，而是由「用户维度最频繁查询入口」决定的必然结果，并能说出不用 id 分片的代价与手机号/邮箱路径的补偿设计。",
+    "direct_answer": "因为用户模块几乎所有关键查询（登录、注册、查资料、查乘车人）都从用户名出发，分片键必须与查询键一致才能单分片命中；按 id 分片会让这些路径全部退化为广播查询。",
+    "audience_model": "熟悉 Java，但需要建立当前项目的实现模型",
+    "core_mental_model": "分片键不是选主键，而是选最频繁、最关键的查询入口——用户模块的入口收敛在 username，所以 t_user 按 username 分片。",
+    "primary_strategy": "CAUSE_EFFECT",
+    "secondary_strategies": [],
+    "prerequisite_concepts": [],
+    "likely_misconceptions": [],
+    "sections": [
+      {
+        "id": "S1",
+        "title": "分片路由的硬约束：查询条件决定能不能定位到某张表",
+        "section_type": "MENTAL_MODEL",
+        "teaching_goal": "让读者先建立判断分片键是否合理的标准：分片算法只能按分片键做路由，查询条件里不带分片键就无法定位单表。",
+        "key_points": [
+          "分片算法把分片键的哈希值映射到具体的库/表后缀，只有拿到分片键的值才能算出目标表。",
+          "查询条件里不带分片键，ShardingSphere 无法裁剪，只能把语句广播到所有分片再聚合。",
+          "因此「分片键必须与查询键一致」是选型的硬约束，而不是可优化的偏好。"
+        ],
+        "claim_plans": [
+          {
+            "claim_goal": "让读者先建立判断分片键是否合理的标准：分片算法只能按分片键做路由，查询条件里不带分片键就无法定位单表。",
+            "claim_type": "PROJECT_FACT",
+            "evidence_labels": [
+              "E1",
+              "E2",
+              "E4",
+              "E5",
+              "E20",
+              "E12",
+              "E16"
+            ],
+            "confidence": "PARTIAL",
+            "assumptions": [],
+            "conditional": false
+          }
+        ],
+        "evidence_labels": [
+          "E1",
+          "E2",
+          "E4",
+          "E5",
+          "E20",
+          "E12",
+          "E16"
+        ],
+        "teaching_devices": [
+          "NONE"
+        ],
+        "depends_on": [],
+        "evidence_state": "PARTIAL",
+        "target_tokens": 420
+      },
+      {
+        "id": "S2",
+        "title": "用户模块的查询入口为什么收敛在用户名",
+        "section_type": "CAUSE",
+        "teaching_goal": "让读者看到用户模块的实际访问模式：登录、注册查重、查资料、查乘车人这些高频路径全部以 username 为入口，从而理解 username 成为分片键的直接原因。",
+        "key_points": [
+          "登录与注册查重以用户名为入口，用户名唯一性约束使这个入口天然可路由。",
+          "乘车人列表、乘车人写操作同样按当前登录用户的用户名发起，与 t_user 同键可避免跨库查询。",
+          "按 username 哈希分布均匀且基数大，满足分片后数据打散与单分片命中的双重目标。",
+          "代价是「按 id 查用户」这类非入口查询会广播，但项目里这类查询不是热点。"
+        ],
+        "claim_plans": [
+          {
+            "claim_goal": "让读者看到用户模块的实际访问模式：登录、注册查重、查资料、查乘车人这些高频路径全部以 username 为入口，从而理解 username 成为分片键的直接原因。",
+            "claim_type": "PROJECT_FACT",
+            "evidence_labels": [
+              "E13",
+              "E14",
+              "E11",
+              "E6",
+              "E7",
+              "E1",
+              "E3"
+            ],
+            "confidence": "PARTIAL",
+            "assumptions": [],
+            "conditional": false
+          }
+        ],
+        "evidence_labels": [
+          "E13",
+          "E14",
+          "E11",
+          "E6",
+          "E7",
+          "E1",
+          "E3"
+        ],
+        "teaching_devices": [
+          "NONE"
+        ],
+        "depends_on": [
+          "S1"
+        ],
+        "evidence_state": "PARTIAL",
+        "target_tokens": 460
+      },
+      {
+        "id": "S3",
+        "title": "换成 id 分片会怎样，以及手机号/邮箱路径如何补偿",
+        "section_type": "TRADEOFF",
+        "teaching_goal": "让读者能对比候选分片键并说明取舍：id 分片会让登录链路读扩散；手机号、邮箱登录则通过按各自字段分片的映射表补偿，而不是把主表改成多键分片。",
+        "key_points": [
+          "按 id 分片时，登录只有 username/phone/mail 输入，读请求会扩散到所有分片。",
+          "手机号、邮箱登录路径各自建 t_user_phone、t_user_mail 映射表，按 phone/mail 分片，实现两次单分片查询。",
+          "这种补偿方式把「多入口」拆成多张单入口表，保持每条路径都能单分片命中，代价是表数量与写入链路增加。",
+          "历史文档中曾出现「按用户 ID 分片」的表述，当前设计文档明确改为 username，回答时应以当前设计为准。"
+        ],
+        "claim_plans": [
+          {
+            "claim_goal": "让读者能对比候选分片键并说明取舍：id 分片会让登录链路读扩散；手机号、邮箱登录则通过按各自字段分片的映射表补偿，而不是把主表改成多键分片。",
+            "claim_type": "PROJECT_FACT",
+            "evidence_labels": [
+              "E14",
+              "E11",
+              "E15",
+              "E12",
+              "E16",
+              "E18",
+              "E10"
+            ],
+            "confidence": "PARTIAL",
+            "assumptions": [],
+            "conditional": false
+          }
+        ],
+        "evidence_labels": [
+          "E14",
+          "E11",
+          "E15",
+          "E12",
+          "E16",
+          "E18",
+          "E10"
+        ],
+        "teaching_devices": [
+          "NONE"
+        ],
+        "depends_on": [
+          "S2"
+        ],
+        "evidence_state": "PARTIAL",
+        "target_tokens": 520
+      }
+    ],
+    "unresolved_gaps": [
+      "ER1",
+      "ER2",
+      "ER5"
+    ],
+    "conflicts": [],
+    "answer_depth": "standard",
+    "decision_source": "llm"
+  },
+  "teaching": {
+    "decision_source": "llm",
+    "planning_error": null,
+    "primary_strategy": "CAUSE_EFFECT",
+    "secondary_strategies": [],
+    "core_mental_model": "分片键不是选主键，而是选最频繁、最关键的查询入口——用户模块的入口收敛在 username，所以 t_user 按 username 分片。",
+    "context_views": {
+      "workspace_evidence": 23,
+      "bound_evidence": 16,
+      "per_section": {}
+    },
+    "section_drafts": [],
+    "section_citations": {},
+    "section_execution": [],
+    "section_confidence": {},
+    "compression_events": [],
+    "revision_trace": null,
+    "output_budget": {
+      "max_output_tokens": 1700,
+      "preferred_sections": 3,
+      "allow_multi_pass": false,
+      "reason": "sized from the explanation plan"
+    },
+    "failed_section_ids": [],
+    "partial_answer": false,
+    "writer_reasoning_reserve": {
+      "tokens": 4352,
+      "estimated": false,
+      "reason": "rounded reasoning_tokens p95 from 64 live high-effort writer calls"
+    },
+    "depth_decision": {
+      "answer_depth": "standard",
+      "decision_source": "default",
+      "preferred_sections": 3,
+      "hard_max_sections": 4
+    },
+    "section_budget": {
+      "preferred_sections": 3,
+      "hard_max_sections": 4,
+      "evidence_backed_requirement_ids": [
+        "ER1",
+        "ER3",
+        "ER4",
+        "ER5"
+      ],
+      "target_sections": 3,
+      "gap_code": null,
+      "gap_reason": null,
+      "unsupported_requirement_ids": []
+    },
+    "locate": {
+      "locate_requirement_ids": [],
+      "locate_evidence_labels": [],
+      "locate_fast_path_used": false,
+      "locate_fast_path_skip_reason": "not a deterministic locate request"
+    }
+  }
+}
+
+================ DevContext Performance ================
+
+Query:            用户模块，用户表分库分表键为何要使用用户名
+Mode / depth:     teach / None
+Sample:           first_sample
+Total latency:    90.6 s
+
+LLM calls:        7   (output tokens: 18936)
+Embedding calls:  7
+Retrieval actions:  7
+Sections:         0   (revisions: 0)
+
+--------------------------------------------------------
+Stage                          Round        Time       %
+--------------------------------------------------------
+evidence_planning                           8.3s    9.2%
+search_action_planning             0        3.2s    3.5%
+evidence_retrieval                 0        3.8s    4.2%
+coverage_check                     0       13.5s   14.9%
+search_action_planning             1        8.8s    9.7%
+evidence_retrieval                 1        1.1s    1.3%
+coverage_check                     1       20.4s   22.6%
+explanation_planning                        6.7s    7.4%
+teaching_draft                             24.8s   27.3%
+--------------------------------------------------------
+attributed                                 90.6s
+unattributed                                0.0s    0.0%
+
+Top bottlenecks:
+  1. coverage_check                  33.9s   37.4%
+  2. teaching_draft                  24.8s   27.3%
+  3. search_action_planning          12.0s   13.2%
+  4. evidence_planning                8.3s    9.2%
+  5. explanation_planning             6.7s    7.4%
+
+========================================================
+Performance report written to artifacts\perf-fullchain\q3.json
