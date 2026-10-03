@@ -84,10 +84,16 @@ class DeepSeekLLMClient:
             json_mode=self.json_mode,
             input_tokens=usage.get("prompt_tokens", usage.get("input_tokens")),
             output_tokens=usage.get("completion_tokens", usage.get("output_tokens")),
+            reasoning_tokens=usage.get("reasoning_tokens"),
             finish_reason=self.last_finish_reason,
             success=True,
         )
         return content
+
+    def generate_stream(self, messages: Sequence[LLMMessage]):
+        from devcontext.llm.streaming import generate_stream
+
+        return generate_stream(self, messages)
 
     def _generate(self, messages: Sequence[LLMMessage]) -> str:
         if not messages:
@@ -175,6 +181,9 @@ class DeepSeekLLMClient:
                 self.last_usage = {
                     key: value for key, value in usage.items() if isinstance(value, int)
                 }
+                details = usage.get("completion_tokens_details", {})
+                if isinstance(details, dict) and type(details.get("reasoning_tokens")) is int:
+                    self.last_usage["reasoning_tokens"] = details["reasoning_tokens"]
         except (json.JSONDecodeError, KeyError, IndexError, TypeError) as exception:
             raise RuntimeError("DeepSeek returned an invalid response payload") from exception
         if finish_reason != "stop":

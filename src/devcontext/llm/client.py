@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -16,4 +16,18 @@ class LLMMessage:
 
 class LLMClient(Protocol):
     def generate(self, messages: Sequence[LLMMessage]) -> str:
+        ...
+
+
+@dataclass(slots=True, frozen=True)
+class StreamEvent:
+    type: str
+    text: str = ""
+    usage: dict[str, int] | None = None
+    finish_reason: str | None = None
+    retryable: bool = True
+
+
+class StreamingLLMClient(Protocol):
+    def generate_stream(self, messages: Sequence[LLMMessage]) -> Iterator[StreamEvent]:
         ...

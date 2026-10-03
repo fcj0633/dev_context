@@ -32,6 +32,7 @@ class LLMCallTrace:
     json_mode: bool = False
     input_tokens: int | None = None
     output_tokens: int | None = None
+    reasoning_tokens: int | None = None
     finish_reason: str | None = None
     success: bool = True
     error: str | None = None
