@@ -83,6 +83,8 @@ class EvidenceDrivenWorkflow:
         self.context_budget_override = context_budget_override
 
     def run(self, query: str, top_k: int) -> AgenticAnswerResult:
+        if self.teaching_workflow is not None:
+            self.teaching_workflow.request_started_at = time.perf_counter()
         request = UserRequest(
             query,
             self.answer_options,
