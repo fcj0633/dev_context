@@ -60,6 +60,7 @@ def build_perf_report(
         "query": query,
         "answer_mode": answer_mode,
         "generation_mode": (getattr(trace, "teaching", None) or {}).get("generation_mode"),
+        "readability": (getattr(trace, "teaching", None) or {}).get("readability"),
         "stream": (getattr(trace, "teaching", None) or {}) if (
             getattr(trace, "teaching", None) or {}).get("generation_mode") == "single_stream" else None,
         "depth": depth,
@@ -188,5 +189,15 @@ def render_summary(report: dict[str, Any]) -> str:
             f"Repeated embeds:  {total_repeat} calls over "
             f"{len(report['repeated_embeddings'])} queries"
         )
+    readability = report.get("readability")
+    if readability:
+        lines += ["", "Teaching readability (heuristic):",
+                  f"  Avg / max section chars: {readability.get('avg_section_chars')} / {readability.get('max_section_chars')}",
+                  f"  Avg / max sentence chars: {readability.get('avg_sentence_chars')} / {readability.get('max_sentence_chars')}",
+                  f"  Long sentences: {readability.get('long_sentence_count')}",
+                  f"  Planned new terms / section: {readability.get('planned_new_terms_per_section')}",
+                  f"  Observed new terms / section: {readability.get('observed_new_terms_per_section')}",
+                  f"  Code identifiers: {readability.get('code_identifier_count')}",
+                  f"  Style warnings: {len(readability.get('warnings', []))}"]
     lines.append("========================================================")
     return "\n".join(lines)

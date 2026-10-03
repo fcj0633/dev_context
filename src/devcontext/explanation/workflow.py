@@ -260,6 +260,7 @@ class TeachingExplanationWorkflow:
             stages.append(_stage("explanation_planning", started, "failed",
                                  self.micro_planner.last_client, "high"))
             trace = {"generation_mode": "single_stream", "completion_status": "failed",
+                     "plan_schema_version": "teaching_v2",
                      "planning_error": error, "error": error, "stream_partial": False,
                      "stream_retry_count": 0, "sections_emitted": 0}
             return TeachingAnswerResult(AnswerResult("教学规划失败，未生成回答。", [], zero_valid_citation=True),
@@ -276,7 +277,7 @@ class TeachingExplanationWorkflow:
             from devcontext.explanation.stream_writer import STREAM_WRITER_PROMPT
             fixed = self.estimator.estimate(STREAM_WRITER_PROMPT) + self.estimator.estimate(
                 json.dumps({"question": request.original_query, "plan": plan.to_dict(),
-                            "total_output_budget": budget.max_output_tokens}, ensure_ascii=False))
+                            "required_section_ids": [section.id for section in plan.sections]}, ensure_ascii=False))
             if not self.policy.decide(fixed_tokens=fixed + self.estimator.estimate(bound.rendered_text),
                                       requested_output_tokens=budget.max_output_tokens).allowed:
                 raise ValueError("single stream prompt exceeds model window")
@@ -287,6 +288,7 @@ class TeachingExplanationWorkflow:
         except Exception as exc:
             sections = ()
             trace = {"generation_mode": "single_stream", "completion_status": "failed",
+                     "plan_schema_version": "teaching_v2",
                      "error": str(exc), "sections_planned": len(plan.sections), "sections_emitted": 0,
                      "missing_sections": [s.id for s in plan.sections], "stream_partial": False,
                      "stream_retry_count": 0, "stream_cancelled": False}
