@@ -124,7 +124,8 @@ class SingleStreamingTeachingWriter:
         error = failed_section = None
         completed = failed = 0
         status = "failed"
-        totals = {"prompt_tokens": None, "completion_tokens": None, "reasoning_tokens": None}
+        totals = {"prompt_tokens": 0, "completion_tokens": 0, "reasoning_tokens": 0}
+        missing_usage = set()
         stream_started = offset()
         for attempt in range(2):
             parser = SectionParser(s.id for s in plan.sections)
@@ -194,8 +195,10 @@ class SingleStreamingTeachingWriter:
                 usage.update(event_usage)
                 for key in totals:
                     count = usage.get(key)
-                    if count is not None:
-                        totals[key] = (totals[key] or 0) + count
+                    if type(count) is int:
+                        totals[key] += count
+                    else:
+                        missing_usage.add(key)
                 attempts.append({"attempt": attempt + 1, "started_offset_ms": attempt_started,
                                  "finished_offset_ms": offset(), "first_content_token_ms": attempt_content,
                                  "first_section_ready_ms": attempt_ready, "error": error,
@@ -204,6 +207,8 @@ class SingleStreamingTeachingWriter:
                 break
             mark_last_call_wasted("single stream attempt rejected", stage="teaching_draft")
         ended = offset()
+        for key in missing_usage:
+            totals[key] = None
         reasoning = totals["reasoning_tokens"]
         output = totals["completion_tokens"]
         trace = {

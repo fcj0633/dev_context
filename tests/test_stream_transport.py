@@ -86,3 +86,13 @@ def test_timeout_and_early_close_record_failed_call(endpoint, monkeypatch):
         next(stream)
         stream.close()
     assert len(recorder.llm_calls) == 1 and not recorder.llm_calls[0].success
+
+
+@pytest.mark.parametrize("status", [401, 402])
+def test_empty_auth_or_balance_failure_is_not_retried(endpoint, monkeypatch, status):
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
+    url, state = endpoint
+    state.update(status=status, payload=b"")
+    events = list(DeepSeekLLMClient("secret-key", base_url=url).generate_stream([LLMMessage("user", "q")]))
+    assert events[-1].type == "error" and not events[-1].retryable
+    assert str(status) in events[-1].text

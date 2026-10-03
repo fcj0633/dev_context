@@ -255,3 +255,59 @@ def test_config_and_cli_validation(monkeypatch):
     assert _parser().parse_args(["ask", "q"]).teaching_generation_mode is None
     assert main(["ask", "q", "--answer-mode", "explain", "--teaching-generation-mode", "single_stream"]) == 1
     with pytest.raises(ValueError): TeachingRuntimeOptions("bad")
+
+
+@pytest.mark.parametrize("override,expected", [(None, "single_stream"), ("multi_pass", "multi_pass"),
+                                               ("single_stream", "single_stream")])
+def test_cli_overrides_environment_without_changing_workflow_factory_contract(monkeypatch, override, expected):
+    import devcontext.cli as cli
+    monkeypatch.setenv("TEACHING_GENERATION_MODE", "single_stream")
+    seen = []
+    def factory(settings, *args):
+        seen.append(settings.teaching_generation_mode)
+        return SimpleNamespace(run=lambda *args: object())
+    monkeypatch.setattr(cli, "_planned_workflow", factory)
+    monkeypatch.setattr(cli, "_print_agentic_answer", lambda *args, **kwargs: None)
+    monkeypatch.setattr(cli, "_emit_perf", lambda *args: None)
+    argv = ["ask", "q", "--answer-mode", "teach"]
+    if override:
+        argv += ["--teaching-generation-mode", override]
+    assert cli.main(argv) == 0 and seen == [expected]
+
+
+def test_retry_costs_include_both_attempts():
+    plan = plan_for()
+    usage = StreamEvent("usage", usage={"prompt_tokens": 10, "completion_tokens": 20, "reasoning_tokens": 4})
+    first = FakeStream([usage, StreamEvent("error", text="timeout")])
+    second = FakeStream([StreamEvent("content", text="".join(section_text(s) for s in plan.sections)),
+                         usage, StreamEvent("finish", finish_reason="stop")])
+    _, trace = invoke([first, second], plan)
+    assert trace["input_tokens"] == 20 and trace["output_tokens"] == 40 and trace["reasoning_tokens"] == 8
+
+
+def test_incomplete_usage_cannot_be_reported_as_complete_retry_total():
+    plan = plan_for()
+    first = FakeStream([StreamEvent("error", text="timeout")])
+    second = FakeStream([StreamEvent("content", text="".join(section_text(s) for s in plan.sections)),
+                         StreamEvent("usage", usage={"prompt_tokens": 10, "completion_tokens": 20}),
+                         StreamEvent("finish", finish_reason="stop")])
+    _, trace = invoke([first, second], plan)
+    assert trace["input_tokens"] is None and trace["output_tokens"] is None
+    assert trace["attempts"][1]["usage"]["prompt_tokens"] == 10
+
+
+def test_perf_report_exposes_stream_without_double_counting():
+    from devcontext.observability import PerfRecorder
+    from devcontext.observability.report import build_perf_report
+    from devcontext.agentic.models import StageUsage
+    from devcontext.models import AnswerResult
+    stream = {"generation_mode": "single_stream", "sections_emitted": 2, "stream_duration_ms": 100}
+    trace = SimpleNamespace(stage_usage=[StageUsage("explanation_planning", 50, "llm"),
+                                        StageUsage("teaching_draft", 100, "llm")],
+                            teaching=stream, stop_reason="ready", explanation_plan=plan_for().to_dict())
+    result = SimpleNamespace(trace=trace, answer_result=AnswerResult("正文 [E1]", ["E1"]))
+    report = build_perf_report(recorder=PerfRecorder(), result=result, query="q", answer_mode="teach",
+                              depth="brief", top_k=12, wall_clock_ms=200, sample_kind="first_sample", timestamp="now")
+    assert report["attributed_ms"] == 150 and report["summary"]["sections"] == 2
+    assert report["stream"] is stream and report["generation_mode"] == "single_stream"
+    assert report["summary"]["planned_section_count"] == 2

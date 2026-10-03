@@ -159,6 +159,26 @@ EvidencePlan 回答"我要查什么"，ExplanationPlan 回答"这些事实应该
 
 ### 生成：Fast / Deep 双路径
 
+默认 `TEACHING_GENERATION_MODE=multi_pass`，继续使用下面的原有生成路径。
+可显式启用 `single_stream` 实验：轻量 Micro Planner 一次规划，单个 Streaming Writer
+按章节连续生成，每节完整后检查引用及证据 allowlist，校验通过才发布给章节回调。
+该模式跳过 Composer、Reviewer 和 Revision，仍使用原有检索、证据工作区与模型。
+
+```powershell
+uv run devcontext ask "详细解释当前购票占座的数据一致性是如何保证的" --answer-mode teach --depth detailed --teaching-generation-mode single_stream --perf --perf-json artifacts/single-stream.json
+```
+
+CLI 参数优先于环境配置；切回 `--teaching-generation-mode multi_pass` 即可回退。
+CLI 当前仍在生成结束后输出聚合答案，`--perf-json` 的 `stream` 字段提供首正文时间 TTFT、
+首个校验通过章节时间 TTFS、章节计数、重试和完成状态。它们以整个请求开始为原点，
+另有相对 Writer 开始的时间。发布章节前最多重试一次；发布后失败保留有效章节并标记
+`partial`，不重播或自动切换模式。无有效输出则标记 `failed`。
+
+需要复现实验时运行 `.venv\Scripts\python.exe scripts/run_single_stream_experiment.py`：
+只执行 Q1/Q3 每种模式一次，共四次请求，没有预热、质量裁判或自动重跑。
+产物保存在 `artifacts/single-stream-experiment/`；目录非空时拒绝覆盖，另一次实验须使用
+`--output` 指定新目录。结果与限制见 [Single-Stream 实验报告](docs/performance/05-single-stream-teaching-experiment.md)。
+
 节数 ≤ 3 且深度为 `brief`/`standard` 时走 **Fast Path**：一次生成。否则走 **Deep Path**：逐节生成，一节一次调用，每节**只喂该节绑定的证据**，最后交给 Composer 编排。
 
 **Section-scoped Citation Validation。** 每一节只能使用它自己绑定的标签。即使用了存在于 Workspace、但不属于本节的证据，也记为 `invalid_citations`，不放行。这把 Citation 从"引用了一个存在的 chunk"升级为"这一节只能使用 Planner 指定的证据"。

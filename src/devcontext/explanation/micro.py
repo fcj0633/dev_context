@@ -36,7 +36,10 @@ class MicroSectionPlan:
         return tuple(dict.fromkeys(label for section in self.sections for label in section.evidence_labels))
 
     def to_dict(self):
-        return asdict(self)
+        value = asdict(self)
+        value["sections"] = [dict(asdict(s), key_points=list(s.key_points),
+                                  evidence_labels=list(s.evidence_labels)) for s in self.sections]
+        return value
 
 
 def micro_budget(depth, capabilities):

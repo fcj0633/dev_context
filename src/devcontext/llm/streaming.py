@@ -134,6 +134,12 @@ def curl_stream(client, messages: Sequence[LLMMessage]) -> Iterator[bytes]:
 
             worker = threading.Thread(target=read_output, daemon=True)
             deadline = time.perf_counter() + client.timeout_seconds
+            def check_status():
+                status_codes = re.findall(r"HTTP/\S+\s+(\d{3})", headers.read_text(encoding="utf-8")) if headers.exists() else []
+                status = int(status_codes[-1]) if status_codes else 0
+                if not 200 <= status < 300:
+                    raise StreamFailure(f"stream request failed (HTTP {status})",
+                                        retryable=status in {0, 408, 429} or status >= 500)
             try:
                 process.stdin.write(config.encode("utf-8"))
                 process.stdin.close()
@@ -147,12 +153,9 @@ def curl_stream(client, messages: Sequence[LLMMessage]) -> Iterator[bytes]:
                     except queue.Empty as exc:
                         raise StreamFailure("stream request timed out") from exc
                     if chunk is None:
+                        check_status()
                         break
-                    status_codes = re.findall(r"HTTP/\S+\s+(\d{3})", headers.read_text(encoding="utf-8"))
-                    status = int(status_codes[-1]) if status_codes else 0
-                    if not 200 <= status < 300:
-                        raise StreamFailure(f"stream request failed (HTTP {status})",
-                                            retryable=status in {408, 429} or status >= 500)
+                    check_status()
                     yield chunk
                 code = process.wait(timeout=max(0.1, deadline - time.perf_counter()))
                 if code != 0:
