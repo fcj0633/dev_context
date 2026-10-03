@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -31,6 +32,7 @@ class Settings(BaseSettings):
     deepseek_answer_planner_model: str | None = None
     deepseek_answer_model: str | None = None
     deepseek_reviewer_model: str | None = None
+    teaching_generation_mode: Literal["multi_pass", "single_stream"] = "multi_pass"
     source_policy_path: Path | None = None
     repository_name: str = "my12306"
     # Effective ceilings for this pipeline, not the model's advertised limits.
