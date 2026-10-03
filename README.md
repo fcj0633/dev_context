@@ -179,7 +179,19 @@ CLI 当前仍在生成结束后输出聚合答案，`--perf-json` 的 `stream` �
 产物保存在 `artifacts/single-stream-experiment/`；目录非空时拒绝覆盖，另一次实验须使用
 `--output` 指定新目录。结果与限制见 [Single-Stream 实验报告](docs/performance/05-single-stream-teaching-experiment.md)。
 
-节数 ≤ 3 且深度为 `brief`/`standard` 时走 **Fast Path**：一次生成。否则走 **Deep Path**：逐节生成，一节一次调用，每节**只喂该节绑定的证据**，最后交给 Composer 编排。
+当前 `single_stream` 使用 Teaching Answer V2：Planner 按问题类型设计理解顺序，
+每节指定读者应记住的一件事、最多两个新术语和100～250字符的正文目标。
+`detailed` 规划6～9节；Provider 总安全预算仍为11000 token并受模型上限约束。
+Writer 先解释业务作用再给代码名，必须输出所有计划章节。
+确定性 Style Inspector 在章节引用校验通过后记录句长、术语、代码名和引用密度，
+结果位于 trace 和性能 JSON 的 `readability` 字段。它只记录，不修改回答或触发额外调用。
+
+V2 验证入口为 `.venv\Scripts\python.exe scripts/run_teaching_v2_experiment.py`：
+复用历史 V1 答案，先检查账户调用条件，再按 Q1、Q3 顺序各运行一次。
+不足时记录未运行，不反复尝试。产物保存至 `artifacts/teaching-answer-v2/`，非空目录拒绝覆盖。
+参见 [V2 设计](docs/design/teaching-answer-v2.md) 和 [V2 对照报告](docs/performance/06-teaching-answer-v2-comparison.md)。
+
+旧 `multi_pass` 路径中，节数 ≤ 3 且深度为 `brief`/`standard` 时走 **Fast Path**：一次生成。否则走 **Deep Path**：逐节生成，一节一次调用，每节**只喂该节绑定的证据**，最后交给 Composer 编排。
 
 **Section-scoped Citation Validation。** 每一节只能使用它自己绑定的标签。即使用了存在于 Workspace、但不属于本节的证据，也记为 `invalid_citations`，不放行。这把 Citation 从"引用了一个存在的 chunk"升级为"这一节只能使用 Planner 指定的证据"。
 
