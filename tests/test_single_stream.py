@@ -22,8 +22,9 @@ from test_teaching_workflow import make_package
 def raw_plan(depth="brief", count=None):
     count = count or MICRO_RANGES[depth][0]
     return {"direct_answer": "直接结论", "core_mental_model": "核心模型", "answer_depth": depth,
-            "sections": [{"id": f"S{i}", "title": f"问题{i}", "teaching_goal": "解释机制",
-                          "key_points": ["要点"], "evidence_labels": ["E1"], "target_tokens": 100}
+            "question_kind": "HOW", "reader_assumption": "intermediate", "likely_misconceptions": [],
+            "sections": [{"id": f"S{i}", "title": f"问题{i}", "reader_takeaway": "解释机制", "new_terms": [],
+                          "key_points": ["要点"], "evidence_labels": ["E1"], "target_chars": 100}
                          for i in range(1, count + 1)]}
 
 
@@ -67,8 +68,8 @@ def invoke(clients, plan=None, callback=None):
 def test_micro_budget_is_independent_of_section_count(depth):
     low, high = MICRO_RANGES[depth]
     first, last = plan_for(depth, low), plan_for(depth, high)
-    assert sum(s.target_tokens for s in first.sections) == sum(s.target_tokens for s in last.sections)
-    assert all(s.target_tokens > 0 for s in last.sections)
+    assert micro_budget(first.answer_depth, FALLBACK_CAPABILITIES) == micro_budget(last.answer_depth, FALLBACK_CAPABILITIES)
+    assert all(s.target_chars == 100 for s in last.sections)
 
 
 @pytest.mark.parametrize("mutation", ["count", "evidence", "points", "order", "depth", "tokens", "empty"])
@@ -79,7 +80,7 @@ def test_invalid_micro_plan(mutation):
     if mutation == "points": raw["sections"][0]["key_points"] = ["x"] * 4
     if mutation == "order": raw["sections"][0]["id"] = "S2"
     if mutation == "depth": raw["answer_depth"] = "detailed"
-    if mutation == "tokens": raw["sections"][0]["target_tokens"] = True
+    if mutation == "tokens": raw["sections"][0]["target_chars"] = True
     if mutation == "empty": raw["direct_answer"] = ""
     with pytest.raises(ValueError):
         parse_micro_plan(json.dumps(raw), UserRequest("q", AnswerOptions("brief", "teach")),
