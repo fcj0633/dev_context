@@ -313,12 +313,12 @@ def _plan(sections) -> ExplanationPlan:
         core_mental_model="Redis 令牌是准入凭证，MySQL 座位才是库存事实",
         primary_strategy="PROBLEM_SOLUTION",
         sections=tuple(sections),
-        answer_depth="detailed",
+
     )
 
 
 def _request() -> UserRequest:
-    return UserRequest("详细解释项目的余票桶是如何设计的", AnswerOptions(None, "teach"))
+    return UserRequest("详细解释项目的余票桶是如何设计的", AnswerOptions(answer_mode="teach"))
 
 
 _FOUR_SECTIONS = [

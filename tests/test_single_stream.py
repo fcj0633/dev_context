@@ -9,7 +9,7 @@ import pytest
 
 from devcontext.context.budget import FALLBACK_CAPABILITIES, ModelCapabilities
 from devcontext.explanation.micro import (
-    MICRO_RANGES, MicroExplanationPlanner, TeachingRuntimeOptions, micro_budget, parse_micro_plan,
+    MicroExplanationPlanner, TeachingRuntimeOptions, micro_budget, parse_micro_plan,
 )
 from devcontext.explanation.stream_writer import SectionParser, SingleStreamingTeachingWriter, validate_section
 from devcontext.explanation.workflow import TeachingExplanationWorkflow
@@ -19,17 +19,20 @@ from devcontext.request import AnswerOptions, UserRequest
 from test_teaching_workflow import make_package
 
 
-def raw_plan(depth="brief", count=None):
-    count = count or MICRO_RANGES[depth][0]
+MICRO_RANGES = {"historical": (1, 16)}
+
+
+def raw_plan(depth="historical", count=None):
+    count = count or 2
     return {"direct_answer": "直接结论", "core_mental_model": "核心模型", "answer_depth": depth,
             "sections": [{"id": f"S{i}", "title": f"问题{i}", "teaching_goal": "解释机制",
                           "key_points": ["要点"], "evidence_labels": ["E1"], "target_tokens": 100}
                          for i in range(1, count + 1)]}
 
 
-def plan_for(depth="brief", count=None):
+def plan_for(depth="historical", count=None):
     package = make_package()
-    request = UserRequest(package.original_query, AnswerOptions(depth, "teach"))
+    request = UserRequest(package.original_query, AnswerOptions(answer_mode="teach"))
     return parse_micro_plan(json.dumps(raw_plan(depth, count)), request, package, FALLBACK_CAPABILITIES)
 
 
@@ -59,7 +62,7 @@ def invoke(clients, plan=None, callback=None):
     iterator = iter(clients)
     writer = SingleStreamingTeachingWriter(lambda: next(iterator))
     return writer.write("问题", plan, make_package().context_bundle,
-                        micro_budget(plan.answer_depth, FALLBACK_CAPABILITIES),
+                        micro_budget(FALLBACK_CAPABILITIES, len(plan.sections)),
                         request_started=time.perf_counter() - 1, on_section=callback)
 
 
@@ -71,7 +74,7 @@ def test_micro_budget_is_independent_of_section_count(depth):
     assert all(s.target_tokens > 0 for s in last.sections)
 
 
-@pytest.mark.parametrize("mutation", ["count", "evidence", "points", "order", "depth", "tokens", "empty"])
+@pytest.mark.parametrize("mutation", ["count", "evidence", "points", "order", "tokens", "empty"])
 def test_invalid_micro_plan(mutation):
     raw = raw_plan()
     if mutation == "count": raw["sections"] = []
@@ -82,7 +85,7 @@ def test_invalid_micro_plan(mutation):
     if mutation == "tokens": raw["sections"][0]["target_tokens"] = True
     if mutation == "empty": raw["direct_answer"] = ""
     with pytest.raises(ValueError):
-        parse_micro_plan(json.dumps(raw), UserRequest("q", AnswerOptions("brief", "teach")),
+        parse_micro_plan(json.dumps(raw), UserRequest("q", AnswerOptions(answer_mode="teach")),
                          make_package(), FALLBACK_CAPABILITIES)
 
 
@@ -226,11 +229,11 @@ def test_workflow_skips_old_components_and_does_not_fallback():
         runtime_options=TeachingRuntimeOptions("single_stream"), micro_planner=micro,
         streaming_writer=SingleStreamingTeachingWriter(lambda: stream))
     emitted = []
-    result = workflow.run(UserRequest("q", AnswerOptions("brief", "teach")), make_package(), on_section=emitted.append)
+    result = workflow.run(UserRequest("q", AnswerOptions(answer_mode="teach")), make_package(), on_section=emitted.append)
     assert result.completion_status == "complete" and len(emitted) == 2
     assert [s.stage for s in result.stages] == ["explanation_planning", "teaching_draft"]
     planner_client.generate = lambda messages: "{}"
-    failed = workflow.run(UserRequest("q", AnswerOptions("brief", "teach")), make_package())
+    failed = workflow.run(UserRequest("q", AnswerOptions(answer_mode="teach")), make_package())
     assert failed.completion_status == "failed" and stream.calls == 1
 
 
@@ -239,9 +242,9 @@ def test_missing_input_evidence_and_small_model_fail_before_writer():
     bundle = replace(make_package().context_bundle, items=[])
     writer = SingleStreamingTeachingWriter(lambda: pytest.fail("must not call LLM"))
     with pytest.raises(StreamFailure):
-        writer.write("q", plan, bundle, micro_budget("brief", FALLBACK_CAPABILITIES), request_started=time.perf_counter())
+        writer.write("q", plan, bundle, micro_budget(FALLBACK_CAPABILITIES), request_started=time.perf_counter())
     with pytest.raises(ValueError):
-        parse_micro_plan(json.dumps(raw_plan()), UserRequest("q", AnswerOptions("brief", "teach")),
+        parse_micro_plan(json.dumps(raw_plan()), UserRequest("q", AnswerOptions(answer_mode="teach")),
                          make_package(), ModelCapabilities(context_window=100, max_output_tokens=1))
 
 
@@ -265,7 +268,7 @@ def test_cli_overrides_environment_without_changing_workflow_factory_contract(mo
     seen = []
     def factory(settings, *args):
         seen.append(settings.teaching_generation_mode)
-        return SimpleNamespace(run=lambda *args: object())
+        return SimpleNamespace(run=lambda *args, **kwargs: object())
     monkeypatch.setattr(cli, "_planned_workflow", factory)
     monkeypatch.setattr(cli, "_print_agentic_answer", lambda *args, **kwargs: None)
     monkeypatch.setattr(cli, "_emit_perf", lambda *args: None)

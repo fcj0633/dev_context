@@ -120,7 +120,7 @@ def payload(**overrides):
 def parse(value, *, request=None, package=None):
     return parse_explanation_plan(
         json.dumps(value, ensure_ascii=False),
-        request or UserRequest("详细解释项目的余票桶是如何设计的", AnswerOptions("detailed", "teach")),
+        request or UserRequest("详细解释项目的余票桶是如何设计的", AnswerOptions(answer_mode="teach")),
         package or make_package(),
     )
 
@@ -204,21 +204,13 @@ class TestExplanationPlanValidation:
         ))
         assert plan.sections[0].section_type == "MISCONCEPTION"
 
-    def test_deep_depth_is_rejected_off_the_teach_path(self) -> None:
-        """Reachable without an explicit depth: the caller may leave depth to the
-        planner, and the planner may then propose a depth the mode cannot honour."""
-        request = UserRequest("解释余票桶", AnswerOptions(None, "explain"))
+    def test_historical_depth_is_ignored_on_explain_path(self) -> None:
+        plan = parse(payload(answer_depth="deep"), request=UserRequest("解释余票桶", AnswerOptions(answer_mode="explain")))
+        assert "answer_depth" not in plan.to_dict()
 
-        with pytest.raises(ExplanationPlanError, match="only available on the teach path"):
-            parse(payload(answer_depth="deep"), request=request)
-
-    def test_explicit_depth_override_must_be_honoured(self) -> None:
-        request = UserRequest(
-            "解释余票桶", AnswerOptions("brief", "teach")
-        )
-
-        with pytest.raises(ExplanationPlanError, match="explicit override"):
-            parse(payload(answer_depth="detailed"), request=request)
+    def test_historical_depth_is_not_returned_on_teach_path(self) -> None:
+        plan = parse(payload(answer_depth="deep"), request=UserRequest("解释余票桶", AnswerOptions(answer_mode="explain")))
+        assert "answer_depth" not in plan.to_dict()
 
 
 class TestFallbackExplanationPlan:
@@ -226,7 +218,7 @@ class TestFallbackExplanationPlan:
         package = make_package(question="余票桶在并发失败时会怎样？")
 
         plan = fallback_explanation_plan(
-            UserRequest(package.original_query, AnswerOptions("standard", "teach")),
+            UserRequest(package.original_query, AnswerOptions(answer_mode="teach")),
             package,
         )
 
@@ -239,7 +231,7 @@ class TestFallbackExplanationPlan:
         package = make_package(question="余票桶在哪个类里？")
 
         plan = fallback_explanation_plan(
-            UserRequest(package.original_query, AnswerOptions("brief", "teach")),
+            UserRequest(package.original_query, AnswerOptions(answer_mode="teach")),
             package,
         )
 
@@ -250,7 +242,7 @@ class TestFallbackExplanationPlan:
         package = make_package(question="余票桶是不是库存的事实来源？")
 
         plan = fallback_explanation_plan(
-            UserRequest(package.original_query, AnswerOptions("standard", "teach")),
+            UserRequest(package.original_query, AnswerOptions(answer_mode="teach")),
             package,
         )
 
@@ -261,7 +253,7 @@ class TestFallbackExplanationPlan:
         package = make_package()
 
         plan = fallback_explanation_plan(
-            UserRequest(package.original_query, AnswerOptions("standard", "teach")),
+            UserRequest(package.original_query, AnswerOptions(answer_mode="teach")),
             package,
         )
 

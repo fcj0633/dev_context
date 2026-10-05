@@ -127,7 +127,7 @@ def controller():
 def test_controller_only_retries_unsatisfied_core_and_freezes_package() -> None:
     subject, actions, policy, coverage = controller()
     outcome = subject.retrieve(
-        UserRequest("解释占座一致性", AnswerOptions("brief", "explain")), 10
+        UserRequest("解释占座一致性", AnswerOptions(answer_mode="explain")), 10
     )
 
     assert [[item.id for item in call["requirements"]] for call in actions.calls] == [
@@ -146,7 +146,7 @@ def test_controller_only_retries_unsatisfied_core_and_freezes_package() -> None:
 def test_controller_freezes_a_catalog_covering_every_retrieved_chunk() -> None:
     subject, _, policy, _ = controller()
     outcome = subject.retrieve(
-        UserRequest("解释占座一致性", AnswerOptions("brief", "explain")), 10
+        UserRequest("解释占座一致性", AnswerOptions(answer_mode="explain")), 10
     )
 
     catalog = outcome.package.evidence_catalog
@@ -160,7 +160,7 @@ def test_controller_freezes_a_catalog_covering_every_retrieved_chunk() -> None:
 def test_catalog_ids_survive_the_round_that_re_finds_them() -> None:
     subject, _, _, _ = controller()
     outcome = subject.retrieve(
-        UserRequest("解释占座一致性", AnswerOptions("brief", "explain")), 10
+        UserRequest("解释占座一致性", AnswerOptions(answer_mode="explain")), 10
     )
 
     catalog = outcome.package.evidence_catalog
@@ -231,7 +231,7 @@ def test_coverage_is_judged_against_the_workspace_not_the_answer_bundle() -> Non
         FakeEvidencePlanner(), FakeActionPlanner(), policy, coverage, SourcePolicy()
     )
     outcome = subject.retrieve(
-        UserRequest("解释占座一致性", AnswerOptions("brief", "explain"), 6_000), 10
+        UserRequest("解释占座一致性", AnswerOptions(answer_mode="explain"), 6_000), 10
     )
 
     kept = {item.chunk_id for item in outcome.package.context_bundle.items}
@@ -247,7 +247,7 @@ def test_second_round_seed_includes_evidence_the_budget_dropped() -> None:
         FakeEvidencePlanner(), actions, policy, coverage, SourcePolicy()
     )
     subject.retrieve(
-        UserRequest("解释占座一致性", AnswerOptions("brief", "explain"), 6_000), 10
+        UserRequest("解释占座一致性", AnswerOptions(answer_mode="explain"), 6_000), 10
     )
 
     seeds = actions.calls[1]["discovered_terms"]["ER1"]
@@ -270,7 +270,7 @@ def test_coverage_round_sees_a_single_batch_call() -> None:
         FakeEvidencePlanner(), FakeActionPlanner(), BulkPolicy(),
         CountingCoverage(), SourcePolicy(),
     )
-    subject.retrieve(UserRequest("解释占座一致性", AnswerOptions("brief", "explain")), 10)
+    subject.retrieve(UserRequest("解释占座一致性", AnswerOptions(answer_mode="explain")), 10)
 
     # One call carrying both requirements, not one call per requirement.
     assert calls == [2]
@@ -282,7 +282,7 @@ def test_all_failed_actions_report_retrieval_failed_not_empty() -> None:
         RecordingCoverage(), SourcePolicy(),
     )
     package = subject.retrieve(
-        UserRequest("解释占座一致性", AnswerOptions("brief", "explain")), 10
+        UserRequest("解释占座一致性", AnswerOptions(answer_mode="explain")), 10
     ).package
 
     assert package.retrieval_state == "RETRIEVAL_FAILED"
@@ -298,10 +298,10 @@ def test_answer_depth_does_not_change_retrieval_plan_actions_or_budget() -> None
     first, _, _, _ = controller()
     second, _, _, _ = controller()
     brief = first.retrieve(
-        UserRequest("解释占座一致性", AnswerOptions("brief", "explain")), 10
+        UserRequest("解释占座一致性", AnswerOptions(answer_mode="explain")), 10
     ).package
     detailed = second.retrieve(
-        UserRequest("解释占座一致性", AnswerOptions("detailed", "explain")), 10
+        UserRequest("解释占座一致性", AnswerOptions(answer_mode="explain")), 10
     ).package
 
     assert brief.evidence_plan == detailed.evidence_plan
@@ -370,7 +370,7 @@ def test_v3_time_reserve_skips_followup_without_upgrading_missing_evidence():
     from devcontext.deadline import request_deadline
     subject, actions, policy, coverage = controller()
     with request_deadline(110):
-        result = subject.retrieve(UserRequest('解释占座一致性', AnswerOptions('detailed', 'teach')), 10)
+        result = subject.retrieve(UserRequest('解释占座一致性', AnswerOptions(answer_mode="teach")), 10)
     assert len(actions.calls) == coverage.calls == 1
     assert result.package.requirement_coverage[0].state == 'PARTIAL'
     assert result.package.unresolved_requirements == ('ER1',)

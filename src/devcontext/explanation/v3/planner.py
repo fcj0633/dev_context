@@ -19,17 +19,20 @@ class TeachingPlannerV3:
         self.attempts = []
         self.last_response = None
 
-    def plan(self, request, package, *, depth):
+    def plan(self, request, package):
         payload = _payload(request, package)
-        payload["selected_depth"] = depth
         payload["reader_assumption"] = {
             "basis": "DEFAULT", "profile": "能读基础 Java，需要解释事务、并发、缓存及跨系统一致性",
             "prerequisites": [], "explicit_background_source": request.original_query,
         }
         payload["planning_limits"] = {"claims_soft_limit": 12, "steps_soft_limit": 8, "evidence_pack_chars": 28000}
-        system = planner_prompt(request.original_query)
+        if request.policy:
+            payload["request_policy"] = request.policy.to_dict()
+            payload["reader_assumption"]["profile"] = request.policy.reader_assumption
+            payload["reader_assumption"]["basis"] = "DEFAULT" if request.policy.reader_assumption.startswith("会基础 Java") else "USER_EXPLICIT"
+        system = planner_prompt(request.original_query, universal=request.policy is not None)
         # Provider completion tokens include high-effort reasoning, not only JSON.
-        reserve = min(24000, self.capabilities.max_output_tokens)
+        reserve = min(32768, self.capabilities.max_output_tokens)
         prompt_tokens = self.estimator.estimate(system) + self.estimator.estimate(compact(payload))
         if prompt_tokens + reserve + 1024 > self.capabilities.context_window:
             raise PlannerFailure("Planner 全量输入与输出预留超过模型窗口，未截断必要证据")
@@ -44,22 +47,20 @@ class TeachingPlannerV3:
             try:
                 self.last_client = self.client_factory()
                 if hasattr(self.last_client, "max_tokens"):
-                    self.last_client.max_tokens = (min(reserve, 12000)
-                        if getattr(self.last_client, "provider", None) == "openai"
-                        and getattr(self.last_client, "reasoning_effort", None) == "low" else reserve)
+                    self.last_client.max_tokens = reserve
                 if hasattr(self.last_client, "timeout_seconds"):
-                    remaining = remaining_seconds()
-                    # A complex blueprint can take longer than a short outline.
-                    # Reserve writing time instead of failing at an arbitrary 55s.
-                    ceiling = 210 if getattr(self.last_client, "provider", None) == "openai" else 120
-                    planning_time = ceiling if remaining is None else min(ceiling, max(1, remaining - 55))
-                    self.last_client.timeout_seconds = bounded_timeout(planning_time)
+                    self.last_client.timeout_seconds = bounded_timeout(
+                        self.last_client.timeout_seconds if request.policy else 120)
                 with llm_stage("teaching_planning_v3"):
                     response = self.last_client.generate(messages)
                 self.last_response = response
                 if getattr(self.last_client, "last_finish_reason", None) not in {None, "stop"}:
                     raise PlannerFailure("Planner abnormal finish")
-                result = parse_teaching_plan(response, allowed_labels=allowed, expected_depth=depth)
+                if request.policy:
+                    from devcontext.explanation.v3.universal import parse_answer_blueprint
+                    result = parse_answer_blueprint(response, allowed_labels=allowed)
+                else:
+                    result = parse_teaching_plan(response, allowed_labels=allowed)
                 self.attempts.append({"attempt": attempt+1, "elapsed_ms": (time.perf_counter()-started)*1000, "error": None})
                 return result
             except UnsupportedQuestionKind:

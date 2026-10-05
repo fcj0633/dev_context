@@ -91,9 +91,8 @@ def test_redundant_supported_form_is_derived_without_reclassifying():
 
 
 def test_unsupported_has_independent_minimal_schema():
-    with pytest.raises(UnsupportedQuestionKind) as error:
+    with pytest.raises(PlannerFailure):
         parse({"question_form": "WHAT", "question_kind": "UNSUPPORTED", "kind_rationale": "纯定义"})
-    assert error.value.question_form == "WHAT"
 
 
 @pytest.mark.parametrize("change", ["owner", "checkpoint", "goal", "parent"])
@@ -218,17 +217,16 @@ def test_v3_dispatch_and_full_result(monkeypatch):
     writer = TeachingWriterV3(lambda: FakeStream(WRITER_DEMOS["HOW"]))
     host = TeachingExplanationWorkflow(None, None, runtime_options=TeachingRuntimeOptions("v3"),
         v3_planner=planner, v3_writer=writer, capabilities=ModelCapabilities(131072, 32768))
-    result = host.run(UserRequest("详细解释发布如何工作", AnswerOptions("detailed", "teach")), package())
+    result = host.run(UserRequest("详细解释发布如何工作", AnswerOptions(answer_mode="teach")), package())
     assert result.completion_status == "complete"
     assert result.stats["trace"]["blueprint"]["question_kind"] == "HOW"
     assert len(result.context_bundle.items) == 3
 
 
-def test_shallow_depth_falls_back_without_v3_planning(monkeypatch):
-    host = TeachingExplanationWorkflow(None, None, runtime_options=TeachingRuntimeOptions("v3"))
-    result = SimpleNamespace(stats={})
-    monkeypatch.setattr(host, "_run_single_stream", lambda *a, **kw: result)
-    assert host.run(UserRequest("q", AnswerOptions("brief", "teach")), package()).stats["trace"]["fallback"] == "depth"
+def test_full_blueprint_has_no_depth_field(monkeypatch):
+    bp, _ = demo_pack("HOW")
+    assert "answer_depth" not in bp.to_dict()
+    assert bp.question_kind == "HOW"
 
 
 def test_unsupported_does_not_invoke_writer():
@@ -236,7 +234,7 @@ def test_unsupported_does_not_invoke_writer():
         raise UnsupportedQuestionKind("WHAT", "纯定义")
     host = TeachingExplanationWorkflow(None, None, runtime_options=TeachingRuntimeOptions("v3"),
         v3_planner=SimpleNamespace(last_client=None, attempts=[], plan=unsupported), v3_writer=SimpleNamespace())
-    result = host.run(UserRequest("详细解释 X 是什么", AnswerOptions("detailed", "teach")), package())
+    result = host.run(UserRequest("详细解释 X 是什么", AnswerOptions(answer_mode="teach")), package())
     assert result.completion_status == "failed" and result.stats["trace"]["question_kind"] == "UNSUPPORTED"
 
 
@@ -250,7 +248,7 @@ def test_real_planner_writer_pipeline_uses_two_calls_and_complete_sample():
 
         def generate(self, messages):
             self.calls += 1
-            assert "selected_depth" in messages[1].content
+            assert "selected_depth" not in messages[1].content
             return json.dumps(load_demo("HOW")["blueprint"], ensure_ascii=False)
 
     client = Client()
@@ -259,7 +257,7 @@ def test_real_planner_writer_pipeline_uses_two_calls_and_complete_sample():
     host = TeachingExplanationWorkflow(None, None, runtime_options=TeachingRuntimeOptions("v3"),
         v3_planner=TeachingPlannerV3(lambda: client, caps, HeuristicTokenEstimator()),
         v3_writer=TeachingWriterV3(lambda: stream), capabilities=caps)
-    result = host.run(UserRequest("详细解释发布如何工作", AnswerOptions("detailed", "teach")), package())
+    result = host.run(UserRequest("详细解释发布如何工作", AnswerOptions(answer_mode="teach")), package())
     assert result.completion_status == "complete"
     assert client.calls == stream.calls == 1
     assert client.timeout_seconds <= 120
@@ -279,12 +277,12 @@ def test_planner_structural_retry_and_insufficient_remaining_budget():
     client = Client()
     planner = TeachingPlannerV3(lambda: client, caps, HeuristicTokenEstimator())
     with request_deadline():
-        assert planner.plan(UserRequest("q", AnswerOptions("detailed", "teach")), package(), depth="detailed").question_kind == "HOW"
+        assert planner.plan(UserRequest("q", AnswerOptions(answer_mode="teach")), package()).question_kind == "HOW"
     assert client.calls == 2
     client.calls = 0
     with request_deadline(80):
         with pytest.raises(PlannerFailure):
-            planner.plan(UserRequest("q", AnswerOptions("detailed", "teach")), package(), depth="detailed")
+            planner.plan(UserRequest("q", AnswerOptions(answer_mode="teach")), package())
     assert client.calls == 1
 
 
@@ -296,7 +294,7 @@ def test_configured_v3_deadline_is_reported_without_restarting_request():
         capabilities=ModelCapabilities(131072, 32768))
     host.request_timeout_seconds = 300
     host.request_started_at = time.perf_counter() - 10
-    result = host.run(UserRequest('how', AnswerOptions('detailed', 'teach')), package())
+    result = host.run(UserRequest('how', AnswerOptions(answer_mode="teach")), package())
     assert result.completion_status == 'complete'
     assert result.stats['trace']['deadline_seconds'] == 300
     assert result.stats['trace']['total_elapsed_ms'] >= 10000

@@ -58,11 +58,13 @@ class EvidencePlanner:
         self,
         llm_client_factory: Callable[[], LLMClient] | None = None,
         max_requirements: int = MAX_EVIDENCE_REQUIREMENTS,
+        full_teaching: bool = False,
     ) -> None:
         if not 1 <= max_requirements <= MAX_EVIDENCE_REQUIREMENTS:
             raise ValueError("max_requirements must be between 1 and 6")
         self.llm_client_factory = llm_client_factory
         self.max_requirements = max_requirements
+        self.full_teaching = full_teaching
         self.last_client: LLMClient | None = None
         self.last_error: str | None = None
         self.last_response: str | None = None
@@ -78,7 +80,10 @@ class EvidencePlanner:
             client = self.llm_client_factory()
             self.last_client = client
             with llm_stage("evidence_planning"):
-                response = client.generate(self._messages(query)).strip()
+                messages = self._messages(query)
+            if self.full_teaching:
+                messages[0] = LLMMessage("system", messages[0].content + "\nFull 教学检索：WHAT 优先确认业务调用位置、职责和相邻机制，接口声明不能证明实际调用；WHY 找原方案能力、当前装配与真实执行、变化位置及代价，不要求寻找不存在的历史实现；HOW 找同一次请求的入口、状态写入、事务边界及关键失败分支。success_criteria 要覆盖执行体与调用关系，不以类名或注释命中代替行为证据。不增加与用户任务无关的检索需求。")
+            response = client.generate(messages).strip()
             self.last_response = response
             return self._parse(response, query)
         except Exception as exception:

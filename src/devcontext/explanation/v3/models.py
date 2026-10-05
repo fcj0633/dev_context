@@ -15,10 +15,6 @@ class TeachingBlueprint:
     conflicts: tuple = ()
 
     @property
-    def answer_depth(self):
-        return self.data["answer_depth"]
-
-    @property
     def question_kind(self):
         return self.data["question_kind"]
 

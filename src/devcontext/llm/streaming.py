@@ -96,11 +96,12 @@ def curl_stream(client, messages: Sequence[LLMMessage]) -> Iterator[bytes]:
     body = {
         "model": client.model,
         "messages": [message.to_dict() for message in messages],
-        "reasoning_effort": client.reasoning_effort,
         getattr(client, "output_token_parameter", "max_tokens"): client.max_tokens,
         "stream": True,
         "stream_options": {"include_usage": True},
     }
+    if client.reasoning_effort is not None:
+        body["reasoning_effort"] = client.reasoning_effort
     if client.json_mode:
         body["response_format"] = {"type": "json_object"}
     # Credentials remain on stdin, never in a command line or diagnostic.

@@ -18,7 +18,7 @@ def remaining_seconds() -> float | None:
         return None
     remaining = value - time.perf_counter()
     if remaining <= 0:
-        raise RequestDeadlineExceeded("V3 请求已达到总时间预算")
+        raise RequestDeadlineExceeded("请求已达到显式总时间预算")
     return remaining
 
 
@@ -28,9 +28,12 @@ def bounded_timeout(default: float) -> float:
 
 
 @contextmanager
-def request_deadline(seconds: float = 180, *, started: float | None = None):
+def request_deadline(seconds: float | None = 180, *, started: float | None = None):
     current = _deadline.get()
-    expires = (time.perf_counter() if started is None else started) + seconds
+    expires = None if seconds is None else (time.perf_counter() if started is None else started) + seconds
+    if expires is None:
+        yield
+        return
     token = _deadline.set(min(current, expires) if current is not None else expires)
     try:
         yield

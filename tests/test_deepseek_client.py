@@ -78,6 +78,18 @@ def test_deepseek_client_reports_http_error_without_exposing_key(monkeypatch) ->
     assert "[redacted]" in str(captured.value)
 
 
+def test_nonstream_omits_reasoning_parameter(monkeypatch):
+    captured = {}
+    def fake_run(arguments, **kwargs):
+        path = next(x[1:] for x in arguments if x.startswith("@"))
+        captured.update(json.loads(Path(path).read_text(encoding="utf-8")))
+        return SimpleNamespace(returncode=0, stdout='{"choices":[{"finish_reason":"stop","message":{"content":"answer"}}]}\n__HTTP_STATUS__:200', stderr="")
+    monkeypatch.setattr(deepseek_module.shutil, "which", lambda name: "curl")
+    monkeypatch.setattr(deepseek_module.subprocess, "run", fake_run)
+    assert DeepSeekLLMClient("test-only", reasoning_effort=None).generate([LLMMessage("user", "q")]) == "answer"
+    assert "reasoning_effort" not in captured
+
+
 def test_deepseek_client_enables_json_output_mode(monkeypatch) -> None:
     captured: dict[str, object] = {}
 

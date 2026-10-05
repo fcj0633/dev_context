@@ -1,5 +1,4 @@
 from devcontext.planning.models import (
-    ANSWER_DEPTHS,
     EVIDENCE_SOURCES,
     EXPLANATION_STRATEGIES,
     IMPORTANCE_LEVELS,
@@ -30,7 +29,6 @@ from devcontext.planning.question_planner import (
 )
 
 __all__ = [
-    "ANSWER_DEPTHS",
     "EVIDENCE_SOURCES",
     "EXPLANATION_STRATEGIES",
     "IMPORTANCE_LEVELS",

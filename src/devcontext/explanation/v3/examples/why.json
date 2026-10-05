@@ -20,7 +20,6 @@
     "question_form": "WHY",
     "question_kind": "WHY",
     "kind_rationale": "解释规则注册表为何值得采用及其维护取舍",
-    "answer_depth": "detailed",
     "reader_assumption": {
       "basis": "DEFAULT",
       "profile": "能读基础 Java，需要解释本题高级机制及其关系",

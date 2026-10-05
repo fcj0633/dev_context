@@ -20,7 +20,6 @@
     "question_form": "HOW",
     "question_kind": "HOW",
     "kind_rationale": "重建内容保存、索引发布及失败后处理的状态过程",
-    "answer_depth": "detailed",
     "reader_assumption": {
       "basis": "DEFAULT",
       "profile": "能读基础 Java，需要解释本题高级机制及其关系",

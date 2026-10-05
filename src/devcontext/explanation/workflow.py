@@ -124,21 +124,11 @@ class TeachingExplanationWorkflow:
         *,
         on_section=None,
     ) -> TeachingAnswerResult:
-        if self.runtime_options.generation_mode == "v3":
-            # Existing fallback depth is standard; explicit preference wins.
-            # Resolve simple presentation hints before scheduling any LLM call.
-            depth = request.answer_options.depth_override
-            if depth is None:
-                depth = "deep" if "深度" in request.original_query else (
-                    "detailed" if any(word in request.original_query for word in ("详细", "深入", "全面")) else "standard")
-            if depth in {"brief", "standard"}:
-                from dataclasses import replace
-                request = replace(request, answer_options=replace(request.answer_options, depth_override=depth))
-                result = self._run_single_stream(request, evidence_package, on_section=on_section)
-                result.stats.setdefault("trace", {}).update(requested_generation_mode="v3", fallback="depth")
-                return result
+        if (request.policy and request.policy.profile == "full") or self.runtime_options.generation_mode == "v3":
             from devcontext.explanation.v3.workflow import run_v3
-            return run_v3(self, request, evidence_package, depth=depth, on_section=on_section)
+            return run_v3(self, request, evidence_package, on_section=on_section)
+        if request.policy is not None:
+            return self._run_single_stream(request, evidence_package, on_section=on_section)
         if self.runtime_options.generation_mode == "single_stream":
             return self._run_single_stream(request, evidence_package, on_section=on_section)
         stages: list[Any] = []
@@ -287,9 +277,10 @@ class TeachingExplanationWorkflow:
                                         completion_status="failed", error=error)
         stages.append(_stage("explanation_planning", started, "llm",
                              self.micro_planner.last_client, "high"))
-        budget = micro_budget(plan.answer_depth, self.capabilities)
+        budget = micro_budget(self.capabilities, len(plan.sections))
         self._view_max_chars = self._view_char_budget(request.original_query, plan, budget)
         started = time.perf_counter()
+        pack_done = False
         try:
             bound = self._bound_bundle(request.original_query, package, plan)
             # The budget accounts for the full writer scaffolding, not just evidence.
@@ -300,19 +291,30 @@ class TeachingExplanationWorkflow:
             if not self.policy.decide(fixed_tokens=fixed + self.estimator.estimate(bound.rendered_text),
                                       requested_output_tokens=budget.max_output_tokens).allowed:
                 raise ValueError("single stream prompt exceeds model window")
+            if request.policy:
+                stages.append(_stage("teaching_evidence_pack", started, "rules", None, None))
+                started = time.perf_counter()
+            pack_done = True
             sections, trace = self.streaming_writer.write(
                 request.original_query, plan, bound, budget, request_started=request_started,
                 on_section=on_section,
             )
         except Exception as exc:
+            if request.policy and not pack_done:
+                stages.append(_stage("teaching_evidence_pack", started, "failed", None, None))
             sections = ()
             trace = {"generation_mode": "single_stream", "completion_status": "failed",
                      "error": str(exc), "sections_planned": len(plan.sections), "sections_emitted": 0,
                      "missing_sections": [s.id for s in plan.sections], "stream_partial": False,
                      "stream_retry_count": 0, "stream_cancelled": False}
-        stages.append(_stage("teaching_draft", started, "llm" if trace["completion_status"] == "complete" else "failed",
-                             self.streaming_writer.last_client, "high"))
+        if pack_done or not request.policy:
+            stages.append(_stage("teaching_draft", started, "llm" if trace["completion_status"] == "complete" else "failed",
+                                 self.streaming_writer.last_client, "high"))
         trace["core_mental_model"] = plan.core_mental_model
+        if request.policy:
+            trace["question_kind"] = plan.question_kind
+            trace["plan"] = plan.to_dict()
+            trace["evidence_pack"] = {"sections": [s for s in plan.to_dict()["sections"]], "bundle": bound.to_dict()}
         trace["output_budget"] = budget.to_dict()
         trace["context_views"] = {"bound_evidence": len(bound.items)}
         trace["section_drafts"] = [{"id": s.section_id, "chars": len(s.markdown),

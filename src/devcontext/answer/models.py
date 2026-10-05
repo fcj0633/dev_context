@@ -71,7 +71,6 @@ class AnswerPlan:
     conflicts: tuple[EvidenceConflict, ...]
     decision_source: str = "llm"
     answer_goal: str = ""
-    answer_depth: str = "standard"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -83,7 +82,6 @@ class AnswerPlan:
             "conflicts": [item.to_dict() for item in self.conflicts],
             "decision_source": self.decision_source,
             "answer_goal": self.answer_goal,
-            "answer_depth": self.answer_depth,
         }
 
 

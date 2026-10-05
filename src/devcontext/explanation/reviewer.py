@@ -104,7 +104,6 @@ class TeachingReviewer:
             "core_mental_model": plan.core_mental_model,
             "answer_goal": plan.answer_goal,
             "primary_strategy": plan.primary_strategy,
-            "answer_depth": plan.answer_depth,
             "unresolved_gaps": list(plan.unresolved_gaps),
             "sections": [
                 {
@@ -225,8 +224,8 @@ def needs_llm_review(
     alone: they are one or two sentences, and a reviewer that can rewrite them
     has more to lose than to add.
     """
-    if plan.answer_depth in {"detailed", "deep"}:
+    if len(plan.sections) > 3:
         return True
-    if plan.primary_strategy == "LOCATION_ONLY" or plan.answer_depth == "brief":
+    if plan.primary_strategy == "LOCATION_ONLY":
         return False
     return bool(deterministic_issues) or bool(plan.conflicts)

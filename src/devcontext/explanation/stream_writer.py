@@ -70,7 +70,17 @@ class SectionParser:
             raise StreamFailure("missing or unclosed section")
 
 
-def validate_section(section, text, available):
+def validate_section(section, text, available, *, permissive=False, warnings=None):
+    if permissive:
+        allowed = set(section.evidence_labels) & set(available)
+        def clean(match):
+            ref = match.group(1)
+            if re.fullmatch(r"E[1-9]\d*", ref) and ref in allowed:
+                return match.group(0)
+            if warnings is not None:
+                warnings.append({"section": section.id, "warning": "invalid citation removed", "reference": ref})
+            return ""
+        text = re.sub(r"\[([EC]\d[^\]\n]*)\]", clean, text)
     lines = text.splitlines()
     if not lines or lines[0] != f"## {section.title}":
         raise StreamFailure("missing or incorrect section heading")
@@ -79,9 +89,9 @@ def validate_section(section, text, available):
     citations = extract_citations(text, EVIDENCE_CITATION_PATTERN)
     # Reject old C labels and grouped/malformed evidence references too.
     references = re.findall(r"\[([EC][^\]\n]*)\]", text)
-    if any(not re.fullmatch(r"E[1-9]\d*", ref) for ref in references):
+    if not permissive and any(not re.fullmatch(r"E[1-9]\d*", ref) for ref in references):
         raise StreamFailure("malformed citation")
-    if not citations:
+    if not citations and not permissive:
         raise StreamFailure("zero-valid-citation")
     if not set(citations) <= set(section.evidence_labels) & set(available):
         raise StreamFailure("citation outside section allowlist or writer evidence")
@@ -104,21 +114,28 @@ detailed 总正文约 3000～5000 中文字符；每节简洁，避免章节增�
 
 
 class SingleStreamingTeachingWriter:
-    def __init__(self, client_factory):
+    def __init__(self, client_factory, *, permissive=False):
         self.client_factory = client_factory
+        self.permissive = permissive
         self.last_client = None
 
     def write(self, question, plan, bundle, budget, *, request_started, on_section=None):
         offset = lambda: (time.perf_counter() - request_started) * 1000
         available = {item.citation.label for item in bundle.items if item.content.strip()}
-        if not set(plan.evidence_labels) <= available:
+        if not self.permissive and not set(plan.evidence_labels) <= available:
             raise StreamFailure("planned evidence missing from writer input", retryable=False)
-        messages = [LLMMessage("system", STREAM_WRITER_PROMPT), LLMMessage("user", json.dumps({
+        prompt = STREAM_WRITER_PROMPT
+        if self.permissive:
+            from devcontext.explanation.v3.universal import WRITING_METHOD
+            prompt = prompt.replace("每节至少引用一条本节 evidence_labels 中的证据", "需要引用时仅引用本节真实证据；概念章节允许无引用")
+            prompt += "\n" + WRITING_METHOD
+        messages = [LLMMessage("system", prompt), LLMMessage("user", json.dumps({
             "question": question, "plan": plan.to_dict(),
             "total_output_budget": budget.max_output_tokens,
             "evidence": bundle.rendered_text,
         }, ensure_ascii=False))]
         sections = []
+        warnings = []
         attempts = []
         first_content = first_ready = None
         error = failed_section = None
@@ -156,7 +173,7 @@ class SingleStreamingTeachingWriter:
                                 completed += 1
                                 failed_section = section_id
                                 section = plan.sections[len(sections)]
-                                valid = validate_section(section, body, available)
+                                valid = validate_section(section, body, available, permissive=self.permissive, warnings=warnings)
                                 if on_section is not None:
                                     try:
                                         on_section(valid)
@@ -227,5 +244,6 @@ class SingleStreamingTeachingWriter:
             "stream_retry_count": len(attempts) - 1, "stream_partial": status == "partial",
             "stream_cancelled": False, "failed_section": failed_section, "error": error,
             "attempts": attempts,
+            "warnings": warnings,
         }
         return tuple(sections), trace

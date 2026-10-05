@@ -11,12 +11,13 @@ from devcontext.observability import llm_stage, mark_last_call_wasted
 
 
 class TeachingWriterV3:
-    def __init__(self, client_factory):
+    def __init__(self, client_factory, *, permissive=False):
         self.client_factory = client_factory
+        self.permissive = permissive
         self.last_client = None
 
     def write(self, question, blueprint, pack, budget, *, request_started, on_section=None, messages=None):
-        messages = messages or writer_messages(question, blueprint, pack)
+        messages = messages or writer_messages(question, blueprint, pack, universal=self.permissive)
         available = {e["label"] for e in pack.catalog}
         sections, attempts = [], []
         first_ready = first_content = None
@@ -26,6 +27,7 @@ class TeachingWriterV3:
         totals = {}
         grounding_warnings = []
         rejected_section = None
+        rejected_protocol_buffer = None
         for attempt in range(2):
             parser = SectionParser(s.id for s in pack.sections)
             iterator = None
@@ -37,7 +39,7 @@ class TeachingWriterV3:
                 if hasattr(self.last_client, "max_tokens"):
                     self.last_client.max_tokens = budget.max_output_tokens
                 if hasattr(self.last_client, "timeout_seconds"):
-                    self.last_client.timeout_seconds = bounded_timeout(150 if getattr(self.last_client, "provider", None) == "openai" else 100)
+                    self.last_client.timeout_seconds = bounded_timeout(self.last_client.timeout_seconds)
                 finished = False
                 with llm_stage("teaching_draft", "v3"):
                     iterator = self.last_client.generate_stream(messages)
@@ -51,7 +53,8 @@ class TeachingWriterV3:
                             for section_id, body in parser.feed(event.text):
                                 failed_section = section_id
                                 try:
-                                    valid = validate_section(pack.sections[len(sections)], body, available)
+                                    valid = validate_section(pack.sections[len(sections)], body, available,
+                                        permissive=self.permissive, warnings=grounding_warnings)
                                 except Exception:
                                     rejected_section = {"id": section_id, "markdown": body}
                                     raise
@@ -92,6 +95,7 @@ class TeachingWriterV3:
                 retryable = False
             except Exception as exc:
                 error = str(exc)
+                rejected_protocol_buffer = parser.buffer[:4000]
                 failed_section = failed_section or parser.next_id
                 status = "partial" if sections else "failed"
                 retryable = getattr(exc, "retryable", False)
@@ -122,6 +126,8 @@ class TeachingWriterV3:
                  "input_tokens": totals.get("prompt_tokens"), "output_tokens": totals.get("completion_tokens"),
                  "reasoning_tokens": totals.get("reasoning_tokens")}
         trace["grounding_warnings"] = grounding_warnings
+        if rejected_protocol_buffer is not None:
+            trace["rejected_protocol_buffer"] = rejected_protocol_buffer
         if rejected_section is not None:
             trace["rejected_section"] = rejected_section
         return tuple(sections), trace

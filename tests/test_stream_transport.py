@@ -59,6 +59,19 @@ def test_real_curl_stream_and_usage_trace(endpoint, monkeypatch):
     assert recorder.llm_calls[0].reasoning_tokens == 3
 
 
+@pytest.mark.parametrize("json_mode", [False, True])
+def test_omitted_reasoning_is_absent_in_stream_and_json_gateway(endpoint, monkeypatch, json_mode):
+    from devcontext.llm.openai_compatible import OpenAICompatibleLLMClient
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
+    url, state = endpoint
+    client = OpenAICompatibleLLMClient("test-only", url, reasoning_effort=None, json_mode=json_mode)
+    if json_mode:
+        client.generate([LLMMessage("user", "q")])
+    else:
+        list(client.generate_stream([LLMMessage("user", "q")]))
+    assert "reasoning_effort" not in state["requests"][0]
+
+
 @pytest.mark.parametrize("status,retryable", [(401, False), (400, False), (429, True), (500, True)])
 def test_http_errors_do_not_leak_body_or_credentials(endpoint, monkeypatch, status, retryable):
     monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")

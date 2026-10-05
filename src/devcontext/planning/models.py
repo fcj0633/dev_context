@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, InitVar
 from typing import Any
 
 
-ANSWER_DEPTHS = ("brief", "standard", "detailed")
 EXPLANATION_STRATEGIES = ("flow", "causal", "comparison", "architecture", "mixed")
 IMPORTANCE_LEVELS = ("CORE", "SUPPORTING")
 TEMPORAL_SCOPES = ("CURRENT", "HISTORY", "FUTURE", "ANY")
@@ -47,7 +46,7 @@ class QuestionPlan:
     original_query: str
     intent_summary: str
     sub_questions: tuple[SubQuestion, ...]
-    answer_depth: str
+    answer_depth: InitVar[str | None] = None
     decision_source: str = "llm"
     answer_goal: str = ""
     explanation_strategy: str = "mixed"
@@ -56,7 +55,6 @@ class QuestionPlan:
         return {
             "original_query": self.original_query,
             "intent_summary": self.intent_summary,
-            "answer_depth": self.answer_depth,
             "decision_source": self.decision_source,
             "answer_goal": self.answer_goal,
             "explanation_strategy": self.explanation_strategy,

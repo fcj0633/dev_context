@@ -33,13 +33,12 @@ def test_gateway_json_is_normalized_before_planner(monkeypatch):
 
 
 def test_demo_selection_keeps_both_schemas_and_correct_complete_example():
-    why = planner_prompt('项目为何使用责任链？')
-    assert 'WHY 根对象形状' in why and 'HOW 根对象形状' in why
-    assert '"fictional_example":"WHY"' in why
-    assert '"fictional_example":"HOW"' not in why
-    how = planner_prompt('如何发布内容？')
-    assert '"fictional_example":"HOW"' in how
-    assert '"fictional_example":"WHY"' not in how
+    why = planner_prompt("项目为何使用责任链？")
+    how = planner_prompt("如何发布内容？")
+    assert "WHY:" in why and "HOW:" in how
+    assert "规则能执行" not in how
+    assert "完整虚构蓝图示范" in why and "完整虚构蓝图示范" in how
+    assert "selected_depth" not in why + how
 
 
 def test_openai_v3_effort_is_configurable_without_changing_other_modes():

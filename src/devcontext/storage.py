@@ -27,9 +27,9 @@ class ChunkStore:
         from devcontext.deadline import remaining_seconds
         import math
         remaining = remaining_seconds()
-        options = {} if remaining is None else {
-            "connect_timeout": max(1, math.ceil(remaining)),
-            "options": f"-c statement_timeout={max(1, int(remaining * 1000))}",
+        options = {
+            "connect_timeout": max(1, math.ceil(10 if remaining is None else min(10, remaining))),
+            "options": f"-c statement_timeout={max(1, int((30 if remaining is None else min(30, remaining)) * 1000))}",
         }
         connection = psycopg.connect(self.database_url, row_factory=dict_row, **options)
         if vectors:

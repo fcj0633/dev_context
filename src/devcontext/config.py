@@ -7,6 +7,7 @@ from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from devcontext.context.budget import ModelCapabilities
+from devcontext.answer_policy import RequestPolicy
 
 
 class Settings(BaseSettings):
@@ -32,6 +33,19 @@ class Settings(BaseSettings):
     openai_v3_reasoning_effort: Literal["low", "medium", "high"] = "low"
     openai_context_window: int = Field(default=131_072, gt=0)
     openai_max_output_tokens: int = Field(default=32_768, gt=0)
+    answer_profile: Literal["fast", "full"] = "fast"
+    answer_reasoning_effort: Literal["low", "medium", "high"] | None = None
+    answer_hard_timeout_seconds: float | None = Field(default=None, gt=0)
+    answer_fast_latency_target_seconds: float = Field(default=45, gt=0)
+    answer_full_latency_target_seconds: float = Field(default=300, gt=0)
+    answer_planner_timeout_seconds: float = Field(default=180, gt=0)
+    answer_writer_timeout_seconds: float = Field(default=240, gt=0)
+    answer_full_planner_timeout_seconds: float = Field(default=300, gt=0)
+    answer_full_writer_timeout_seconds: float = Field(default=600, gt=0)
+    # Explicit capability override for compatible gateways; unknown means omit.
+    llm_supported_reasoning_efforts: str | None = None
+    answer_engine_enabled: bool = False
+    answer_request_policy: RequestPolicy | None = Field(default=None, exclude=True)
 
     @model_validator(mode="before")
     @classmethod

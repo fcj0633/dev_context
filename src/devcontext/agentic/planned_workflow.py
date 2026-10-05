@@ -43,7 +43,6 @@ from devcontext.evidence import (
     default_source_policy_path,
 )
 from devcontext.planning import (
-    ANSWER_DEPTHS,
     MAX_SUB_QUESTIONS,
     QuestionPlan,
     QuestionPlanner,
@@ -57,7 +56,6 @@ SUB_QUESTION_TOP_K = 3
 CORE_TOP_K = 5
 SUPPORTING_TOP_K = 3
 MAX_RETRY_TARGETS = 4
-DEPTH_CONTEXT_BUDGETS = {"brief": 8000, "standard": 16000, "detailed": 28000}
 MAX_REWRITES = 1
 
 
@@ -85,7 +83,6 @@ class PlannedRetrievalWorkflow:
         source_policy: SourcePolicy | None = None,
         answer_mode: str = "legacy",
         context_budget_override: int | None = None,
-        depth_override: str | None = None,
     ) -> None:
         if not 1 <= max_sub_questions <= MAX_SUB_QUESTIONS:
             raise ValueError(
@@ -97,8 +94,6 @@ class PlannedRetrievalWorkflow:
             raise ValueError("max_rewrites must not be negative")
         if answer_mode not in {"legacy", "explain"}:
             raise ValueError("answer_mode must be legacy or explain")
-        if depth_override is not None and depth_override not in ANSWER_DEPTHS:
-            raise ValueError("depth_override must be brief, standard, or detailed")
         self.planner = planner
         self.retrieval_policy = retrieval_policy
         self.context_builder = context_builder
@@ -116,7 +111,6 @@ class PlannedRetrievalWorkflow:
         )
         self.answer_mode = answer_mode
         self.context_budget_override = context_budget_override
-        self.depth_override = depth_override
 
     def run(self, query: str, top_k: int) -> AgenticAnswerResult:
         if not query.strip():
@@ -127,8 +121,6 @@ class PlannedRetrievalWorkflow:
         stage_usage: list[StageUsage] = []
         started = time.perf_counter()
         plan = self.planner.plan(query)
-        if self.depth_override is not None:
-            plan = replace(plan, answer_depth=self.depth_override)
         stage_usage.append(_stage_usage(
             "investigation_planning",
             (time.perf_counter() - started) * 1000,
@@ -341,7 +333,7 @@ class PlannedRetrievalWorkflow:
         top_k: int,
     ) -> ContextBundle:
         results, annotations = pool.select(sub_questions, top_k)
-        budget = self.context_budget_override or DEPTH_CONTEXT_BUDGETS[plan.answer_depth]
+        budget = self.context_budget_override or 28000
         builder = ContextBuilder(max_chars=budget)
         return builder.build(query, results, annotations)
 
@@ -401,7 +393,7 @@ class PlannedRetrievalWorkflow:
             for aspect in sufficiency.missing_aspects
         )
         answer_plan: AnswerPlan
-        if plan.answer_depth != "brief" and self.answer_planner is not None:
+        if self.answer_planner is not None:
             started = time.perf_counter()
             try:
                 answer_plan = self.answer_planner.plan(
@@ -431,17 +423,7 @@ class PlannedRetrievalWorkflow:
             "high",
         ))
         review = None
-        should_review = plan.answer_depth == "detailed" or (
-            plan.answer_depth == "standard"
-            and (
-                bool(answer_plan.conflicts)
-                or not draft.used_citations
-                or bool(draft.invalid_citations)
-                or answer_plan.decision_source == "fallback"
-                or not answer_plan.direct_answer.strip()
-                or _draft_structure_failed(draft, plan.answer_depth)
-            )
-        )
+        should_review = len(answer_plan.sections) >= 3 or bool(answer_plan.conflicts) or not draft.used_citations or bool(draft.invalid_citations) or answer_plan.decision_source == "fallback" or _draft_structure_failed(draft)
         if should_review and self.answer_reviewer is not None:
             started = time.perf_counter()
             try:
@@ -616,7 +598,6 @@ def render_answer_outline(plan: QuestionPlan) -> str:
     lines = [
         "Answer Outline:",
         f"Intent: {plan.intent_summary}",
-        f"Depth: {plan.answer_depth}",
         '请按以下小节组织回答，每节以 "## <标题>" 开头：',
     ]
     lines.extend(
@@ -679,19 +660,7 @@ def _stage_usage(
     )
 
 
-def _draft_structure_failed(draft: GroundedDraft, depth: str) -> bool:
-    if depth == "brief":
-        return False
-    text = draft.text_with_citations
-    headings = [
-        " ".join(value.split()).casefold()
-        for value in re.findall(r"(?m)^#{1,6}\s+(.+)$", text)
-    ]
-    if len(headings) != len(set(headings)) or text.count("结论：") > 1:
-        return True
-    chinese_chars = len(re.findall(r"[\u3400-\u9fff]", text))
-    minimum, maximum = {
-        "standard": (800, 1800),
-        "detailed": (2200, 5000),
-    }[depth]
-    return not minimum <= chinese_chars <= maximum
+def _draft_structure_failed(draft: GroundedDraft) -> bool:
+    headings = re.findall(r"(?m)^#{1,6}\s+(.+)$", draft.text_with_citations)
+    normalized = [" ".join(h.split()).casefold() for h in headings]
+    return not draft.text_with_citations.strip() or len(normalized) != len(set(normalized))

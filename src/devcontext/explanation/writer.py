@@ -102,7 +102,6 @@ class TeachingWriter:
             "core_mental_model": plan.core_mental_model,
             "direct_answer": plan.direct_answer,
             "primary_strategy": plan.primary_strategy,
-            "answer_depth": plan.answer_depth,
             "sections": [
                 {
                     "id": section.id,

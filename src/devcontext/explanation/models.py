@@ -4,16 +4,6 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from devcontext.models import EvidenceConflict
-# The depth vocabulary belongs to the request contract; importing it here keeps
-# the prompt, the validator and the CLI from drifting apart.
-from devcontext.request import (  # noqa: F401  (re-exported for the prompt builder)
-    ANSWER_DEPTHS,
-    EXPLAIN_MODES,
-    TEACH_DEPTHS,
-    depths_for,
-)
-
-
 # What kind of work a section does for the reader. Ordering these is the whole
 # point of planning separately from retrieval: the investigation order is not the
 # teaching order, and this is where that is expressed.
@@ -68,13 +58,6 @@ PRIMARY_STRATEGIES = (
     "NEGATIVE_CORRECTION",
     "LOCATION_ONLY",
 )
-
-# `deep` exists because the old fixed ceilings were the binding constraint on a
-# hard question, not the model's window. It is only meaningful on the teach path,
-# so an explanation plan - which only the teach path produces - uses the full set.
-DEPTHS = TEACH_DEPTHS
-EXPLAIN_DEPTHS = ANSWER_DEPTHS
-
 
 @dataclass(frozen=True, slots=True)
 class ClaimPlan:
@@ -161,7 +144,6 @@ class ExplanationPlan:
     core_mental_model: str
     primary_strategy: str
     sections: tuple[ExplanationSection, ...]
-    answer_depth: str = "standard"
     secondary_strategies: tuple[str, ...] = ()
     prerequisite_concepts: tuple[str, ...] = ()
     likely_misconceptions: tuple[str, ...] = ()
@@ -175,8 +157,6 @@ class ExplanationPlan:
         for strategy in self.secondary_strategies:
             if strategy not in PRIMARY_STRATEGIES:
                 raise ValueError(f"invalid secondary_strategy: {strategy}")
-        if self.answer_depth not in DEPTHS:
-            raise ValueError(f"invalid answer_depth: {self.answer_depth}")
         if not self.core_mental_model.strip():
             raise ValueError("an explanation plan must state a core mental model")
 
@@ -202,7 +182,6 @@ class ExplanationPlan:
             "sections": [item.to_dict() for item in self.sections],
             "unresolved_gaps": list(self.unresolved_gaps),
             "conflicts": [item.to_dict() for item in self.conflicts],
-            "answer_depth": self.answer_depth,
             "decision_source": self.decision_source,
         }
 

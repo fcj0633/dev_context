@@ -18,14 +18,15 @@ class ChatCompletionsLLMClient:
     display_name = "DeepSeek"
     config_prefix = "DEEPSEEK"
     output_token_parameter = "max_tokens"
-    supported_reasoning_efforts = {"low", "high", "max"}
+    # Transport vocabulary only. Actual model capability lives in the factory.
+    supported_reasoning_efforts = {"low", "medium", "high", "max"}
 
     def __init__(
         self,
         api_key: str,
         base_url: str = "https://api.deepseek.com",
         model: str = "deepseek-flash",
-        reasoning_effort: str = "low",
+        reasoning_effort: str | None = "low",
         max_tokens: int = 4096,
         timeout_seconds: int = 120,
         json_mode: bool = False,
@@ -36,8 +37,8 @@ class ChatCompletionsLLMClient:
             raise ValueError(f"{self.config_prefix}_BASE_URL must not be empty")
         if not model.strip():
             raise ValueError(f"{self.config_prefix}_MODEL must not be empty")
-        if reasoning_effort not in self.supported_reasoning_efforts:
-            raise ValueError("reasoning_effort must be low, high, or max")
+        if reasoning_effort is not None and reasoning_effort not in self.supported_reasoning_efforts:
+            raise ValueError("reasoning_effort must be low, medium, high, max, or None")
         if max_tokens < 1:
             raise ValueError("max_tokens must be greater than 0")
         if timeout_seconds < 1:
@@ -115,10 +116,11 @@ class ChatCompletionsLLMClient:
         body = {
             "model": self.model,
             "messages": [message.to_dict() for message in messages],
-            "reasoning_effort": self.reasoning_effort,
             self.output_token_parameter: self.max_tokens,
             "stream": False,
         }
+        if self.reasoning_effort is not None:
+            body["reasoning_effort"] = self.reasoning_effort
         if self.json_mode:
             body["response_format"] = {"type": "json_object"}
         config = "\n".join(

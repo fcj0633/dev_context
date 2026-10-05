@@ -68,22 +68,27 @@ class EvidenceDrivenWorkflow:
         answer_reviewer: AnswerReviewer | None = None,
         *,
         answer_mode: str = "legacy",
-        depth_override: str | None = None,
         context_budget_override: int | None = None,
         teaching_workflow: "TeachingExplanationWorkflow | None" = None,
+        request_policy=None,
     ) -> None:
         self.retrieval_controller = retrieval_controller
         self.answer_generator_factory = answer_generator_factory
         self.answer_planner = answer_planner
         self.answer_reviewer = answer_reviewer
         self.teaching_workflow = teaching_workflow
-        self.answer_options = AnswerOptions(depth_override, answer_mode)
+        self.request_policy = request_policy
+        self.answer_options = AnswerOptions(answer_mode=answer_mode)
         if context_budget_override is not None and context_budget_override < 1:
             raise ValueError("context_budget_override must be positive")
         self.context_budget_override = context_budget_override
 
     def run(self, query: str, top_k: int, *, on_section=None) -> AgenticAnswerResult:
         self.on_section = on_section
+        if self.request_policy is not None:
+            from devcontext.deadline import request_deadline
+            with request_deadline(self.request_policy.hard_timeout_seconds):
+                return self._run(query, top_k)
         runtime = getattr(self.teaching_workflow, "runtime_options", None)
         if getattr(runtime, "generation_mode", None) == "v3":
             from devcontext.deadline import request_deadline
@@ -92,16 +97,30 @@ class EvidenceDrivenWorkflow:
         return self._run(query, top_k)
 
     def _run(self, query: str, top_k: int) -> AgenticAnswerResult:
+        policy_started = time.perf_counter()
         if self.teaching_workflow is not None:
             self.teaching_workflow.request_started_at = time.perf_counter()
         request = UserRequest(
             query,
             self.answer_options,
             self.context_budget_override,
+            self.request_policy,
         )
+        policy_ms = (time.perf_counter() - policy_started) * 1000
         retrieval = self.retrieval_controller.retrieve(request, top_k)
+        intent = getattr(getattr(self.retrieval_controller, "evidence_planner", None), "primary_intent", None)
+        if request.policy and intent:
+            from dataclasses import replace
+            request = replace(request, policy=replace(request.policy, primary_intent=intent))
         package = retrieval.package
         outcome = self._answer(request, package)
+        if request.policy is not None:
+            trace_data = (outcome.workspace_stats or {}).get("trace", {})
+            trace_data.update(request_policy=request.policy.to_dict(), profile=request.policy.profile,
+                reasoning_requested=request.policy.reasoning_effort)
+            elapsed = (time.perf_counter() - self.teaching_workflow.request_started_at) * 1000
+            trace_data.update(total_elapsed_ms=elapsed,
+                latency_target_exceeded=elapsed > request.policy.latency_target_seconds * 1000)
         runtime = getattr(self.teaching_workflow, "runtime_options", None)
         if getattr(runtime, "generation_mode", None) == "v3" and not (outcome.workspace_stats or {}).get("trace"):
             # Empty/failed retrieval is also a failed V3 request, not CLI success.
@@ -164,7 +183,7 @@ class EvidenceDrivenWorkflow:
             answer_plan=answer_plan.to_dict() if answer_plan else None,
             source_conflicts=[item.to_dict() for item in conflicts],
             review=review.to_dict() if review else None,
-            stage_usage=[*retrieval.stage_usage, *answer_stages],
+            stage_usage=[*([StageUsage("request_policy", policy_ms, "rules")] if request.policy else []), *retrieval.stage_usage, *answer_stages],
             evidence_plan=package.evidence_plan.to_dict(),
             requirement_traces=[item.to_dict() for item in requirement_traces],
             search_actions=[item.to_dict() for item in package.search_history],
@@ -198,7 +217,8 @@ class EvidenceDrivenWorkflow:
             remaining_seconds()
         except RequestDeadlineExceeded as exc:
             return _AnswerOutcome(AnswerResult(str(exc), []), workspace_stats={"trace": {
-                "generation_mode": "v3", "completion_status": "failed", "error": str(exc), "sections_emitted": 0}})
+                "generation_mode": "single_stream" if request.policy and request.policy.profile == "fast" else "v3",
+                "completion_status": "failed", "error": str(exc), "sections_emitted": 0}})
         if package.retrieval_state == "RETRIEVAL_FAILED":
             # Distinct from "no evidence found": the search never completed, so
             # saying the project lacks this evidence would be a false statement.
@@ -206,14 +226,15 @@ class EvidenceDrivenWorkflow:
                 (item.error for item in package.search_history if item.error), None
             )
             suffix = f" 最后一次失败：{detail}。" if detail else ""
-            return _AnswerOutcome(AnswerResult(RETRIEVAL_FAILED_ANSWER + suffix, []))
+            if request.policy is None:
+                return _AnswerOutcome(AnswerResult(RETRIEVAL_FAILED_ANSWER + suffix, []))
         workspace = package.evidence_workspace
         has_evidence = (
             bool(workspace) and len(workspace) > 0
             if request.answer_options.evidence_source == "workspace"
             else bool(package.context_bundle.items)
         )
-        if package.retrieval_state == "EMPTY" or not has_evidence:
+        if request.policy is None and (package.retrieval_state == "EMPTY" or not has_evidence):
             unresolved_ids = set(package.unresolved_requirements)
             unresolved = "；".join(
                 item.target
@@ -223,6 +244,8 @@ class EvidenceDrivenWorkflow:
             suffix = f" 当前仍缺少：{unresolved}。" if unresolved else ""
             return _AnswerOutcome(AnswerResult(EMPTY_CONTEXT_ANSWER + suffix, []))
         mode = request.answer_options.answer_mode
+        if request.policy is not None and mode == "teach":
+            return self._answer_teach(request, package)
         generator = self.answer_generator_factory()
         if mode == "legacy":
             started = time.perf_counter()
@@ -299,16 +322,7 @@ class EvidenceDrivenWorkflow:
             )
         )
         review = None
-        should_review = answer_plan.answer_depth == "detailed" or (
-            answer_plan.answer_depth == "standard"
-            and (
-                bool(answer_plan.conflicts)
-                or not draft.used_citations
-                or bool(draft.invalid_citations)
-                or answer_plan.decision_source == "fallback"
-                or _draft_structure_failed(draft, answer_plan.answer_depth)
-            )
-        )
+        should_review = len(answer_plan.sections) >= 3 or bool(answer_plan.conflicts) or not draft.used_citations or bool(draft.invalid_citations) or answer_plan.decision_source == "fallback" or _draft_structure_failed(draft)
         if should_review and self.answer_reviewer is not None:
             started = time.perf_counter()
             try:
@@ -401,16 +415,12 @@ def _legacy_plan_alias(
     answer_plan: object | None,
 ) -> dict[str, object]:
     """Serialize the deprecated QuestionPlan shape without using it internally."""
-    depth = getattr(answer_plan, "answer_depth", None) or (
-        request.answer_options.depth_override or "standard"
-    )
     goal = getattr(answer_plan, "answer_goal", None) or request.original_query
     strategy = getattr(answer_plan, "explanation_strategy", None) or "mixed"
     return {
         "original_query": request.original_query,
         "intent_summary": request.original_query,
-        "answer_depth": depth,
-        "decision_source": package.evidence_plan.decision_source,
+                "decision_source": package.evidence_plan.decision_source,
         "answer_goal": goal,
         "explanation_strategy": strategy,
         "sub_questions": [
@@ -464,22 +474,10 @@ def _legacy_query_type(source_requirement: str) -> str:
     return "MIXED"
 
 
-def _draft_structure_failed(draft: GroundedDraft, depth: str) -> bool:
-    if depth == "brief":
-        return False
-    text = draft.text_with_citations
-    headings = [
-        " ".join(value.split()).casefold()
-        for value in re.findall(r"(?m)^#{1,6}\s+(.+)$", text)
-    ]
-    if len(headings) != len(set(headings)) or text.count("结论：") > 1:
-        return True
-    chinese_chars = len(re.findall(r"[\u3400-\u9fff]", text))
-    minimum, maximum = {
-        "standard": (800, 1800),
-        "detailed": (2200, 5000),
-    }[depth]
-    return not minimum <= chinese_chars <= maximum
+def _draft_structure_failed(draft: GroundedDraft) -> bool:
+    headings = re.findall(r"(?m)^#{1,6}\s+(.+)$", draft.text_with_citations)
+    normalized = [" ".join(h.split()).casefold() for h in headings]
+    return not draft.text_with_citations.strip() or len(normalized) != len(set(normalized))
 
 
 def _stage_usage(

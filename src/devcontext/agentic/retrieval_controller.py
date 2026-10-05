@@ -168,8 +168,8 @@ class RetrievalController:
         )
         remaining_budget = MAX_SEARCH_ACTIONS - len(history)
         followup_requirements = followup_requirements[:remaining_budget]
-        remaining = remaining_seconds()
-        if followup_requirements and remaining is not None and remaining < V3_TEACHING_RESERVE_SECONDS + FOLLOWUP_ESTIMATED_SECONDS:
+        remaining = None if request.policy else remaining_seconds()
+        if request.policy is None and followup_requirements and remaining is not None and remaining < V3_TEACHING_RESERVE_SECONDS + FOLLOWUP_ESTIMATED_SECONDS:
             # Reserve 120s for teaching plus 35s for a possible follow-up.
             # A shared deadline is installed only for V3. Preserve partial
             # coverage as-is; never upgrade missing evidence to satisfied.

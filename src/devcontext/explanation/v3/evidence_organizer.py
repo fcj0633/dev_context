@@ -12,10 +12,62 @@ from devcontext.explanation.v3.errors import EvidencePackUnavailable
 from devcontext.explanation.v3.models import WriterEvidencePack, WriterSection
 
 
-def build_writer_evidence_pack(blueprint, package, *, max_chars=28000, required_token_budget=None, estimator=None):
+def reconcile_evidence(blueprint, package):
+    """Shrink project guarantees when the material cannot execute the plan."""
+    from devcontext.explanation.v3.models import TeachingBlueprint
+    data = deepcopy(blueprint.data)
+    items = ({r.evidence_id: context_item_from_ref(r) for r in package.evidence_workspace.all()}
+             if package.evidence_workspace is not None else {i.citation.label: i for i in package.context_bundle.items})
+    warnings = list(blueprint.warnings)
+    for claim in data["claims"]:
+        unavailable = [e for e in claim["evidence_labels"] if e not in items or not items[e].content.strip() or items[e].truncated]
+        if unavailable and claim["claim_type"] in {"PROJECT_FACT", "PROJECT_INFERENCE"}:
+            claim.update(claim_type="PROJECT_INFERENCE", status="UNKNOWN", reason="必要材料缺失或不完整：" + ",".join(unavailable))
+            claim["evidence_labels"] = [e for e in claim["evidence_labels"] if e not in unavailable]
+            warnings.append("EVIDENCE_SCOPE_REDUCED:" + claim["id"])
+    if data["question_kind"] == "HOW":
+        tail = data["how_spine_tail"]
+        unknown = {c["id"] for c in data["claims"] if c["status"] == "UNKNOWN"}
+        moved = [c for c in tail["established_guarantee_claim_ids"] if c in unknown]
+        tail["established_guarantee_claim_ids"] = [c for c in tail["established_guarantee_claim_ids"] if c not in unknown]
+        tail["unknown_boundary_claim_ids"] = list(dict.fromkeys(tail["unknown_boundary_claim_ids"] + moved))
+    return TeachingBlueprint(data, tuple(warnings))
+
+
+def resolve_section_dependencies(data, section, *, prior_context=(), include_map=False):
+    claims = {c["id"]: c for c in data["claims"]}
+    own = [c for c in claims if claims[c]["owner_section"] == section["id"]]
+    referenced = set(own) | set(section["may_reference"]) | set(prior_context)
+    checkpoints = [deepcopy(k) for k in data["scenario"]["checkpoints"] if k["id"] in section["checkpoint_ids"]]
+    spine_refs = set(section["spine_refs"]) | {r for k in checkpoints for r in k["spine_refs"]}
+    if data["question_kind"] == "WHY":
+        steps = {slot: values for slot, values in data["why_spine"].items() if slot in spine_refs}
+        referenced.update(c for values in steps.values() for c in values)
+    else:
+        source = data.get("how_spine", []) if data["question_kind"] == "HOW" else data.get("explanation_units", [])
+        steps = [deepcopy(h) for h in source if h["id"] in spine_refs]
+        referenced.update(c for h in steps for c in h.get("guarantee_claim_ids", h.get("claim_ids", [])))
+        by_id = {h["id"]: h for h in source}
+        pending, seen = list(steps), set()
+        while pending:
+            h = pending.pop()
+            if h["id"] in seen:
+                continue
+            seen.add(h["id"])
+            referenced.update(h.get("guarantee_claim_ids", h.get("claim_ids", [])))
+            pending.extend(by_id[identifier] for link in h.get("links", [])
+                if (identifier := link.get("from_step", link.get("from_unit"))) in by_id)
+    referenced.update(c for k in checkpoints for c in k["claim_ids"])
+    if include_map:
+        referenced.update(c for m in data["core_mental_model"] for c in m["claim_ids"])
+    distinctions = [deepcopy(d) for d in data["critical_distinctions"] if referenced & set(d["claim_ids"])]
+    referenced.update(c for d in distinctions for c in d["claim_ids"])
+    return own, [c for c in claims if c in referenced], steps, checkpoints, distinctions
+
+
+def build_writer_evidence_pack(blueprint, package, *, max_chars=28000, required_token_budget=None, estimator=None, permissive=False):
     data = blueprint.data
     claims = {c["id"]: c for c in data["claims"]}
-    checkpoints = {k["id"]: k for k in data["scenario"]["checkpoints"]}
     if package.evidence_workspace is not None:
         items = {r.evidence_id: context_item_from_ref(r) for r in package.evidence_workspace.all()}
     else:
@@ -25,37 +77,27 @@ def build_writer_evidence_pack(blueprint, package, *, max_chars=28000, required_
     optional_order = []
     established_claims = set()
     for index, section in enumerate(data["answer_structure"]):
-        own = [c["id"] for c in claims.values() if c["owner_section"] == section["id"]]
-        referenced = set(own) | set(section["may_reference"])
-        # Natural transitions may cite conclusions already explained. Keep the
-        # evidence for this shared knowledge available without changing owners.
-        prior_context = [c for c in claims if c in established_claims]
-        referenced.update(prior_context)
-        if blueprint.question_kind == "WHY":
-            steps = {slot: data["why_spine"][slot] for slot in section["spine_refs"]}
-            referenced.update(c for values in steps.values() for c in values)
-        else:
-            steps = [deepcopy(h) for h in data["how_spine"] if h["id"] in section["spine_refs"]]
-            referenced.update(c for h in steps for c in h["guarantee_claim_ids"])
-        local_checkpoints = [deepcopy(checkpoints[k]) for k in section["checkpoint_ids"]]
-        referenced.update(c for k in local_checkpoints for c in k["claim_ids"])
-        # Opening map and closing compression both refer to the global map.
-        # Bind its claims explicitly instead of making Writer borrow labels.
-        if index in {0, len(data["answer_structure"]) - 1}:
-            referenced.update(c for m in data["core_mental_model"] for c in m["claim_ids"])
-        local_distinctions = [deepcopy(d) for d in data["critical_distinctions"] if referenced & set(d["claim_ids"])]
-        referenced.update(c for d in local_distinctions for c in d["claim_ids"])
-        ordered_claims = [c for c in claims if c in referenced]
+        prior_context = [c for c in section["may_reference"] if c in established_claims]
+        own, ordered_claims, steps, local_checkpoints, local_distinctions = resolve_section_dependencies(
+            data, section, prior_context=prior_context, include_map=index in {0, len(data["answer_structure"])-1})
         required = list(dict.fromkeys(e for c in ordered_claims for e in claims[c]["evidence_labels"]))
-        if not required:
+        if not required and not permissive:
             raise EvidencePackUnavailable(f"{section['id']} 没有项目证据，请将纯概念节合并到相关机制节")
         for label in required:
             if label not in items or not items[label].content or not items[label].content.strip() or items[label].truncated:
-                raise EvidencePackUnavailable(f"必要证据 {label} 缺失、为空或已截断")
+                if not permissive:
+                    raise EvidencePackUnavailable(f"必要证据 {label} 缺失、为空或已截断")
+                if label not in items or not items[label].content or not items[label].content.strip():
+                    continue
             if label not in required_order:
                 required_order.append(label)
         optional_order.extend(e for e in section["support_labels"] if e not in optional_order)
         contract = deepcopy(section)
+        if permissive:
+            missing = [e for e in required if e not in required_order]
+            contract["evidence_warnings"] = ["缺少材料：" + e for e in missing]
+            required = [e for e in required if e in required_order]
+        contract["writing_focus"] = ("先用业务动作回答并建立关系地图；概览不展开容器装配、生命周期或类名列表。" if index == 0 and data["question_kind"] != "LOCATE" else "落实本节新增关系与场景；已建立结论只短句承接，边界贴近对应机制。")
         contract.update({
             "owned_claims": [deepcopy(claims[c]) for c in own],
             "may_reference": [deepcopy(claims[c]) for c in section["may_reference"]],
@@ -102,15 +144,19 @@ def build_writer_evidence_pack(blueprint, package, *, max_chars=28000, required_
     return WriterEvidencePack(tuple(updated), catalog, bundle)
 
 
-@lru_cache(maxsize=2)
+@lru_cache(maxsize=7)
 def demo_pack(kind):
     from devcontext.explanation.v3.demos import load_demo
     from devcontext.explanation.v3.validation import parse_teaching_plan
-    demo = load_demo(kind)
+    if kind in {"WHY", "HOW"}:
+        demo = load_demo(kind)
+    else:
+        from devcontext.explanation.v3.universal import example
+        demo = example(kind)
     evidence = demo["input"]["evidence"]
-    blueprint = parse_teaching_plan(demo["blueprint"], allowed_labels={e["label"] for e in evidence}, expected_depth="detailed")
+    blueprint = parse_teaching_plan(demo["blueprint"], allowed_labels={e["label"] for e in evidence})
     items = [ContextItem(Citation(e["label"], "DOCUMENT", "fictional-demo.md"), e["content"], i, "DOCUMENT", 1.0, i,
                          source_role="DESIGN", temporal_status="CURRENT") for i, e in enumerate(evidence, 1)]
     package = SimpleNamespace(original_query=demo["input"]["question"], evidence_workspace=None,
                               context_bundle=ContextBundle(demo["input"]["question"], items, "", 0, 28000, False))
-    return blueprint, build_writer_evidence_pack(blueprint, package)
+    return blueprint, build_writer_evidence_pack(blueprint, package, permissive=True)

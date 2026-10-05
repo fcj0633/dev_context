@@ -8,15 +8,14 @@ from devcontext.request import AnswerOptions, UserRequest
 def test_request_intake_only_preserves_validated_input_options() -> None:
     request = UserRequest(
         "解释当前占座流程",
-        AnswerOptions("detailed", "explain"),
+        AnswerOptions(answer_mode="explain"),
         12_000,
     )
 
     assert request.to_dict() == {
         "original_query": "解释当前占座流程",
         "answer_options": {
-            "depth_override": "detailed",
-            "answer_mode": "explain",
+                        "answer_mode": "explain",
         },
         "context_budget_override": 12_000,
     }
@@ -30,8 +29,8 @@ def test_request_intake_only_preserves_validated_input_options() -> None:
     [
         lambda: UserRequest("  "),
         lambda: UserRequest("问题", context_budget_override=0),
-        lambda: AnswerOptions("deep", "explain"),
-        lambda: AnswerOptions("brief", "unknown"),
+        lambda: AnswerOptions(answer_mode="unknown"),
+        lambda: UserRequest("q", context_budget_override=-1),
     ],
 )
 def test_request_intake_rejects_invalid_input(factory) -> None:

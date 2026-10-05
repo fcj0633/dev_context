@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING, Any
 from devcontext.explanation.models import (
     CLAIM_TYPES,
     CONFIDENCES,
-    DEPTHS,
     PRIMARY_STRATEGIES,
     SECTION_TYPES,
     TEACHING_DEVICES,
@@ -37,7 +36,6 @@ _ALLOWED_FIELDS = {
     "answer_goal", "direct_answer", "audience_model", "core_mental_model",
     "primary_strategy", "secondary_strategies", "prerequisite_concepts",
     "likely_misconceptions", "sections", "unresolved_gaps", "conflicts",
-    "answer_depth",
 }
 _SECTION_FIELDS = {
     "id", "title", "section_type", "teaching_goal", "key_points", "claim_plans",
@@ -88,7 +86,7 @@ class ExplanationPlanner:
                     + "\n\n"
                     + allowed_values_block()
                     + "\n\n"
-                    "回答深度由本阶段决定：若 answer_options.depth_override 非空，answer_depth 必须使用该值。",
+                    "按用户理解任务和背景决定展开，不输出深度档位或为了长度凑章节。",
                 ),
                 LLMMessage("user", json.dumps(payload, ensure_ascii=False)),
             ])
@@ -104,17 +102,10 @@ def parse_explanation_plan(
         value = json.loads(response)
     except json.JSONDecodeError as exception:
         raise ExplanationPlanError("explanation plan is not valid JSON") from exception
+    if isinstance(value, dict):
+        value.pop("answer_depth", None)
     if not isinstance(value, dict) or set(value) != _ALLOWED_FIELDS:
         raise ExplanationPlanError("explanation plan has invalid fields")
-
-    depth = value["answer_depth"]
-    if depth not in DEPTHS:
-        raise ExplanationPlanError("answer_depth is invalid")
-    override = request.answer_options.depth_override
-    if override is not None and depth != override:
-        raise ExplanationPlanError("answer_depth does not honor the explicit override")
-    if depth == "deep" and request.answer_options.answer_mode in EXPLAIN_MODES:
-        raise ExplanationPlanError("deep depth is only available on the teach path")
 
     core_mental_model = _text(value["core_mental_model"], "core_mental_model")
     if not core_mental_model:
@@ -151,7 +142,6 @@ def parse_explanation_plan(
         core_mental_model=core_mental_model,
         primary_strategy=strategy,
         sections=sections,
-        answer_depth=depth,
         secondary_strategies=secondary,
         prerequisite_concepts=_strings(value["prerequisite_concepts"], "prerequisite_concepts"),
         likely_misconceptions=_strings(value["likely_misconceptions"], "likely_misconceptions"),
@@ -316,7 +306,6 @@ def fallback_explanation_plan(
         core_mental_model="按证据逐条说明，不额外推断",
         primary_strategy=strategy,
         sections=tuple(sections),
-        answer_depth=request.answer_options.depth_override or "standard",
         unresolved_gaps=tuple(
             item.target for item in evidence_package.evidence_plan.requirements
         ),
