@@ -97,12 +97,12 @@ def curl_stream(client, messages: Sequence[LLMMessage]) -> Iterator[bytes]:
         "model": client.model,
         "messages": [message.to_dict() for message in messages],
         "reasoning_effort": client.reasoning_effort,
-        "max_tokens": client.max_tokens,
+        getattr(client, "output_token_parameter", "max_tokens"): client.max_tokens,
         "stream": True,
         "stream_options": {"include_usage": True},
     }
     if client.json_mode:
-        raise StreamFailure("stream writer requires text mode", retryable=False)
+        body["response_format"] = {"type": "json_object"}
     # Credentials remain on stdin, never in a command line or diagnostic.
     config = "\n".join([
         f'url = "{client.base_url}/chat/completions"',
@@ -172,14 +172,30 @@ def curl_stream(client, messages: Sequence[LLMMessage]) -> Iterator[bytes]:
 
 
 def generate_stream(client, messages: Sequence[LLMMessage]) -> Iterator[StreamEvent]:
+    from devcontext.deadline import bounded_timeout
+    original_timeout = client.timeout_seconds
+    client.timeout_seconds = bounded_timeout(original_timeout)
     started = time.perf_counter()
     client.last_usage = {}
     client.last_finish_reason = None
     success = False
     error = None
     source = curl_stream(client, messages)
+    prefix = None
+    if getattr(client, "provider", None) == "openai":
+        from devcontext.llm.openai_compatible import ReasoningPrefixFilter
+        prefix = ReasoningPrefixFilter()
     try:
         for event in parse_sse(source):
+            if prefix is not None and event.type == "content":
+                text = prefix.feed(event.text)
+                if text:
+                    yield StreamEvent("content", text=text)
+                continue
+            if prefix is not None and event.type == "finish":
+                tail = prefix.finish()
+                if tail:
+                    yield StreamEvent("content", text=tail)
             if event.type == "usage":
                 client.last_usage.update(event.usage or {})
             elif event.type == "finish":
@@ -191,6 +207,7 @@ def generate_stream(client, messages: Sequence[LLMMessage]) -> Iterator[StreamEv
         yield StreamEvent("error", text=error, retryable=getattr(exc, "retryable", True))
     finally:
         source.close()
+        client.timeout_seconds = original_timeout
         client.last_latency_ms = (time.perf_counter() - started) * 1000
         record_llm_call(
             latency_ms=client.last_latency_ms, model=client.model,

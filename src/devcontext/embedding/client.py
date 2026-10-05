@@ -12,6 +12,7 @@ from collections.abc import Callable
 from openai import APIConnectionError, OpenAI
 
 from devcontext.observability import record_embedding_call
+from devcontext.deadline import bounded_timeout, remaining_seconds
 
 
 def _record_embedding(
@@ -89,7 +90,11 @@ class BailianEmbeddingClient:
                         batch_vectors = self._embed_with_curl(batch[:middle])
                         batch_vectors.extend(self._embed_with_curl(batch[middle:]))
                 else:
-                    response = self.client.embeddings.create(
+                    client = self.client
+                    remaining = remaining_seconds()
+                    if remaining is not None:
+                        client = self.client.with_options(timeout=min(30.0, remaining), max_retries=0)
+                    response = client.embeddings.create(
                         model=self.model,
                         input=list(batch),
                         dimensions=self.dimensions,
@@ -195,7 +200,7 @@ class BailianEmbeddingClient:
                         text=True,
                         encoding="utf-8",
                         capture_output=True,
-                        timeout=30,
+                        timeout=bounded_timeout(30),
                         check=False,
                     )
                 except subprocess.TimeoutExpired as exception:
@@ -203,7 +208,7 @@ class BailianEmbeddingClient:
                         raise RuntimeError(
                             "Bailian curl request timed out after 4 attempts"
                         ) from exception
-                    time.sleep(2**attempt)
+                    time.sleep(bounded_timeout(2**attempt))
                     continue
                 marker = "\n__HTTP_STATUS__:"
                 if marker in completed.stdout:
@@ -220,7 +225,7 @@ class BailianEmbeddingClient:
                 )
                 if not retryable or attempt == 3:
                     break
-                time.sleep(2**attempt)
+                time.sleep(bounded_timeout(2**attempt))
         finally:
             if request_path is not None:
                 try:

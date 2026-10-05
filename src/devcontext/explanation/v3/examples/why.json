@@ -1,0 +1,381 @@
+{
+  "input": {
+    "question": "为什么这里选择规则注册表，而不是在入口直接写条件分支？",
+    "evidence": [
+      {
+        "label": "E1",
+        "content": "直接条件分支可按指定顺序调用规则，规则少时易读。"
+      },
+      {
+        "label": "E2",
+        "content": "当前注册表按声明顺序收集规则，入口只请求执行；新规则新增注册项。"
+      },
+      {
+        "label": "E3",
+        "content": "注册项遗漏会漏执行，维护者需检查装配。"
+      }
+    ]
+  },
+  "blueprint": {
+    "question_form": "WHY",
+    "question_kind": "WHY",
+    "kind_rationale": "解释规则注册表为何值得采用及其维护取舍",
+    "answer_depth": "detailed",
+    "reader_assumption": {
+      "basis": "DEFAULT",
+      "profile": "能读基础 Java，需要解释本题高级机制及其关系",
+      "prerequisites": [
+        "接口将调用约定与具体实现分开"
+      ]
+    },
+    "learning_goal": "能解释注册表改变的是规则组织位置，并比较它与直接分支的维护取舍",
+    "goal_capabilities": [
+      {
+        "id": "G1",
+        "applicable": true,
+        "capability": "说明规则经常增加时入口承担的维护压力",
+        "reason": null
+      },
+      {
+        "id": "G2",
+        "applicable": true,
+        "capability": "说明直接分支可以排序，但改动集中在入口",
+        "reason": null
+      },
+      {
+        "id": "G3",
+        "applicable": true,
+        "capability": "解释注册表把规则定义与入口调用分开",
+        "reason": null
+      },
+      {
+        "id": "G4",
+        "applicable": true,
+        "capability": "解释为什么这种分离减少入口修改",
+        "reason": null
+      },
+      {
+        "id": "G5",
+        "applicable": true,
+        "capability": "说明遗漏注册和顺序维护的代价",
+        "reason": null
+      }
+    ],
+    "comprehension_checks": [
+      {
+        "id": "Q1",
+        "question": "直接分支也能排序，注册表究竟改变了什么？",
+        "goal_ids": [
+          "G2",
+          "G3"
+        ],
+        "answer_claim_ids": [
+          "C1",
+          "C2"
+        ]
+      },
+      {
+        "id": "Q2",
+        "question": "为什么有注册表仍需检查规则是否齐全、顺序是否正确？",
+        "goal_ids": [
+          "G5"
+        ],
+        "answer_claim_ids": [
+          "C3"
+        ]
+      }
+    ],
+    "claims": [
+      {
+        "id": "C1",
+        "statement": "直接条件分支可以按指定顺序调用规则；规则少时直观",
+        "claim_type": "PROJECT_FACT",
+        "status": "CONFIRMED",
+        "evidence_labels": [
+          "E1"
+        ],
+        "preconditions": [],
+        "reason": null,
+        "owner_section": "S1"
+      },
+      {
+        "id": "C2",
+        "statement": "注册表按声明顺序收集规则，入口仅请求执行；新增规则需要新增注册项",
+        "claim_type": "PROJECT_FACT",
+        "status": "CONFIRMED",
+        "evidence_labels": [
+          "E2"
+        ],
+        "preconditions": [],
+        "reason": null,
+        "owner_section": "S2"
+      },
+      {
+        "id": "C3",
+        "statement": "遗漏注册项会导致规则漏执行，维护者仍需检查装配和顺序",
+        "claim_type": "PROJECT_FACT",
+        "status": "CONFIRMED",
+        "evidence_labels": [
+          "E2",
+          "E3"
+        ],
+        "preconditions": [
+          "声明的注册项决定实际执行集合与次序"
+        ],
+        "reason": null,
+        "owner_section": "S3"
+      },
+      {
+        "id": "C4",
+        "statement": "当规则经常增加时，把规则定义与入口调用分离可以减少入口修改",
+        "claim_type": "PROJECT_INFERENCE",
+        "status": "INFERENCE",
+        "evidence_labels": [
+          "E1",
+          "E2"
+        ],
+        "preconditions": [
+          "规则确实会演进",
+          "注册表接口足以表达新增规则"
+        ],
+        "reason": null,
+        "owner_section": "S2"
+      }
+    ],
+    "why_spine": {
+      "constraint": [
+        "C4"
+      ],
+      "alternative": [
+        "C1"
+      ],
+      "alternative_limit": [
+        "C4"
+      ],
+      "chosen_design": [
+        "C2"
+      ],
+      "changed_condition": [
+        "C2",
+        "C4"
+      ],
+      "causal_explanation": [
+        "C4"
+      ],
+      "tradeoff_boundary": [
+        "C3"
+      ]
+    },
+    "core_mental_model": [
+      {
+        "id": "M1",
+        "statement": "直接分支能够执行有序规则，但规则变更集中在入口",
+        "relation": "FUNCTION",
+        "roles": [
+          "correctness"
+        ],
+        "claim_ids": [
+          "C1",
+          "C4"
+        ]
+      },
+      {
+        "id": "M2",
+        "statement": "注册表把规则定义与入口调用分离，减少入口修改",
+        "relation": "FUNCTION",
+        "roles": [
+          "boundary"
+        ],
+        "claim_ids": [
+          "C2",
+          "C4"
+        ]
+      },
+      {
+        "id": "M3",
+        "statement": "完整装配与正确顺序仍依赖维护者检查",
+        "relation": "DEPENDENCY",
+        "roles": [
+          "correctness",
+          "boundary"
+        ],
+        "claim_ids": [
+          "C3"
+        ]
+      }
+    ],
+    "critical_distinctions": [
+      {
+        "left": "能表达执行顺序",
+        "right": "规则组织是否便于演进",
+        "why_confusable": "两种组织方式都能排序，差异在改动位置与维护方式",
+        "claim_ids": [
+          "C1",
+          "C2",
+          "C4"
+        ]
+      }
+    ],
+    "scenario": {
+      "kind": "COUNTERFACTUAL",
+      "setup": "假设已有三条规则，现在需要在第二条之前增加一条资格检查",
+      "actors": [
+        "入口",
+        "规则维护者"
+      ],
+      "assumptions": [
+        "规则确实需要演进",
+        "新增检查应先于原第二条执行"
+      ],
+      "checkpoints": [
+        {
+          "id": "K1",
+          "spine_refs": [
+            "constraint"
+          ],
+          "branch": "SHARED",
+          "parent_checkpoint_id": null,
+          "trigger": "新增资格检查需求",
+          "state_before": "两种方案都有相同三条规则",
+          "action": "确定新增规则及所需位置",
+          "state_after": "两种方案面对相同变更",
+          "claim_ids": [
+            "C4"
+          ]
+        },
+        {
+          "id": "K2",
+          "spine_refs": [
+            "alternative",
+            "alternative_limit"
+          ],
+          "branch": "WORLD_A",
+          "parent_checkpoint_id": "K1",
+          "trigger": "采用直接分支",
+          "state_before": "入口按既定顺序调用三条规则",
+          "action": "修改入口，在相应位置插入检查",
+          "state_after": "执行集合与次序更新，入口代码改变",
+          "claim_ids": [
+            "C1",
+            "C4"
+          ]
+        },
+        {
+          "id": "K3",
+          "spine_refs": [
+            "chosen_design",
+            "changed_condition"
+          ],
+          "branch": "WORLD_B",
+          "parent_checkpoint_id": "K1",
+          "trigger": "采用注册表",
+          "state_before": "入口请求注册表执行已有规则",
+          "action": "增加注册项并声明位置",
+          "state_after": "规则集合更新，入口调用方式保持",
+          "claim_ids": [
+            "C2",
+            "C4"
+          ]
+        },
+        {
+          "id": "K4",
+          "spine_refs": [
+            "tradeoff_boundary"
+          ],
+          "branch": "WORLD_B",
+          "parent_checkpoint_id": "K3",
+          "trigger": "复查新增注册项",
+          "state_before": "新增项已声明",
+          "action": "检查装配与位置；若漏注册则未执行",
+          "state_after": "变更正确性仍取决于注册完整与顺序正确",
+          "claim_ids": [
+            "C3"
+          ]
+        }
+      ],
+      "simplification_reason": null
+    },
+    "answer_structure": [
+      {
+        "id": "S1",
+        "title": "为什么规则能执行还不等于容易维护？",
+        "section_goal": "直接回答并公平说明原方案",
+        "goal_ids": [
+          "G1",
+          "G2"
+        ],
+        "spine_refs": [
+          "constraint",
+          "alternative",
+          "alternative_limit"
+        ],
+        "learning_delta": {
+          "before_kind": "GAP",
+          "before": "尚未区分执行能力与演进成本",
+          "after": "直接分支能排序，压力在规则变更集中于入口"
+        },
+        "may_reference": [
+          "C4"
+        ],
+        "checkpoint_ids": [
+          "K1",
+          "K2"
+        ],
+        "support_labels": [],
+        "target_chars": 500
+      },
+      {
+        "id": "S2",
+        "title": "把规则定义移出去，究竟减少了什么改动？",
+        "section_goal": "解释注册表改变的条件及作用",
+        "goal_ids": [
+          "G3",
+          "G4"
+        ],
+        "spine_refs": [
+          "chosen_design",
+          "changed_condition",
+          "causal_explanation"
+        ],
+        "learning_delta": {
+          "before_kind": "GAP",
+          "before": "尚未建立规则组织与入口稳定的关系",
+          "after": "接口把入口调用与具体规则分开，新增注册项可减少入口修改"
+        },
+        "may_reference": [
+          "C1"
+        ],
+        "checkpoint_ids": [
+          "K3"
+        ],
+        "support_labels": [],
+        "target_chars": 500
+      },
+      {
+        "id": "S3",
+        "title": "为什么注册表仍需检查装配与顺序？",
+        "section_goal": "说明收益前提、代价并压缩收束",
+        "goal_ids": [
+          "G5"
+        ],
+        "spine_refs": [
+          "tradeoff_boundary"
+        ],
+        "learning_delta": {
+          "before_kind": "GAP",
+          "before": "尚未认识规则分离后的维护责任",
+          "after": "入口改动减少，但注册完整性和位置仍要维护"
+        },
+        "may_reference": [
+          "C2",
+          "C4"
+        ],
+        "checkpoint_ids": [
+          "K4"
+        ],
+        "support_labels": [],
+        "target_chars": 500
+      }
+    ]
+  }
+}

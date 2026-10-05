@@ -16,6 +16,8 @@ TOP_LEVEL_STAGES: tuple[str, ...] = (
     "evidence_retrieval",
     "coverage_check",
     "explanation_planning",
+    "teaching_planning_v3",
+    "teaching_evidence_pack",
     "teaching_draft",
     "teaching_review",
     "teaching_revision",
@@ -61,7 +63,7 @@ def build_perf_report(
         "answer_mode": answer_mode,
         "generation_mode": (getattr(trace, "teaching", None) or {}).get("generation_mode"),
         "stream": (getattr(trace, "teaching", None) or {}) if (
-            getattr(trace, "teaching", None) or {}).get("generation_mode") == "single_stream" else None,
+            getattr(trace, "teaching", None) or {}).get("generation_mode") in {"single_stream", "v3"} else None,
         "depth": depth,
         "top_k": top_k,
         "timestamp": timestamp,
@@ -112,7 +114,7 @@ def _planned_sections(trace: Any) -> int | None:
     plan = getattr(trace, "explanation_plan", None)
     if not isinstance(plan, dict):
         return None
-    sections = plan.get("sections")
+    sections = plan.get("sections", plan.get("answer_structure"))
     return len(sections) if isinstance(sections, list) else None
 
 

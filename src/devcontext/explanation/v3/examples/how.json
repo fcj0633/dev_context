@@ -1,0 +1,428 @@
+{
+  "input": {
+    "question": "内容如何从保存变成业务可查询，索引写失败时怎么处理？",
+    "evidence": [
+      {
+        "label": "E1",
+        "content": "内容保存成功返回可寻址标识。"
+      },
+      {
+        "label": "E2",
+        "content": "仅保存成功后创建业务索引，索引成功后可从入口查询；两系统无共同事务。"
+      },
+      {
+        "label": "E3",
+        "content": "索引写入失败进入待处理记录，恢复任务尝试重建索引；次数和永久失败策略未给出。"
+      }
+    ]
+  },
+  "blueprint": {
+    "question_form": "HOW",
+    "question_kind": "HOW",
+    "kind_rationale": "重建内容保存、索引发布及失败后处理的状态过程",
+    "answer_depth": "detailed",
+    "reader_assumption": {
+      "basis": "DEFAULT",
+      "profile": "能读基础 Java，需要解释本题高级机制及其关系",
+      "prerequisites": [
+        "持久化与可查询是不同结果",
+        "本地操作与跨系统共同提交不同"
+      ]
+    },
+    "learning_goal": "能重建内容到可查询索引的过程，并区分失败处理存在与最终恢复已获保证",
+    "goal_capabilities": [
+      {
+        "id": "G1",
+        "applicable": true,
+        "capability": "重建保存内容到建立索引的正常过程",
+        "reason": null
+      },
+      {
+        "id": "G2",
+        "applicable": true,
+        "capability": "说明内容标识和业务索引各自新增的状态",
+        "reason": null
+      },
+      {
+        "id": "G3",
+        "applicable": true,
+        "capability": "说明正常完成的范围与条件",
+        "reason": null
+      },
+      {
+        "id": "G4",
+        "applicable": true,
+        "capability": "解释先后依赖以及没有共同事务的边界",
+        "reason": null
+      },
+      {
+        "id": "G5",
+        "applicable": true,
+        "capability": "说明索引失败后的已知处理与未确认恢复条件",
+        "reason": null
+      }
+    ],
+    "comprehension_checks": [
+      {
+        "id": "Q1",
+        "question": "内容保存成功为什么不等于已经可被业务入口查询？",
+        "goal_ids": [
+          "G2",
+          "G4"
+        ],
+        "answer_claim_ids": [
+          "C1",
+          "C2"
+        ]
+      },
+      {
+        "id": "Q2",
+        "question": "为什么存在恢复任务仍不能保证任意失败最终成功？",
+        "goal_ids": [
+          "G3",
+          "G5"
+        ],
+        "answer_claim_ids": [
+          "C3",
+          "C4"
+        ]
+      }
+    ],
+    "claims": [
+      {
+        "id": "C1",
+        "statement": "内容保存成功返回可寻址标识，但尚未建立业务索引",
+        "claim_type": "PROJECT_FACT",
+        "status": "CONFIRMED",
+        "evidence_labels": [
+          "E1",
+          "E2"
+        ],
+        "preconditions": [
+          "保存操作成功"
+        ],
+        "reason": null,
+        "owner_section": "S1"
+      },
+      {
+        "id": "C2",
+        "statement": "索引仅在内容保存成功后创建；两系统没有共同事务",
+        "claim_type": "PROJECT_FACT",
+        "status": "CONFIRMED",
+        "evidence_labels": [
+          "E2"
+        ],
+        "preconditions": [
+          "索引写入成功时才建立查询入口"
+        ],
+        "reason": null,
+        "owner_section": "S2"
+      },
+      {
+        "id": "C3",
+        "statement": "索引失败进入待处理记录，恢复任务尝试重建索引",
+        "claim_type": "PROJECT_FACT",
+        "status": "CONFIRMED",
+        "evidence_labels": [
+          "E3"
+        ],
+        "preconditions": [
+          "索引写入失败"
+        ],
+        "reason": null,
+        "owner_section": "S3"
+      },
+      {
+        "id": "C4",
+        "statement": "恢复能否最终成功以及永久失败如何处理尚未确认",
+        "claim_type": "PROJECT_INFERENCE",
+        "status": "UNKNOWN",
+        "evidence_labels": [],
+        "preconditions": [],
+        "reason": "材料未给重试次数、恢复成功条件与永久失败策略",
+        "owner_section": "S3"
+      }
+    ],
+    "how_spine": [
+      {
+        "id": "H1",
+        "path": "NORMAL",
+        "trigger": null,
+        "state_before": "尚无内容与索引",
+        "problem": "尚不能寻址内容",
+        "action": "保存内容并取得标识",
+        "state_after": "内容可寻址，索引尚未建立",
+        "guarantee_claim_ids": [
+          "C1"
+        ],
+        "preconditions": [
+          "保存成功"
+        ],
+        "remaining_boundary": "尚未形成业务查询入口",
+        "links": []
+      },
+      {
+        "id": "H2",
+        "path": "NORMAL",
+        "trigger": null,
+        "state_before": "内容有标识但无业务索引",
+        "problem": "保存成功不等于业务可查询",
+        "action": "创建业务索引",
+        "state_after": "索引成功后建立业务查询入口",
+        "guarantee_claim_ids": [
+          "C2"
+        ],
+        "preconditions": [
+          "内容保存已成功",
+          "索引写入成功"
+        ],
+        "remaining_boundary": "两系统无共同事务，索引失败需另行处理",
+        "links": [
+          {
+            "from_step": "H1",
+            "relation": "PRECEDES",
+            "explanation": "只有内容保存成功才创建索引"
+          }
+        ]
+      },
+      {
+        "id": "H3",
+        "path": "FAILURE",
+        "trigger": "H2 的索引写入失败",
+        "state_before": "内容已保存，索引写失败",
+        "problem": "内容未获得正常查询入口",
+        "action": "记录待处理，恢复任务尝试重建索引",
+        "state_after": "进入待处理，恢复结果未确认",
+        "guarantee_claim_ids": [
+          "C3",
+          "C4"
+        ],
+        "preconditions": [
+          "索引失败已被处理路径捕获"
+        ],
+        "remaining_boundary": "重试上限与永久失败策略未知",
+        "links": [
+          {
+            "from_step": "H2",
+            "relation": "BRANCH_FROM",
+            "explanation": "这是索引写入失败分支，不是正常成功之后的必经步骤"
+          }
+        ]
+      }
+    ],
+    "how_spine_tail": {
+      "failure_step_ids": [
+        "H3"
+      ],
+      "established_guarantee_claim_ids": [
+        "C1",
+        "C2"
+      ],
+      "unknown_boundary_claim_ids": [
+        "C4"
+      ]
+    },
+    "core_mental_model": [
+      {
+        "id": "M1",
+        "statement": "内容可寻址与业务可查询是两个不同阶段",
+        "relation": "FUNCTION",
+        "roles": [
+          "correctness"
+        ],
+        "claim_ids": [
+          "C1",
+          "C2"
+        ]
+      },
+      {
+        "id": "M2",
+        "statement": "先保存后建索引是执行依赖，不是跨系统共同提交",
+        "relation": "DEPENDENCY",
+        "roles": [
+          "boundary"
+        ],
+        "claim_ids": [
+          "C2"
+        ]
+      },
+      {
+        "id": "M3",
+        "statement": "失败后尝试恢复不等于已证明最终恢复成功",
+        "relation": "BOUNDARY",
+        "roles": [
+          "boundary"
+        ],
+        "claim_ids": [
+          "C3",
+          "C4"
+        ]
+      }
+    ],
+    "critical_distinctions": [
+      {
+        "left": "内容保存成功",
+        "right": "业务可查询",
+        "why_confusable": "容易把第一次保存成功当作整个发布完成",
+        "claim_ids": [
+          "C1",
+          "C2"
+        ]
+      },
+      {
+        "left": "存在恢复任务",
+        "right": "最终恢复已获保证",
+        "why_confusable": "有恢复入口仍不代表所有异常都能收敛",
+        "claim_ids": [
+          "C3",
+          "C4"
+        ]
+      }
+    ],
+    "scenario": {
+      "kind": "STATE_TRACE",
+      "setup": "假设发布一份内容，先观察正常成功，再考虑索引写入失败",
+      "actors": [
+        "发布入口",
+        "内容服务",
+        "索引服务",
+        "恢复任务"
+      ],
+      "assumptions": [
+        "内容保存成功",
+        "同一起点分别观察索引成功与失败"
+      ],
+      "checkpoints": [
+        {
+          "id": "K1",
+          "spine_refs": [
+            "H1"
+          ],
+          "branch": "NORMAL",
+          "parent_checkpoint_id": null,
+          "trigger": "发起发布",
+          "state_before": "无内容与索引",
+          "action": "保存内容",
+          "state_after": "取得标识，尚无索引",
+          "claim_ids": [
+            "C1"
+          ]
+        },
+        {
+          "id": "K2",
+          "spine_refs": [
+            "H2"
+          ],
+          "branch": "NORMAL",
+          "parent_checkpoint_id": "K1",
+          "trigger": "索引写入成功",
+          "state_before": "内容可寻址但无索引",
+          "action": "创建索引",
+          "state_after": "建立业务查询入口",
+          "claim_ids": [
+            "C2"
+          ]
+        },
+        {
+          "id": "K3",
+          "spine_refs": [
+            "H3"
+          ],
+          "branch": "FAILURE",
+          "parent_checkpoint_id": "K1",
+          "trigger": "索引写入失败",
+          "state_before": "内容已保存，但本次索引未建立",
+          "action": "进入待处理并尝试重建",
+          "state_after": "已知存在恢复尝试，最终结果未确认",
+          "claim_ids": [
+            "C3",
+            "C4"
+          ]
+        }
+      ],
+      "simplification_reason": null
+    },
+    "answer_structure": [
+      {
+        "id": "S1",
+        "title": "保存成功后，为什么还不能结束？",
+        "section_goal": "直接回答并建立状态地图",
+        "goal_ids": [
+          "G1",
+          "G2"
+        ],
+        "spine_refs": [
+          "H1"
+        ],
+        "learning_delta": {
+          "before_kind": "GAP",
+          "before": "尚未区分内容保存与整个发布完成",
+          "after": "内容已可寻址，但还缺业务索引"
+        },
+        "may_reference": [
+          "C2",
+          "C3",
+          "C4"
+        ],
+        "checkpoint_ids": [
+          "K1"
+        ],
+        "support_labels": [],
+        "target_chars": 500
+      },
+      {
+        "id": "S2",
+        "title": "索引建立增加了什么结果？",
+        "section_goal": "解释正常后续与跨系统边界",
+        "goal_ids": [
+          "G1",
+          "G2",
+          "G3",
+          "G4"
+        ],
+        "spine_refs": [
+          "H2"
+        ],
+        "learning_delta": {
+          "before_kind": "GAP",
+          "before": "尚未理解索引作用与先后关系",
+          "after": "索引建立查询入口，先后执行仍不等于共同提交"
+        },
+        "may_reference": [
+          "C1"
+        ],
+        "checkpoint_ids": [
+          "K2"
+        ],
+        "support_labels": [],
+        "target_chars": 500
+      },
+      {
+        "id": "S3",
+        "title": "索引失败后，系统能处理到哪一步？",
+        "section_goal": "解释失败分支并限定最终保证",
+        "goal_ids": [
+          "G3",
+          "G5"
+        ],
+        "spine_refs": [
+          "H3"
+        ],
+        "learning_delta": {
+          "before_kind": "GAP",
+          "before": "尚未区分恢复尝试与最终收敛",
+          "after": "失败进入待处理，但最终恢复条件仍未知"
+        },
+        "may_reference": [
+          "C1",
+          "C2"
+        ],
+        "checkpoint_ids": [
+          "K3"
+        ],
+        "support_labels": [],
+        "target_chars": 500
+      }
+    ]
+  }
+}

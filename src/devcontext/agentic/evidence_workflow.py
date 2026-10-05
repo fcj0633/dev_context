@@ -82,7 +82,16 @@ class EvidenceDrivenWorkflow:
             raise ValueError("context_budget_override must be positive")
         self.context_budget_override = context_budget_override
 
-    def run(self, query: str, top_k: int) -> AgenticAnswerResult:
+    def run(self, query: str, top_k: int, *, on_section=None) -> AgenticAnswerResult:
+        self.on_section = on_section
+        runtime = getattr(self.teaching_workflow, "runtime_options", None)
+        if getattr(runtime, "generation_mode", None) == "v3":
+            from devcontext.deadline import request_deadline
+            with request_deadline(getattr(self.teaching_workflow, "request_timeout_seconds", 180)):
+                return self._run(query, top_k)
+        return self._run(query, top_k)
+
+    def _run(self, query: str, top_k: int) -> AgenticAnswerResult:
         if self.teaching_workflow is not None:
             self.teaching_workflow.request_started_at = time.perf_counter()
         request = UserRequest(
@@ -93,6 +102,13 @@ class EvidenceDrivenWorkflow:
         retrieval = self.retrieval_controller.retrieve(request, top_k)
         package = retrieval.package
         outcome = self._answer(request, package)
+        runtime = getattr(self.teaching_workflow, "runtime_options", None)
+        if getattr(runtime, "generation_mode", None) == "v3" and not (outcome.workspace_stats or {}).get("trace"):
+            # Empty/failed retrieval is also a failed V3 request, not CLI success.
+            outcome.workspace_stats = {"trace": {
+                "generation_mode": "v3", "completion_status": "failed", "sections_emitted": 0,
+                "error": outcome.answer_result.answer, "stream_partial": False,
+            }}
         answer_result = outcome.answer_result
         answer_plan = outcome.answer_plan
         review = outcome.review
@@ -177,6 +193,12 @@ class EvidenceDrivenWorkflow:
         request: UserRequest,
         package: EvidencePackage,
     ):
+        from devcontext.deadline import remaining_seconds, RequestDeadlineExceeded
+        try:
+            remaining_seconds()
+        except RequestDeadlineExceeded as exc:
+            return _AnswerOutcome(AnswerResult(str(exc), []), workspace_stats={"trace": {
+                "generation_mode": "v3", "completion_status": "failed", "error": str(exc), "sections_emitted": 0}})
         if package.retrieval_state == "RETRIEVAL_FAILED":
             # Distinct from "no evidence found": the search never completed, so
             # saying the project lacks this evidence would be a false statement.
@@ -340,7 +362,10 @@ class EvidenceDrivenWorkflow:
         """
         if self.teaching_workflow is None:
             raise RuntimeError("teaching workflow is unavailable")
-        result = self.teaching_workflow.run(request, package)
+        if getattr(self, "on_section", None) is not None:
+            result = self.teaching_workflow.run(request, package, on_section=self.on_section)
+        else:
+            result = self.teaching_workflow.run(request, package)
         return _AnswerOutcome(
             answer_result=result.answer,
             explanation_plan=result.explanation_plan,

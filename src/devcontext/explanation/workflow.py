@@ -34,6 +34,7 @@ from devcontext.explanation.reviewer import (
 )
 from devcontext.explanation.writer import TeachingDraft, TeachingWriter
 from devcontext.explanation.micro import TeachingRuntimeOptions, MicroSectionPlan, micro_budget
+from devcontext.explanation.v3.models import TeachingBlueprint
 from devcontext.models import AnswerResult, ContextBundle
 from devcontext.observability import (
     SectionExecutionTrace,
@@ -57,7 +58,7 @@ FIXED_PROMPT_TOKENS = 4_000
 @dataclass(frozen=True, slots=True)
 class TeachingAnswerResult:
     answer: AnswerResult
-    explanation_plan: ExplanationPlan | MicroSectionPlan | None
+    explanation_plan: ExplanationPlan | MicroSectionPlan | TeachingBlueprint | None
     # What the answer was written from, under workspace labels.
     context_bundle: ContextBundle
     draft: TeachingDraft | None
@@ -97,6 +98,8 @@ class TeachingExplanationWorkflow:
         runtime_options: TeachingRuntimeOptions | None = None,
         micro_planner=None,
         streaming_writer=None,
+        v3_planner=None,
+        v3_writer=None,
     ) -> None:
         self.planner = planner
         self.writer = writer
@@ -111,6 +114,8 @@ class TeachingExplanationWorkflow:
         self.runtime_options = runtime_options or TeachingRuntimeOptions()
         self.micro_planner = micro_planner
         self.streaming_writer = streaming_writer
+        self.v3_planner = v3_planner
+        self.v3_writer = v3_writer
 
     def run(
         self,
@@ -119,6 +124,21 @@ class TeachingExplanationWorkflow:
         *,
         on_section=None,
     ) -> TeachingAnswerResult:
+        if self.runtime_options.generation_mode == "v3":
+            # Existing fallback depth is standard; explicit preference wins.
+            # Resolve simple presentation hints before scheduling any LLM call.
+            depth = request.answer_options.depth_override
+            if depth is None:
+                depth = "deep" if "深度" in request.original_query else (
+                    "detailed" if any(word in request.original_query for word in ("详细", "深入", "全面")) else "standard")
+            if depth in {"brief", "standard"}:
+                from dataclasses import replace
+                request = replace(request, answer_options=replace(request.answer_options, depth_override=depth))
+                result = self._run_single_stream(request, evidence_package, on_section=on_section)
+                result.stats.setdefault("trace", {}).update(requested_generation_mode="v3", fallback="depth")
+                return result
+            from devcontext.explanation.v3.workflow import run_v3
+            return run_v3(self, request, evidence_package, depth=depth, on_section=on_section)
         if self.runtime_options.generation_mode == "single_stream":
             return self._run_single_stream(request, evidence_package, on_section=on_section)
         stages: list[Any] = []

@@ -364,3 +364,14 @@ def test_controller_emits_read_only_evaluation_observations() -> None:
     assert sorted(observer.round_contexts) == [0, 1]
     assert observer.round_contexts[1] is not outcome.package.context_bundle
     assert observer.action_candidates[0]["results"][0] is not None
+
+
+def test_v3_time_reserve_skips_followup_without_upgrading_missing_evidence():
+    from devcontext.deadline import request_deadline
+    subject, actions, policy, coverage = controller()
+    with request_deadline(110):
+        result = subject.retrieve(UserRequest('解释占座一致性', AnswerOptions('detailed', 'teach')), 10)
+    assert len(actions.calls) == coverage.calls == 1
+    assert result.package.requirement_coverage[0].state == 'PARTIAL'
+    assert result.package.unresolved_requirements == ('ER1',)
+    assert any(s.stage == 'retrieval_followup_skipped' for s in result.stage_usage)

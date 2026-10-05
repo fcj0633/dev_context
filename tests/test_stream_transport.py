@@ -96,3 +96,63 @@ def test_empty_auth_or_balance_failure_is_not_retried(endpoint, monkeypatch, sta
     events = list(DeepSeekLLMClient("secret-key", base_url=url).generate_stream([LLMMessage("user", "q")]))
     assert events[-1].type == "error" and not events[-1].retryable
     assert str(status) in events[-1].text
+
+
+def test_openai_gateway_embedded_reasoning_is_not_published(endpoint, monkeypatch):
+    import json
+    from devcontext.llm.openai_compatible import OpenAICompatibleLLMClient
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
+    url, state = endpoint
+    chunks = ['<thi', 'nk>private', ' reasoning</thi', 'nk>', 'answer <think>literal</think>']
+    frames = ["data: " + json.dumps({"choices": [{"delta": {"content": chunk}, "finish_reason": None}]}) + "\n\n" for chunk in chunks]
+    frames.append('data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n')
+    frames.append('data: [DONE]\n\n')
+    state['payload'] = ''.join(frames).encode()
+    client = OpenAICompatibleLLMClient('secret-key', base_url=url)
+    with capture() as recorder:
+        events = list(client.generate_stream([LLMMessage('user', 'q')]))
+    assert ''.join(e.text for e in events if e.type == 'content') == 'answer <think>literal</think>'
+    assert events[-1].type == 'finish' and recorder.llm_calls[0].success
+    assert state['requests'][0]['max_completion_tokens'] == 4096
+    assert 'max_tokens' not in state['requests'][0]
+
+
+def test_openai_unfinished_reasoning_records_failed_stream(endpoint, monkeypatch):
+    from devcontext.llm.openai_compatible import OpenAICompatibleLLMClient
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
+    url, state = endpoint
+    state['payload'] = b'data: {"choices":[{"delta":{"content":"<think>private"},"finish_reason":null}]}\n\ndata: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n'
+    with capture() as recorder:
+        events = list(OpenAICompatibleLLMClient('secret-key', base_url=url).generate_stream([LLMMessage('user', 'q')]))
+    assert [e.type for e in events] == ['error']
+    assert not recorder.llm_calls[0].success
+
+
+def test_openai_json_uses_sse_but_returns_one_complete_result_and_trace(endpoint, monkeypatch):
+    from devcontext.llm.openai_compatible import OpenAICompatibleLLMClient
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
+    url, state = endpoint
+    state['payload'] = b'data: {"choices":[{"delta":{"content":"<think>reason</think>"},"finish_reason":null}]}\n\ndata: {"choices":[{"delta":{"content":"{\\\"status\\\":\\\"OK\\\"}"},"finish_reason":null}]}\n\ndata: {"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":4,"completion_tokens":8}}\n\ndata: [DONE]\n\n'
+    client = OpenAICompatibleLLMClient('secret-key', base_url=url, json_mode=True)
+    with capture() as recorder:
+        result = client.generate([LLMMessage('user', 'q')])
+    assert result == '{"status":"OK"}'
+    assert len(recorder.llm_calls) == 1 and recorder.llm_calls[0].success
+    assert recorder.llm_calls[0].output_tokens == 8
+    assert state['requests'][0]['stream'] is True
+    assert state['requests'][0]['response_format'] == {'type':'json_object'}
+
+
+def test_json_stream_with_complete_json_but_missing_done_is_not_success(endpoint, monkeypatch):
+    import json
+    from devcontext.llm.openai_compatible import OpenAICompatibleLLMClient
+    from devcontext.llm.streaming import StreamFailure
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
+    url, state = endpoint
+    frame = {'choices': [{'delta': {'content': '<think>private</think>{"status":"OK"}'}, 'finish_reason': None}]}
+    state['payload'] = ('data: ' + json.dumps(frame) + '\n\n' + 'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n').encode()
+    client = OpenAICompatibleLLMClient('secret-key', base_url=url, json_mode=True)
+    with capture() as recorder, pytest.raises(StreamFailure, match='before DONE'):
+        client.generate([LLMMessage('user', 'q')])
+    assert client.last_partial_response == '{"status":"OK"}'
+    assert len(recorder.llm_calls) == 1 and not recorder.llm_calls[0].success

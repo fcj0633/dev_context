@@ -263,3 +263,30 @@ V1 不判断 Citation 是否在语义上真正支持对应结论，也不实现 
 ## 设计边界
 
 当前版本不包含 LangChain、LangGraph、FastAPI、Web UI、SymbolSolver、调用图、增量索引或近似向量索引。`docs/` 中的自有项目文档可以提交；`docs/参考项目/` 及外部 `my12306` 数据源继续排除在 Git 之外。
+
+
+### 使用 APINebula 文字模型
+
+项目 `.env` 设置 `LLM_PROVIDER=openai` 与 `OPENAI_MODEL=gpt-6.1-sol`。
+`CHATGPT_API_KEY` 和 `OPENAI_BASE_URL` 从环境读取；当前网关地址为
+`https://apinebula.ai/v1`。读取顺序为进程环境、项目 `.env`、Windows 用户环境、
+Windows 系统环境。密钥不必写进项目文件。
+
+OpenAI 模式下，检索规划、改写、覆盖检查、教学规划、正文和 Reviewer
+统一使用 `OPENAI_MODEL`，不继承 `DEEPSEEK_*_MODEL`；显式模型参数仍优先。
+百炼嵌入、数据库及现有索引保持原配置，无需重新入库。
+教学模式默认仍为 `multi_pass`，可用 `--teaching-generation-mode v3` 显式启用 V3。
+切回 DeepSeek 时设置 `LLM_PROVIDER=deepseek`；调用失败不会自动切换供应商。
+
+
+APINebula 接入会分离返回正文开头的 `<think>...</think>` 推理前缀，
+JSON 和流式正文继续接受原有严格校验。OpenAI 的 V3 Planner/Writer 默认使用
+`low` 推理，可通过 `OPENAI_V3_REASONING_EFFORT=high` 调整；DeepSeek 保持原设置。
+短证据规划使用 `low`，V3 在剩余时间不足 155 秒（教学预留 120 秒加补检预估 35 秒）时跳过额外检索轮次，
+保留缺失证据的状态，为教学规划和正文生成预留时间。总截止默认 180 秒，可按下文配置。
+
+V3 总截止通过 `TEACHING_REQUEST_TIMEOUT_SECONDS` 配置，默认 180 秒。
+APINebula 测试曾使用 300 秒上限以容纳网关波动；这不是 2–3 分钟达标声明。
+当前项目已切回 `LLM_PROVIDER=deepseek`，总截止恢复为 180 秒。
+
+OpenAI 的 JSON 结果内部通过 SSE 收集，完成后才交给严格解析器，避免长非流式蓝图触发网关 524。

@@ -64,23 +64,29 @@ class EvidencePlanner:
         self.llm_client_factory = llm_client_factory
         self.max_requirements = max_requirements
         self.last_client: LLMClient | None = None
+        self.last_error: str | None = None
+        self.last_response: str | None = None
 
     def plan(self, query: str) -> EvidencePlan:
         if not query.strip():
             raise ValueError("query must not be empty")
         if self.llm_client_factory is None:
             return fallback_evidence_plan(query)
+        self.last_error = None
+        self.last_response = None
         try:
             client = self.llm_client_factory()
             self.last_client = client
             with llm_stage("evidence_planning"):
                 response = client.generate(self._messages(query)).strip()
+            self.last_response = response
             return self._parse(response, query)
-        except Exception:
+        except Exception as exception:
+            self.last_error = str(exception)
             # A call can complete and still be thrown away here, by validation
             # rather than by the API. That latency only shows up if it is marked.
             mark_last_call_wasted(
-                "evidence plan rejected; fell back", stage="evidence_planning"
+                "evidence plan rejected; fell back: " + self.last_error, stage="evidence_planning"
             )
             return fallback_evidence_plan(query)
 

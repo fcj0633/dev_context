@@ -24,7 +24,14 @@ class ChunkStore:
         self.database_url = database_url
 
     def _connect(self, *, vectors: bool = True) -> psycopg.Connection[Any]:
-        connection = psycopg.connect(self.database_url, row_factory=dict_row)
+        from devcontext.deadline import remaining_seconds
+        import math
+        remaining = remaining_seconds()
+        options = {} if remaining is None else {
+            "connect_timeout": max(1, math.ceil(remaining)),
+            "options": f"-c statement_timeout={max(1, int(remaining * 1000))}",
+        }
+        connection = psycopg.connect(self.database_url, row_factory=dict_row, **options)
         if vectors:
             register_vector(connection)
         return connection

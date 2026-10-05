@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from devcontext.llm.factory import create_llm_client
+
 import argparse
 import json
 import sys
@@ -143,7 +145,7 @@ def _parser() -> argparse.ArgumentParser:
         help="Choose the plan schema printed by --plan-only",
     )
     ask.add_argument("--debug", action="store_true")
-    ask.add_argument("--teaching-generation-mode", choices=("multi_pass", "single_stream"), default=None,
+    ask.add_argument("--teaching-generation-mode", choices=("multi_pass", "single_stream", "v3"), default=None,
                      help="Explicit teaching generation strategy; default comes from settings")
     ask.add_argument(
         "--answer-mode",
@@ -251,6 +253,7 @@ def _print_agentic_answer(
     *,
     debug: bool,
     include_plan: bool = False,
+    answer_already_published: bool = False,
 ) -> None:
     trace = result.trace
     print("Question:")
@@ -283,8 +286,9 @@ def _print_agentic_answer(
     teaching_status = (trace.teaching or {}).get("completion_status")
     if teaching_status in {"failed", "partial"}:
         print(f"Generation status: {teaching_status}; {(trace.teaching or {}).get('error')}")
-    print("\nAnswer:")
-    print(result.answer_result.answer)
+    if not answer_already_published:
+        print("\nAnswer:")
+        print(result.answer_result.answer)
     if debug:
         _print_teaching_summary(trace.teaching)
         _print_sources(result)
@@ -311,6 +315,15 @@ def _print_requirement_statuses(sufficiency: SufficiencyResult) -> None:
 def _print_teaching_summary(teaching: dict | None) -> None:
     """The teach path's shape at a glance, instead of reading the whole trace."""
     if not teaching:
+        return
+    if teaching.get("generation_mode") == "v3":
+        blueprint = teaching.get("blueprint") or {}
+        print(f"\nV3 Teaching: {teaching.get('question_kind')}; {teaching.get('completion_status')}")
+        print(f"Learning Goal: {blueprint.get('learning_goal', '(none)')}")
+        for relation in blueprint.get("core_mental_model", []):
+            print(f"  {relation['statement']}")
+        print(f"Sections: {teaching.get('sections_emitted', 0)} / {teaching.get('sections_planned', 0)}")
+        print(f"Total request: {teaching.get('total_elapsed_ms', 0) / 1000:.1f}s")
         return
     strategies = " + ".join(
         [teaching.get("primary_strategy") or ""]
@@ -354,52 +367,57 @@ def _print_evidence_plan(plan: EvidencePlan) -> None:
     print(json.dumps(plan.to_dict(), ensure_ascii=False, indent=2))
 
 
+def _v3_client_factory(settings: Settings, factory):
+    def create():
+        client = factory()
+        if settings.llm_provider == "openai":
+            client.reasoning_effort = settings.openai_v3_reasoning_effort
+        return client
+    return create
+
+
 def _query_router(settings: Settings) -> QueryRouter:
     return QueryRouter(
-        lambda: DeepSeekLLMClient(
-            api_key=settings.deepseek_key(),
-            base_url=settings.deepseek_base_url,
-            model=settings.deepseek_model,
+        lambda: create_llm_client(
+        settings, deepseek_client_type=DeepSeekLLMClient,
+            legacy_model=settings.deepseek_model,
             max_tokens=1024,
         )
     )
 
 
 def _short_llm_factory(settings: Settings) -> Callable[[], LLMClient]:
-    return lambda: DeepSeekLLMClient(
-        api_key=settings.deepseek_key(),
-        base_url=settings.deepseek_base_url,
-        model=settings.deepseek_model,
+    return lambda: create_llm_client(
+        settings, deepseek_client_type=DeepSeekLLMClient,
+        legacy_model=settings.deepseek_model,
         max_tokens=1024,
     )
 
 
 def _answer_client(settings: Settings, *, explain: bool = False) -> DeepSeekLLMClient:
-    return DeepSeekLLMClient(
-        api_key=settings.deepseek_key(),
-        base_url=settings.deepseek_base_url,
-        model=settings.deepseek_answer_model or settings.deepseek_model,
+    return create_llm_client(
+        settings, deepseek_client_type=DeepSeekLLMClient,
+        legacy_model=settings.deepseek_answer_model or settings.deepseek_model,
         reasoning_effort="high" if explain else "low",
         max_tokens=EXPLAIN_ANSWER_MAX_TOKENS if explain else ANSWER_MAX_TOKENS,
     )
 
 
 def _planner_llm_factory(settings: Settings) -> Callable[[], LLMClient]:
-    return lambda: DeepSeekLLMClient(
-        api_key=settings.deepseek_key(),
-        base_url=settings.deepseek_base_url,
-        model=settings.deepseek_planner_model or settings.deepseek_model,
-        reasoning_effort="high",
+    return lambda: create_llm_client(
+        settings, deepseek_client_type=DeepSeekLLMClient,
+        legacy_model=settings.deepseek_planner_model or settings.deepseek_model,
+        reasoning_effort="low" if settings.llm_provider == "openai" else "high",
         max_tokens=PLANNER_MAX_TOKENS,
+        timeout_seconds=35 if settings.llm_provider == "openai" else 120,
         json_mode=True,
     )
 
 
 def _rewrite_llm_factory(settings: Settings) -> Callable[[], LLMClient]:
-    return lambda: DeepSeekLLMClient(
-        api_key=settings.deepseek_key(),
-        base_url=settings.deepseek_base_url,
-        model=settings.deepseek_model,
+    return lambda: create_llm_client(
+        settings, deepseek_client_type=DeepSeekLLMClient,
+        legacy_model=settings.deepseek_model,
         reasoning_effort="low",
         max_tokens=REWRITE_MAX_TOKENS,
         json_mode=True,
@@ -409,10 +427,9 @@ def _rewrite_llm_factory(settings: Settings) -> Callable[[], LLMClient]:
 def _sub_question_sufficiency_factory(
     settings: Settings,
 ) -> Callable[[], LLMClient]:
-    return lambda: DeepSeekLLMClient(
-        api_key=settings.deepseek_key(),
-        base_url=settings.deepseek_base_url,
-        model=settings.deepseek_model,
+    return lambda: create_llm_client(
+        settings, deepseek_client_type=DeepSeekLLMClient,
+        legacy_model=settings.deepseek_model,
         reasoning_effort="low",
         max_tokens=SUB_QUESTION_SUFFICIENCY_MAX_TOKENS,
         json_mode=True,
@@ -420,10 +437,9 @@ def _sub_question_sufficiency_factory(
 
 
 def _answer_planner_factory(settings: Settings) -> Callable[[], LLMClient]:
-    return lambda: DeepSeekLLMClient(
-        api_key=settings.deepseek_key(),
-        base_url=settings.deepseek_base_url,
-        model=settings.deepseek_answer_planner_model or settings.deepseek_model,
+    return lambda: create_llm_client(
+        settings, deepseek_client_type=DeepSeekLLMClient,
+        legacy_model=settings.deepseek_answer_planner_model or settings.deepseek_model,
         reasoning_effort="high",
         max_tokens=ANSWER_PLANNER_MAX_TOKENS,
         json_mode=True,
@@ -431,10 +447,9 @@ def _answer_planner_factory(settings: Settings) -> Callable[[], LLMClient]:
 
 
 def _reviewer_factory(settings: Settings) -> Callable[[], LLMClient]:
-    return lambda: DeepSeekLLMClient(
-        api_key=settings.deepseek_key(),
-        base_url=settings.deepseek_base_url,
-        model=settings.deepseek_reviewer_model or settings.deepseek_model,
+    return lambda: create_llm_client(
+        settings, deepseek_client_type=DeepSeekLLMClient,
+        legacy_model=settings.deepseek_reviewer_model or settings.deepseek_model,
         reasoning_effort="high",
         max_tokens=REVIEWER_MAX_TOKENS,
         json_mode=True,
@@ -442,10 +457,9 @@ def _reviewer_factory(settings: Settings) -> Callable[[], LLMClient]:
 
 
 def _explanation_planner_factory(settings: Settings) -> Callable[[], LLMClient]:
-    return lambda: DeepSeekLLMClient(
-        api_key=settings.deepseek_key(),
-        base_url=settings.deepseek_base_url,
-        model=settings.deepseek_answer_planner_model or settings.deepseek_model,
+    return lambda: create_llm_client(
+        settings, deepseek_client_type=DeepSeekLLMClient,
+        legacy_model=settings.deepseek_answer_planner_model or settings.deepseek_model,
         reasoning_effort="high",
         max_tokens=EXPLANATION_PLANNER_MAX_TOKENS,
         json_mode=True,
@@ -453,20 +467,18 @@ def _explanation_planner_factory(settings: Settings) -> Callable[[], LLMClient]:
 
 
 def _teaching_writer_factory(settings: Settings) -> Callable[[], LLMClient]:
-    return lambda: DeepSeekLLMClient(
-        api_key=settings.deepseek_key(),
-        base_url=settings.deepseek_base_url,
-        model=settings.deepseek_answer_model or settings.deepseek_model,
+    return lambda: create_llm_client(
+        settings, deepseek_client_type=DeepSeekLLMClient,
+        legacy_model=settings.deepseek_answer_model or settings.deepseek_model,
         reasoning_effort="high",
         max_tokens=TEACHING_ANSWER_MAX_TOKENS,
     )
 
 
 def _teaching_reviewer_factory(settings: Settings) -> Callable[[], LLMClient]:
-    return lambda: DeepSeekLLMClient(
-        api_key=settings.deepseek_key(),
-        base_url=settings.deepseek_base_url,
-        model=settings.deepseek_reviewer_model or settings.deepseek_model,
+    return lambda: create_llm_client(
+        settings, deepseek_client_type=DeepSeekLLMClient,
+        legacy_model=settings.deepseek_reviewer_model or settings.deepseek_model,
         reasoning_effort="high",
         max_tokens=TEACHING_REVIEWER_MAX_TOKENS,
         json_mode=True,
@@ -474,10 +486,9 @@ def _teaching_reviewer_factory(settings: Settings) -> Callable[[], LLMClient]:
 
 
 def _composer_factory(settings: Settings) -> Callable[[], LLMClient]:
-    return lambda: DeepSeekLLMClient(
-        api_key=settings.deepseek_key(),
-        base_url=settings.deepseek_base_url,
-        model=settings.deepseek_answer_model or settings.deepseek_model,
+    return lambda: create_llm_client(
+        settings, deepseek_client_type=DeepSeekLLMClient,
+        legacy_model=settings.deepseek_answer_model or settings.deepseek_model,
         reasoning_effort="high",
         max_tokens=COMPOSER_MAX_TOKENS,
     )
@@ -495,10 +506,9 @@ def _answer_judge_factory(
     settings: Settings, model: str | None = None
 ) -> Callable[[], LLMClient]:
     """The blind judge reads two long answers and emits a tiny verdict."""
-    return lambda: DeepSeekLLMClient(
-        api_key=settings.deepseek_key(),
-        base_url=settings.deepseek_base_url,
-        model=model or settings.deepseek_model,
+    return lambda: create_llm_client(
+        settings, deepseek_client_type=DeepSeekLLMClient,
+        model=model,
         reasoning_effort="high",
         max_tokens=JUDGE_MAX_TOKENS,
         json_mode=True,
@@ -548,6 +558,13 @@ def _planned_workflow(
             micro_planner=MicroExplanationPlanner(_explanation_planner_factory(settings), settings.model_capabilities()),
             streaming_writer=SingleStreamingTeachingWriter(_teaching_writer_factory(settings)),
         )
+        if settings.teaching_generation_mode == "v3":
+            from devcontext.explanation.v3.planner import TeachingPlannerV3
+            from devcontext.explanation.v3.writer import TeachingWriterV3
+            teaching_workflow.request_timeout_seconds = settings.teaching_request_timeout_seconds
+            teaching_workflow.v3_planner = TeachingPlannerV3(
+                _v3_client_factory(settings, _explanation_planner_factory(settings)), teaching_workflow.capabilities, teaching_workflow.estimator)
+            teaching_workflow.v3_writer = TeachingWriterV3(_v3_client_factory(settings, _teaching_writer_factory(settings)))
     return EvidenceDrivenWorkflow(
         controller,
         answer_generator_factory=lambda: AnswerGenerator(
@@ -735,26 +752,41 @@ def main(argv: list[str] | None = None) -> int:
                 top_k, max_chars = _budget(args, planned=True)
                 legacy_top_k, legacy_max_chars = _budget(args, planned=False)
 
+                streamed_sections = []
+
+                def publish_section(section):
+                    if not streamed_sections:
+                        print("\nAnswer:", flush=True)
+                    print(section.markdown + "\n", flush=True)
+                    streamed_sections.append(section)
+
                 def run_planned() -> AgenticAnswerResult:
                     # Rebuilt per repetition: samples share an interpreter, not
                     # mutable workflow state.
-                    return _planned_workflow(
+                    workflow = _planned_workflow(
                         settings,
                         ContextBuilder(max_chars=max_chars),
                         ContextBuilder(max_chars=legacy_max_chars),
                         args.answer_mode,
                         args.max_chars,
                         args.depth,
-                    ).run(args.query, top_k)
+                    )
+                    if settings.teaching_generation_mode == "v3" and args.answer_mode == "teach":
+                        return workflow.run(args.query, top_k, on_section=publish_section)
+                    return workflow.run(args.query, top_k)
 
                 result, reports = _run_ask(
                     run_planned, args=args, top_k=top_k,
                     answer_mode=args.answer_mode,
                 )
                 _print_agentic_answer(
-                    args.query, result, debug=args.debug, include_plan=True
+                    args.query, result, debug=args.debug, include_plan=True,
+                    answer_already_published=bool(streamed_sections),
                 )
                 _emit_perf(args, reports)
+                teaching_trace = getattr(getattr(result, "trace", None), "teaching", None) or {}
+                if teaching_trace.get("generation_mode") == "v3" and teaching_trace.get("completion_status") != "complete":
+                    return 1
         elif args.command == "evaluate":
             report = evaluate(settings, benchmark=args.benchmark, baseline=args.baseline)
             summary = [
