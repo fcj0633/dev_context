@@ -72,6 +72,10 @@ class CodeGraphSession:
             GROUP BY s.id, c.id ORDER BY match_rank, s.symbol_key LIMIT %s
         """, (names, self.repository, limit)).fetchall()
 
+    def has_symbols(self) -> bool:
+        return self._execute("SELECT EXISTS(SELECT 1 FROM code_symbol WHERE repository = %s) AS indexed",
+                             (self.repository,)).fetchone()["indexed"]
+
     def symbols_for_chunks(self, chunk_ids: list[int]) -> list[dict]:
         if not chunk_ids:
             return []
@@ -117,6 +121,55 @@ class CodeGraphSession:
             SELECT * FROM ranked WHERE neighbor_rank <= %s ORDER BY node_id, neighbor_rank
         """, (self.repository, node_ids, list(outgoing), self.repository, node_ids, list(incoming),
               self.repository, limit)).fetchall()
+        grouped = {node_id: [] for node_id in node_ids}
+        for row in rows:
+            row["id"] = row["neighbor_id"]
+            grouped[row["node_id"]].append(row)
+        return grouped
+
+    def tool_relations(self, node_ids: list[int], outgoing: tuple[str, ...], incoming: tuple[str, ...], limit: int = 5) -> dict[int, list[dict]]:
+        """Bound distinct neighbors per node while retaining edge types/directions.
+
+        This is deliberately separate from neighbors(), whose automatic
+        expansion contract selects one representative edge per node pair.
+        Multiple call sites of the same relation use the first source location.
+        """
+        if not node_ids:
+            return {}
+        if not set(outgoing + incoming) <= EDGE_TYPES or not 1 <= limit <= 100:
+            raise ValueError("Invalid tool relationship query")
+        rows = self._execute(f"""
+            WITH links AS (
+                SELECT source_symbol_id AS node_id, target_symbol_id AS neighbor_id,
+                    edge_type, source_line, source_column, resolution_kind, 'outgoing' AS direction
+                FROM code_symbol_edge WHERE repository = %s
+                    AND source_symbol_id = ANY(%s) AND edge_type = ANY(%s::text[])
+                UNION ALL
+                SELECT target_symbol_id, source_symbol_id, edge_type, source_line, source_column,
+                    resolution_kind, 'incoming'
+                FROM code_symbol_edge WHERE repository = %s
+                    AND target_symbol_id = ANY(%s) AND edge_type = ANY(%s::text[])
+            ), relations AS (
+                SELECT DISTINCT ON (node_id, neighbor_id, edge_type, direction) * FROM links
+                ORDER BY node_id, neighbor_id, edge_type, direction, source_line, source_column
+            ), neighbor_priority AS (
+                SELECT node_id, neighbor_id, min({EDGE_ORDER_SQL}) AS edge_priority
+                FROM relations GROUP BY node_id, neighbor_id
+            ), ranked AS (
+                SELECT p.*, s.symbol_key,
+                    row_number() OVER (PARTITION BY node_id ORDER BY edge_priority, s.symbol_key) AS neighbor_rank
+                FROM neighbor_priority p JOIN code_symbol s ON s.id = p.neighbor_id AND s.repository = %s
+            )
+            SELECT r.*, s.id, s.repository, s.symbol_key, s.symbol_kind, s.simple_name,
+                s.qualified_name, s.canonical_signature, s.chunk_id,
+                c.file_path, c.start_line, c.end_line, n.neighbor_rank
+            FROM ranked n JOIN relations r USING (node_id, neighbor_id)
+                JOIN code_symbol s ON s.id = r.neighbor_id AND s.repository = %s
+                JOIN knowledge_chunk c ON c.id = s.chunk_id AND c.repository = s.repository
+            WHERE n.neighbor_rank <= %s
+            ORDER BY r.node_id, n.neighbor_rank, r.edge_type, r.direction, r.source_line, r.source_column
+        """, (self.repository, node_ids, list(outgoing), self.repository, node_ids, list(incoming),
+              self.repository, self.repository, limit)).fetchall()
         grouped = {node_id: [] for node_id in node_ids}
         for row in rows:
             row["id"] = row["neighbor_id"]

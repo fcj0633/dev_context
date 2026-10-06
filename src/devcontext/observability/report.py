@@ -14,6 +14,7 @@ TOP_LEVEL_STAGES: tuple[str, ...] = (
     "request_policy",
     "evidence_planning",
     "search_action_planning",
+    "agent_planning",
     "evidence_retrieval",
     "coverage_check",
     "explanation_planning",
@@ -68,6 +69,7 @@ def build_perf_report(
     revisions = [item for item in recorder.section_executions if item.revision]
 
     return {
+        **({"agent_retrieval": trace.agent_retrieval} if getattr(trace, "agent_retrieval", None) else {}),
         **({"answer_text": answer_text, "answer_plan": trace.explanation_plan,
             "retrieval_plan": trace.evidence_plan} if policy else {}),
         "query": query,

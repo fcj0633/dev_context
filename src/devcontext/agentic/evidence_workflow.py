@@ -19,7 +19,7 @@ from devcontext.agentic.models import (
     SubQuestionTrace,
     build_citation_trace,
 )
-from devcontext.agentic.retrieval_controller import RetrievalController
+from devcontext.agentic.retrieval_engine import RetrievalEngine
 from devcontext.answer import (
     EMPTY_CONTEXT_ANSWER,
     RETRIEVAL_FAILED_ANSWER,
@@ -62,7 +62,7 @@ class EvidenceDrivenWorkflow:
 
     def __init__(
         self,
-        retrieval_controller: RetrievalController,
+        retrieval_controller: RetrievalEngine,
         answer_generator_factory: Callable[[], AnswerGenerator],
         answer_planner: AnswerPlanner | None = None,
         answer_reviewer: AnswerReviewer | None = None,
@@ -206,6 +206,7 @@ class EvidenceDrivenWorkflow:
                 else None
             ),
             teaching=(outcome.workspace_stats or {}).get("trace"),
+            agent_retrieval=retrieval.agent_trace,
         )
         return AgenticAnswerResult(
             answer_result,

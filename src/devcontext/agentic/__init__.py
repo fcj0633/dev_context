@@ -32,6 +32,7 @@ from devcontext.agentic.search_actions import (
     SearchActionPlanError,
     SearchActionPlanner,
 )
+from devcontext.agentic.retrieval_engine import RetrievalEngine
 from devcontext.agentic.workflow import MAX_RETRIES, AgenticRetrievalWorkflow
 from devcontext.agentic.evidence_workflow import EvidenceDrivenWorkflow
 from devcontext.agentic.planned_workflow import (
@@ -61,6 +62,7 @@ __all__ = [
     "RequirementCoverage",
     "RequirementTrace",
     "RetrievalController",
+    "RetrievalEngine",
     "RetrievalObserver",
     "RetrievalOutcome",
     "RewriteResult",

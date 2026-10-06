@@ -153,7 +153,8 @@ def parse_blueprint(response, *, allowed_labels):
             errors.append(issue("INVALID_DELTA", path + ".learning_delta", "learning delta object", s.get("learning_delta")))
     for field in ("core_mental_model", "critical_distinctions", "comprehension_checks"):
         for index, record in enumerate(array(raw, field, "$", objects=True)):
-            refs(record.get("answer_claim_ids" if field == "comprehension_checks" else "claim_ids", []), claim_ids, f"{field}[{index}].claims")
+            claim_field = "answer_claim_ids" if field == "comprehension_checks" else "claim_ids"
+            record[claim_field] = refs(record.get(claim_field, []), claim_ids, f"{field}[{index}].claims")
             if field == "comprehension_checks":
                 refs(record.get("goal_ids", []), goal_ids, f"{field}[{index}].goal_ids")
     fail(errors)

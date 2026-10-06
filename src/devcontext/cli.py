@@ -9,6 +9,7 @@ import time
 from collections.abc import Callable
 from dataclasses import asdict
 from datetime import datetime, timezone
+from hashlib import sha256
 from pathlib import Path
 
 from devcontext.agentic import (
@@ -19,6 +20,7 @@ from devcontext.agentic import (
     EvidenceDrivenWorkflow,
     PlannedRetrievalWorkflow,
     RetrievalController,
+    RetrievalEngine,
     RetrievalObserver,
     SearchActionPlanner,
     SufficiencyResult,
@@ -121,6 +123,13 @@ def _parser() -> argparse.ArgumentParser:
     graph_evaluation.add_argument("--fixture", action="store_true", help="Analyze and index an isolated source fixture, then remove its snapshot")
     graph_evaluation.add_argument("--cases", type=Path)
     graph_evaluation.add_argument("--output", type=Path)
+    tool_evaluation = subparsers.add_parser("evaluate-tool-agent", help="Paired Fixed / Auto Graph / Tool Agent retrieval evaluation")
+    tool_evaluation.add_argument("--cases", type=Path, action="append", help="Workflow-format cases, optionally with allowed_tool_sequences")
+    tool_evaluation.add_argument("--checker", choices=("semantic", "oracle"), default="semantic")
+    tool_evaluation.add_argument("--runs", type=int, default=3)
+    tool_evaluation.add_argument("--top-k", type=int, default=12)
+    tool_evaluation.add_argument("--limit", type=int)
+    tool_evaluation.add_argument("--output", type=Path)
 
     search = subparsers.add_parser("search", help="Search indexed chunks")
     search.add_argument("--strategy", choices=("keyword", "vector", "hybrid"), default="hybrid")
@@ -296,6 +305,9 @@ def _print_agentic_answer(
         print(result.answer_result.answer)
     if debug:
         _print_teaching_summary(trace.teaching)
+        if getattr(trace, "agent_retrieval", None):
+            from devcontext.tool_agent.trace import render_agent_trace
+            print("\n" + render_agent_trace(trace.agent_retrieval))
         _print_sources(result)
         if not (trace.teaching or {}).get("request_policy"):
             print("\nTrace:")
@@ -612,7 +624,9 @@ def _retrieval_controller(
     *,
     observer: RetrievalObserver | None = None,
     frozen_case: dict | None = None,
-) -> RetrievalController:
+    frozen_plan: EvidencePlan | None = None,
+    shared_coverage_factory=None,
+) -> RetrievalEngine:
     source_policy = SourcePolicy.from_file(
         settings.source_policy_path or default_source_policy_path()
     )
@@ -622,15 +636,39 @@ def _retrieval_controller(
         coverage_checker = CoverageChecker(
             _sub_question_sufficiency_factory(settings)
         )
-        if settings.answer_engine_enabled and settings.answer_profile == "fast":
+        if settings.answer_engine_enabled and settings.answer_profile == "fast" and frozen_plan is None:
             from devcontext.agentic.fast import FastRetrievalPlanner, FastActionPlanner, FastCoverageChecker
             evidence_planner = FastRetrievalPlanner(_planner_llm_factory(settings))
             action_planner = FastActionPlanner(evidence_planner)
-            coverage_checker = FastCoverageChecker(CoverageChecker(_sub_question_sufficiency_factory(settings), max_attempts=1), evidence_planner)
+            if not settings.tool_agent_enabled and shared_coverage_factory is None:
+                coverage_checker = FastCoverageChecker(CoverageChecker(_sub_question_sufficiency_factory(settings), max_attempts=1), evidence_planner)
     else:
         evidence_planner = FrozenEvidencePlanner(frozen_case)
         action_planner = FrozenSearchActionPlanner(frozen_case)
         coverage_checker = OracleCoverageChecker(frozen_case)
+    if frozen_plan is not None:
+        from devcontext.agentic.retrieval_engine import FixedEvidencePlanner
+        evidence_planner = FixedEvidencePlanner(frozen_plan)
+    if shared_coverage_factory is not None:
+        coverage_checker = shared_coverage_factory()
+    if settings.tool_agent_enabled:
+        from devcontext.agentic.tool_driven_retrieval_controller import ToolDrivenRetrievalController
+        from devcontext.code_graph.store import CodeGraphStore
+        from devcontext.tool_agent.executor import ToolExecutor
+        from devcontext.tool_agent.planner import AgentPlanner
+        from devcontext.tool_agent.registry import ToolRegistry
+        from devcontext.tool_agent.runtime import AgentRuntime
+        from devcontext.tool_agent.tools import RepositoryTools
+        if shared_coverage_factory is None and frozen_case is None:
+            coverage_checker = CoverageChecker(_sub_question_sufficiency_factory(settings), max_attempts=1)
+        tools = RepositoryTools(RetrievalPolicy(RetrievalService(settings)),
+            CodeGraphStore(settings.database_url, settings.repository_name, settings.symbol_graph_query_timeout_seconds), observer)
+        factory = lambda: create_llm_client(settings, deepseek_client_type=DeepSeekLLMClient,
+            legacy_model=settings.deepseek_planner_model or settings.deepseek_model,
+            requested_reasoning_effort="low", max_tokens=8192, json_mode=True,
+            timeout_seconds=settings.tool_agent_planner_timeout_seconds)
+        return ToolDrivenRetrievalController(evidence_planner,
+            AgentRuntime(AgentPlanner(factory), ToolExecutor(ToolRegistry(tools)), coverage_checker, source_policy), observer)
     return RetrievalController(
         evidence_planner=evidence_planner,
         action_planner=action_planner,
@@ -794,6 +832,41 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "ingest":
             summary = ingest(settings)
             print(json.dumps(asdict(summary), ensure_ascii=False, indent=2))
+        elif args.command == "evaluate-tool-agent":
+            from devcontext.evaluation.tool_agent_runner import load_tool_cases, run_paired_evaluation, corpus_hash
+            paths = args.cases or [project_root() / "benchmark" / "tool-agent-v1.jsonl"]
+            cases = [case for path in paths for case in load_tool_cases(path)]
+            if len({case["id"] for case in cases}) != len(cases):
+                raise ValueError("Case ids must be unique across suites")
+            if args.limit is not None:
+                if args.limit < 1:
+                    raise ValueError("limit must be positive")
+                cases = cases[:args.limit]
+            def factory(arm, case, planner, checker_factory, observer):
+                arm_settings = settings.model_copy(update={"tool_agent_enabled": arm == "tool_agent",
+                    "symbol_graph_enabled": arm == "auto_graph"})
+                return _retrieval_controller(arm_settings, observer=observer, frozen_plan=planner.frozen_plan,
+                    frozen_case=case if args.checker == "oracle" else None,
+                    shared_coverage_factory=checker_factory)
+            def checker_factory(case):
+                return OracleCoverageChecker(case) if args.checker == "oracle" else CoverageChecker(
+                    _sub_question_sufficiency_factory(settings), max_attempts=1)
+            output = args.output or project_root() / "artifacts" / "tool-agent-v1-report.json"
+            output.parent.mkdir(parents=True, exist_ok=True)
+            def checkpoint(report):
+                output.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+            def result_lookup(ids):
+                from devcontext.code_graph.store import CodeGraphStore
+                with CodeGraphStore(settings.database_url, settings.repository_name).session() as session:
+                    return session.chunks_for_symbols([{"chunk_id": i} for i in ids])
+            report = run_paired_evaluation(cases, factory, checker_factory, runs=args.runs, top_k=args.top_k,
+                progress=lambda text: print(text, flush=True), corpus_fingerprint=lambda: corpus_hash(settings), checkpoint=checkpoint,
+                result_lookup=result_lookup)
+            report["checker_configuration"] = {"kind": args.checker, "max_attempts": 1 if args.checker == "semantic" else None,
+                                               "model": settings.text_model() if args.checker == "semantic" else None}
+            report["datasets"] = [{"path": str(path), "sha256": sha256(path.read_bytes()).hexdigest()} for path in paths]
+            checkpoint(report)
+            print(json.dumps({"output": str(output), "summary": report["summary"], "acceptance": report["acceptance"]}, ensure_ascii=False, indent=2))
         elif args.command == "evaluate-symbol-graph":
             from devcontext.evaluation.symbol_graph_runner import run_fixture_evaluation, run_graph_evaluation, load_graph_cases
             from devcontext.code_graph.store import CodeGraphStore

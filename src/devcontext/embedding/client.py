@@ -15,6 +15,13 @@ from devcontext.observability import record_embedding_call
 from devcontext.deadline import bounded_timeout, remaining_seconds
 
 
+class EmbeddingQueryError(RuntimeError):
+    """Transport failure at the query boundary, distinct from tool contract bugs."""
+    def __init__(self, message, *, retryable=True):
+        super().__init__(message)
+        self.retryable = retryable
+
+
 def _record_embedding(
     client: "BailianEmbeddingClient",
     query: str,
@@ -126,9 +133,25 @@ class BailianEmbeddingClient:
             vector = self.embed_documents([query])[0]
         except Exception as exception:
             from devcontext.agentic.models import error_detail
+            from devcontext.deadline import RequestDeadlineExceeded
 
             _record_embedding(self, query, started, success=False,
                               error=error_detail(exception))
+            if isinstance(exception, RuntimeError):
+                import re
+                message = str(exception)
+                status = re.search(r"HTTP (\d+)", message)
+                retryable = not (status and int(status.group(1)) in {400, 401, 403, 404})
+                retryable &= "dimensional embeddings" not in message and "vectors for" not in message
+                cause = exception
+                while cause is not None:
+                    if isinstance(cause, RequestDeadlineExceeded):
+                        raise cause
+                    http_status = getattr(cause, "status_code", None)
+                    if isinstance(http_status, int) and 400 <= http_status < 500 and http_status not in {408, 429}:
+                        retryable = False
+                    cause = cause.__cause__
+                raise EmbeddingQueryError("Embedding query failed", retryable=retryable) from exception
             raise
         _record_embedding(self, query, started)
         return vector

@@ -367,3 +367,24 @@ uv run devcontext evaluate-retrieval-workflow --suite l1.5 --mode frozen --symbo
 `SYMBOL_GRAPH_QUERY_TIMEOUT_SECONDS=2` 是查询安全超时，受请求 Deadline 约束。100ms 仅为图增强 P95 评测目标，不用于提前跳过请求。图缺失或查询失败保留基础检索结果，并记录独立 Trace。
 
 受控 fixture 评测使用固定候选与 Oracle Coverage，不调用 embedding/LLM，临时快照在结束后清理；不能据此推断真实业务召回或回答准确率。真实仓库的 OFF/ON 对照使用 `evaluate-retrieval-workflow --symbol-graph-ab`，会沿用该评测原有的 embedding/LLM 调用。更多契约、限制和验证结果见 [Symbol Graph V1 实现与验收](docs/V4-graph等功能规划/03-symbol-graph-v1实现与验收.md)。
+
+## Tool-driven Retrieval Agent V1
+
+`TOOL_AGENT_ENABLED=false` 默认保留固定检索。显式开启后，Fast/Full 使用同一工具 Agent 取得证据，最终回答流程不变。七个只读工具覆盖代码/文档搜索、Symbol 定位、callers、callees（含 CONSTRUCTS）、implementations 和 hierarchy。Agent 最多三步、八次调用，每步最多三次；每步结束后统一检查 Coverage 和进展。
+
+```powershell
+$env:TOOL_AGENT_ENABLED='true'
+uv run devcontext ask "谁调用 OrderDelayCloseProducer.doSend？" --profile fast --debug
+uv run devcontext ask "OrderService.createTicketOrder 由哪个方法实现？" --profile full --debug
+```
+
+Graph 工具只允许使用当前 Observation 中已 CONFIRMED 的 Symbol。歧义候选须通过限定名称定位或上下文搜索确认。Agent 模式不执行自动扩图，`SYMBOL_GRAPH_ENABLED` 不控制显式 Graph 工具。`TOOL_AGENT_PLANNER_TIMEOUT_SECONDS=60` 为 Planner 调用超时；Graph 继续用现有 2 秒查询超时，100ms 是 P95 目标。
+
+```powershell
+uv run devcontext evaluate-tool-agent --cases benchmark/tool-agent-v1.jsonl --runs 3 --output artifacts/tool-agent-live-abc.json
+uv run devcontext evaluate-tool-agent --cases benchmark/l1.5-retrieval.jsonl --cases benchmark/regression/regression-v1.jsonl --checker oracle --runs 1 --output artifacts/tool-agent-regression-abc.json
+```
+
+三组分别为固定检索、固定检索加自动 Graph、Tool Agent；每个 paired run 共享同一不可变 EvidencePlan 和完全相同的 CoverageChecker 配置。semantic 模式三组都用标准 Checker、max_attempts=1；oracle 模式三组都用同一 Ground Truth，固定组同时冻结搜索 Query，Agent 的选工具仍由真实 LLM 决定。结果包括 Workspace 证据召回、False READY、工具选择、调用预算、延迟和实际 token usage；缺失 usage 为 null。
+
+实现、六项约束和验收结果见 [Tool Agent V1 实现与验收](docs/V4-graph等功能规划/05-tool-agent-v1实现与验收.md)。首版保持关闭，评测不达门槛时不会扩大循环预算或自动启用。

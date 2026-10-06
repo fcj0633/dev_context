@@ -104,6 +104,8 @@ class Settings(BaseSettings):
     source_policy_path: Path | None = None
     repository_name: str = "my12306"
     symbol_graph_enabled: bool = False
+    tool_agent_enabled: bool = False
+    tool_agent_planner_timeout_seconds: float = Field(default=60, gt=0)
     symbol_graph_query_timeout_seconds: float = Field(default=2.0, gt=0, le=30)
     # Effective ceilings for this pipeline, not the model's advertised limits.
     # deepseek-flash documents a 1M window and 384K max output, but the writers

@@ -163,12 +163,26 @@ class EvidencePackage:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class ToolExecutionSummary:
+    """All attempted tools, including symbol/graph calls absent from search_history."""
+
+    attempted: int
+    completed: int
+    failed: int
+
+    def __post_init__(self) -> None:
+        if min(self.attempted, self.completed, self.failed) < 0 or self.completed + self.failed != self.attempted:
+            raise ValueError("invalid tool execution summary")
+
+
 def package_state(
     plan: EvidencePlan,
     context: ContextBundle,
     coverage: tuple[RequirementCoverage, ...],
     search_history: tuple[SearchAction, ...] = (),
     evidence_count: int | None = None,
+    tool_summary: ToolExecutionSummary | None = None,
 ) -> str:
     """``evidence_count`` overrides what counts as "any evidence at all".
 
@@ -177,10 +191,12 @@ def package_state(
     retrieval came back empty. Pass ``len(workspace)`` for that path and leave it
     None for the paths that answer from the bundle.
     """
-    if search_history and all(action.error for action in search_history):
+    if tool_summary is None and search_history and all(action.error for action in search_history):
         return "RETRIEVAL_FAILED"
     has_evidence = bool(context.items) if evidence_count is None else evidence_count > 0
     if not has_evidence:
+        if tool_summary is not None and tool_summary.attempted and not tool_summary.completed:
+            return "RETRIEVAL_FAILED"
         return "EMPTY"
     by_id = {item.requirement_id: item for item in coverage}
     core = [item for item in plan.requirements if item.priority == "CORE"]

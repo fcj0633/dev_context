@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from typing import Mapping, Protocol
 
 from devcontext.agentic.coverage import CoverageChecker
@@ -27,6 +27,7 @@ from devcontext.deadline import remaining_seconds
 from devcontext.observability import RetrievalActionTrace, record_retrieval_action
 from devcontext.retrieval import RetrievalPolicy
 from devcontext.retrieval.symbols import code_strategy_for
+from devcontext.agentic.retrieval_engine import RetrievalOutcome
 
 
 COMPACT_CONTEXT_BUDGET = 8_000
@@ -53,12 +54,6 @@ class _GraphEvidencePool(EvidencePool):
             item for item in self.candidates_by_sub_question[requirement_id]
             if item.search_result.id not in original
         ]
-
-
-@dataclass(frozen=True, slots=True)
-class RetrievalOutcome:
-    package: EvidencePackage
-    stage_usage: tuple[StageUsage, ...]
 
 
 class RetrievalObserver(Protocol):
