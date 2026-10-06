@@ -2,6 +2,14 @@
 
 开发分支：main。基础提交：73d56bf（Fast/Full + Symbol Graph V1）。
 
+## 提交与交付记录
+
+功能提交：`2e8d7cc`（`feat: add bounded tool-driven repository retrieval`），在包含 Fast/Full 的 `main` 上开发。交付范围为 Tool Agent 实现、关系查询、状态判断、配对评测、测试、基准和验收文档，共 33 个文件。该提交已推送到 Gitee 与 GitHub 的 `main`。
+
+六项约束、执行预算和错误分类的具体行为见下文。验证结果为全量 Python 测试 694 项通过；最后的调用类型校验调整另有六项相关集成测试通过。Fast 六场景及修复后的 Full 六场景均完成，没有非法引用。真实语义 A/B/C 共 144 次检索未达到质量门槛，因此 `TOOL_AGENT_ENABLED=false` 保持默认值。
+
+本次交付没有纳入工作区原有的测试修改、未跟踪规划资料及本地 trace。详细评测 artifacts 保留在本地，汇总结果随本文提交。后续启用前应重新验证 CORE 覆盖、False READY 和 Graph 敏感场景收益。
+
 ## 实现边界
 
 新增 ToolDrivenRetrievalController、RetrievalEngine 协议与 tool_agent 包。固定两轮 RetrievalController 保留，开关关闭时行为不变。EvidencePlanner 定义待证明事实，Agent 选择取证工具，独立 CoverageChecker 判断覆盖，EvidenceWorkspace 保存真实证据，Fast/Full 继续消费 EvidencePackage。
