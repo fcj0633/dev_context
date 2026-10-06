@@ -110,6 +110,9 @@ class SearchExecution:
     # The real project symbols (class / method / signature) that the workspace
     # had already confirmed, and which justified an exact-match search.
     symbols: tuple[str, ...] = ()
+    # Optional enhancement is separate from raw retrieval and source_candidates.
+    graph_results: list[SearchResult] = field(default_factory=list)
+    graph_trace: dict[str, Any] | None = None
 
 
 @dataclass(slots=True)

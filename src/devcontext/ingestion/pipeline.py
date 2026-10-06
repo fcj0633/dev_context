@@ -17,16 +17,19 @@ class IngestionSummary:
     document_chunks: int
     total_chunks: int
     stored_by_type: dict[str, int]
+    graph_diagnostics: dict | None = None
+    graph_diagnostics_path: str | None = None
 
 
 def ingest(settings: Settings) -> IngestionSummary:
     settings.validate_sources()
     artifact = project_root() / "artifacts" / "java-chunks.jsonl"
-    code_chunks = JavaParserRunner().parse(
+    analysis = JavaParserRunner().analyze(
         settings.devcontext_code_root,
         artifact,
         settings.repository_name,
     )
+    code_chunks = analysis.chunks
     document_chunks = parse_markdown_tree(
         settings.devcontext_doc_root,
         settings.repository_name,
@@ -69,10 +72,12 @@ def ingest(settings: Settings) -> IngestionSummary:
 
     store = ChunkStore(settings.database_url)
     store.initialize()
-    store.replace_repository(
+    store.replace_repository_snapshot(
         settings.repository_name,
         chunks,
         completed_vectors,
+        analysis.symbols,
+        analysis.edges,
         settings.embedding_model,
     )
     return IngestionSummary(
@@ -80,4 +85,6 @@ def ingest(settings: Settings) -> IngestionSummary:
         document_chunks=len(document_chunks),
         total_chunks=len(chunks),
         stored_by_type=store.count_by_type(settings.repository_name),
+        graph_diagnostics={key: value for key, value in analysis.diagnostics.items() if key != "gaps"},
+        graph_diagnostics_path=str(artifact.with_name(artifact.stem + "-diagnostics.json")),
     )

@@ -103,6 +103,8 @@ class Settings(BaseSettings):
     teaching_generation_mode: Literal["multi_pass", "single_stream", "v3"] = "multi_pass"
     source_policy_path: Path | None = None
     repository_name: str = "my12306"
+    symbol_graph_enabled: bool = False
+    symbol_graph_query_timeout_seconds: float = Field(default=2.0, gt=0, le=30)
     # Effective ceilings for this pipeline, not the model's advertised limits.
     # deepseek-flash documents a 1M window and 384K max output, but the writers
     # here cap their own output well below that, so budgeting against 384K would

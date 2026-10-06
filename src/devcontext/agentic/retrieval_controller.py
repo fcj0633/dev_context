@@ -39,6 +39,22 @@ CORE_TOP_K = 5
 SUPPORTING_TOP_K = 3
 
 
+class _GraphEvidencePool(EvidencePool):
+    """Keep original search candidates ahead of graph supplements across rounds."""
+    def __init__(self):
+        super().__init__()
+        self.original_candidates = {}
+
+    def prioritize_original(self, requirement_id, candidates):
+        original = self.original_candidates.setdefault(requirement_id, {})
+        for candidate in candidates:
+            original.setdefault(candidate.search_result.id, candidate)
+        self.candidates_by_sub_question[requirement_id] = list(original.values()) + [
+            item for item in self.candidates_by_sub_question[requirement_id]
+            if item.search_result.id not in original
+        ]
+
+
 @dataclass(frozen=True, slots=True)
 class RetrievalOutcome:
     package: EvidencePackage
@@ -72,6 +88,7 @@ class RetrievalController:
         coverage_checker: CoverageChecker,
         source_policy: SourcePolicy,
         observer: RetrievalObserver | None = None,
+        graph_expander=None,
     ) -> None:
         self.evidence_planner = evidence_planner
         self.action_planner = action_planner
@@ -79,6 +96,7 @@ class RetrievalController:
         self.coverage_checker = coverage_checker
         self.source_policy = source_policy
         self.observer = observer
+        self.graph_expander = graph_expander
 
     def retrieve(self, request: UserRequest, top_k: int) -> RetrievalOutcome:
         if top_k < 1 or top_k > 100:
@@ -97,7 +115,10 @@ class RetrievalController:
             )
         )
 
-        pool = EvidencePool()
+        pool = _GraphEvidencePool() if self.graph_expander is not None else EvidencePool()
+        # Request-local original candidates retain presentation precedence across
+        # both rounds. Otherwise early graph hits can crowd out later real search
+        # hits in the fixed-size answer bundle, despite improving the workspace.
         # Held for the whole lifecycle: evidence ids are assigned once and never
         # renumbered, so a chunk means the same thing in every later view.
         workspace = EvidenceWorkspace(request.original_query)
@@ -293,14 +314,22 @@ class RetrievalController:
                 )
                 if code_strategy is not None:
                     execution.symbols = symbols
+                if self.graph_expander is not None:
+                    expansion = self.graph_expander.expand(action, requirement, execution, round_index)
+                    execution.graph_results = expansion.results
+                    execution.graph_trace = expansion.trace.to_dict()
                 record_retrieval_action(
                     _action_trace(action, execution, round_index, per_action_top_k)
                 )
                 annotated = [
                     self.source_policy.classify(result, requirement.id)
-                    for result in execution.results
+                    for result in execution.results + execution.graph_results
                 ]
                 pool.add_many(annotated)
+                if isinstance(pool, _GraphEvidencePool):
+                    pool.prioritize_original(requirement.id, [
+                        self.source_policy.classify(result, requirement.id) for result in execution.results
+                    ])
                 # Register + ingest per round, so a round's snapshot reflects only
                 # what that round found rather than everything found so far.
                 workspace.ingest(annotated, round_index)

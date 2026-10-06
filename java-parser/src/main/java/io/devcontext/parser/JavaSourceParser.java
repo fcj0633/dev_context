@@ -46,6 +46,10 @@ public final class JavaSourceParser {
             throw new IllegalArgumentException("Parse problems: " + result.getProblems());
         }
 
+        return chunks(root, file, repository, source, unit);
+    }
+
+    List<ChunkRecord> chunks(Path root, Path file, String repository, String source, CompilationUnit unit) {
         String relativePath = root.relativize(file).toString().replace('\\', '/');
         String module = detectModule(root.relativize(file));
         String packageName = unit.getPackageDeclaration()

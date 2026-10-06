@@ -37,12 +37,11 @@ class ChunkStore:
         return connection
 
     def initialize(self) -> None:
-        script_path = project_root() / "sql" / "001_schema.sql"
-        script = script_path.read_text(encoding="utf-8")
         with self._connect(vectors=False) as connection:
-            for statement in script.split(";"):
-                if statement.strip():
-                    connection.execute(statement)
+            for script_path in sorted((project_root() / "sql").glob("[0-9]*_*.sql")):
+                for statement in script_path.read_text(encoding="utf-8").split(";"):
+                    if statement.strip():
+                        connection.execute(statement)
 
     def replace_repository(
         self,
@@ -51,6 +50,13 @@ class ChunkStore:
         embeddings: Sequence[list[float]],
         embedding_model: str,
     ) -> int:
+        return self.replace_repository_snapshot(repository, chunks, embeddings, (), (), embedding_model)
+
+    def replace_repository_snapshot(
+        self, repository, chunks, embeddings, symbols, edges, embedding_model,
+    ) -> int:
+        from devcontext.code_graph.models import validate_snapshot
+        validate_snapshot(repository, chunks, symbols, edges)
         if len(chunks) != len(embeddings):
             raise ValueError("Chunk and embedding counts differ")
         rows = []
@@ -92,11 +98,41 @@ class ChunkStore:
         """
         with self._connect() as connection:
             with connection.transaction():
+                connection.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (repository,))
                 connection.execute(
                     "DELETE FROM knowledge_chunk WHERE repository = %s", (repository,)
                 )
                 with connection.cursor() as cursor:
-                    cursor.executemany(sql, rows)
+                    if symbols:
+                        cursor.executemany(sql + " RETURNING id", rows, returning=True)
+                        chunk_ids = []
+                        while True:
+                            chunk_ids.append(cursor.fetchone()["id"])
+                            if not cursor.nextset():
+                                break
+                        symbol_ids = {}
+                        for symbol in symbols:
+                            result = connection.execute(
+                                """INSERT INTO code_symbol(repository, symbol_key, symbol_kind, simple_name,
+                                    qualified_name, canonical_signature, chunk_id)
+                                    VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+                                (repository, symbol.symbol_key, symbol.symbol_kind, symbol.simple_name,
+                                 symbol.qualified_name, symbol.canonical_signature, chunk_ids[symbol.chunk_ref]),
+                            ).fetchone()
+                            symbol_ids[symbol.symbol_key] = result["id"]
+                        for symbol in symbols:
+                            if symbol.owner_symbol_key:
+                                connection.execute("UPDATE code_symbol SET owner_symbol_id = %s WHERE id = %s",
+                                                   (symbol_ids[symbol.owner_symbol_key], symbol_ids[symbol.symbol_key]))
+                        cursor.executemany(
+                            """INSERT INTO code_symbol_edge(repository, source_symbol_id, target_symbol_id,
+                                edge_type, source_line, source_column, resolution_kind)
+                                VALUES (%s, %s, %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING""",
+                            [(repository, symbol_ids[e.source_symbol_key], symbol_ids[e.target_symbol_key],
+                              e.edge_type, e.source_line, e.source_column, e.resolution_kind) for e in edges],
+                        )
+                    else:
+                        cursor.executemany(sql, rows)
         return len(rows)
 
     def keyword_search(

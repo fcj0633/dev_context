@@ -56,7 +56,9 @@ class RetrievalTraceRecorder(RetrievalObserver):
         self.action_candidates.append(
             {
                 "action": action.to_dict(),
-                "results": copy.deepcopy(execution.results),
+                "results": copy.deepcopy(execution.results + execution.graph_results),
+                "base_result_ids": [result.id for result in execution.results],
+                "graph_trace": copy.deepcopy(execution.graph_trace),
                 "timings": execution.timings.to_dict(),
                 # Strategy trace: which retrieval actually ran for this action and
                 # which real code symbols (if any) selected it. Without these the
@@ -390,7 +392,7 @@ def run_retrieval_workflow_evaluation(
                     # it implicit would let a future default change silently
                     # rewrite what this suite measures.
                     outcome = controller.retrieve(
-                        UserRequest(case["question"], AnswerOptions(None, "legacy")),
+                        UserRequest(case["question"], AnswerOptions("legacy")),
                         top_k,
                     )
                     records.append(

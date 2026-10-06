@@ -31,6 +31,17 @@ public final class Main {
 
         ObjectMapper mapper = new ObjectMapper();
         mapper.setPropertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE);
+        if (arguments.symbolsOutput() != null) {
+            RepositoryJavaAnalyzer.Result result = new RepositoryJavaAnalyzer().analyze(root, arguments.repository());
+            writeRecords(mapper, output, result.chunks());
+            writeRecords(mapper, arguments.symbolsOutput(), result.symbols());
+            writeRecords(mapper, arguments.edgesOutput(), result.edges());
+            Path diagnostics = arguments.diagnosticsOutput().toAbsolutePath();
+            Files.createDirectories(diagnostics.getParent());
+            mapper.writerWithDefaultPrettyPrinter().writeValue(diagnostics.toFile(), result.diagnostics());
+            System.out.printf("JAVA_GRAPH_SUMMARY chunks=%d symbols=%d edges=%d%n", result.chunks().size(), result.symbols().size(), result.edges().size());
+            return;
+        }
         JavaSourceParser parser = new JavaSourceParser();
         List<Path> files = findJavaFiles(root);
         int parsed = 0;
@@ -77,23 +88,39 @@ public final class Main {
         return files;
     }
 
-    private record Arguments(Path codeRoot, Path output, String repository) {
+    private static void writeRecords(ObjectMapper mapper, Path output, List<?> records) throws IOException {
+        output = output.toAbsolutePath();
+        Files.createDirectories(output.getParent());
+        try (BufferedWriter writer = Files.newBufferedWriter(output, StandardCharsets.UTF_8)) {
+            for (Object record : records) { writer.write(mapper.writeValueAsString(record)); writer.newLine(); }
+        }
+    }
+
+    private record Arguments(Path codeRoot, Path output, String repository,
+                             Path symbolsOutput, Path edgesOutput, Path diagnosticsOutput) {
         private static Arguments parse(String[] args) {
             Path codeRoot = null;
             Path output = null;
             String repository = "my12306";
+            Path symbolsOutput = null, edgesOutput = null, diagnosticsOutput = null;
             for (int index = 0; index < args.length; index++) {
                 switch (args[index]) {
                     case "--code-root" -> codeRoot = Path.of(requireValue(args, ++index, "--code-root"));
                     case "--output" -> output = Path.of(requireValue(args, ++index, "--output"));
                     case "--repository" -> repository = requireValue(args, ++index, "--repository");
+                    case "--symbols-output" -> symbolsOutput = Path.of(requireValue(args, ++index, "--symbols-output"));
+                    case "--edges-output" -> edgesOutput = Path.of(requireValue(args, ++index, "--edges-output"));
+                    case "--diagnostics-output" -> diagnosticsOutput = Path.of(requireValue(args, ++index, "--diagnostics-output"));
                     default -> throw new IllegalArgumentException("Unknown argument: " + args[index]);
                 }
             }
             if (codeRoot == null || output == null) {
                 throw new IllegalArgumentException("Required: --code-root <path> --output <path>");
             }
-            return new Arguments(codeRoot, output, repository);
+            if ((symbolsOutput != null || edgesOutput != null || diagnosticsOutput != null)
+                    && (symbolsOutput == null || edgesOutput == null || diagnosticsOutput == null))
+                throw new IllegalArgumentException("All three graph output options are required together");
+            return new Arguments(codeRoot, output, repository, symbolsOutput, edgesOutput, diagnosticsOutput);
         }
 
         private static String requireValue(String[] args, int index, String option) {
