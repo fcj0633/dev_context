@@ -7,6 +7,7 @@ from pathlib import Path
 
 from devcontext.config import project_root
 from devcontext.models import Chunk
+from devcontext.code_graph.models import AnalysisContractError, CodeSymbol, SymbolEdge, JavaAnalysisResult
 
 
 class JavaParserRunner:
@@ -58,3 +59,37 @@ class JavaParserRunner:
                             f"Invalid Java parser output at line {line_number}"
                         ) from exception
         return chunks
+
+    def analyze(self, code_root: Path, output: Path, repository: str) -> JavaAnalysisResult:
+        self.build()
+        java = shutil.which("java.exe") or shutil.which("java")
+        if java is None:
+            raise FileNotFoundError("Java executable was not found on PATH")
+        output.parent.mkdir(parents=True, exist_ok=True)
+        symbols_output = output.with_name(output.stem + "-symbols.jsonl")
+        edges_output = output.with_name(output.stem + "-edges.jsonl")
+        diagnostics_output = output.with_name(output.stem + "-diagnostics.json")
+        subprocess.run([
+            java, "-jar", str(self.jar_path), "--code-root", str(code_root),
+            "--output", str(output), "--repository", repository,
+            "--symbols-output", str(symbols_output), "--edges-output", str(edges_output),
+            "--diagnostics-output", str(diagnostics_output),
+        ], cwd=project_root(), check=True)
+
+        def read_records(path, model):
+            records = []
+            for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                if not line.strip():
+                    continue
+                try:
+                    records.append(model(**json.loads(line)))
+                except (ValueError, TypeError) as error:
+                    raise AnalysisContractError(f"Invalid {path.name} at line {number}") from error
+            return records
+
+        result = JavaAnalysisResult(
+            read_records(output, Chunk), read_records(symbols_output, CodeSymbol),
+            read_records(edges_output, SymbolEdge), json.loads(diagnostics_output.read_text(encoding="utf-8")),
+        )
+        result.validate(repository)
+        return result

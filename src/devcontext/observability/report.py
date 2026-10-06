@@ -117,6 +117,7 @@ def build_perf_report(
             section.to_dict() for section in recorder.section_executions
         ],
         "repeated_embeddings": recorder.repeated_embeddings(),
+        "graph_expansions": [item.to_dict() for item in recorder.graph_expansions],
     }
 
 
@@ -200,5 +201,11 @@ def render_summary(report: dict[str, Any]) -> str:
             f"Repeated embeds:  {total_repeat} calls over "
             f"{len(report['repeated_embeddings'])} queries"
         )
+    if report.get("graph_expansions"):
+        traces = report["graph_expansions"]
+        lines.append(f"Symbol Graph:     {len(traces)} actions, "
+                     f"{sum(len(t['graph_added_chunks']) for t in traces)} relation chunks, "
+                     f"{sum(len(t['exact_added_chunks']) for t in traces)} exact chunks "
+                     f"({sum(t['latency_ms'] for t in traces):.1f}ms inside retrieval)")
     lines.append("========================================================")
     return "\n".join(lines)

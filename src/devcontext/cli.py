@@ -112,6 +112,15 @@ def _parser() -> argparse.ArgumentParser:
     subparsers.add_parser("init-db", help="Create extensions, table, and indexes")
     subparsers.add_parser("smoke-api", help="Verify Bailian embedding connectivity")
     subparsers.add_parser("ingest", help="Fully rebuild the my12306 index")
+    graph = subparsers.add_parser("graph", help="Query static repository-internal code relations")
+    graph.add_argument("operation", choices=("symbol", "callers", "callees", "implementations", "hierarchy"))
+    graph.add_argument("value", help="Name for symbol lookup, complete symbol_key for relations")
+    graph.add_argument("--repository")
+    graph.add_argument("--json", action="store_true", help="Print structured JSON")
+    graph_evaluation = subparsers.add_parser("evaluate-symbol-graph", help="Compare Graph OFF/ON with fixed candidates and oracle coverage")
+    graph_evaluation.add_argument("--fixture", action="store_true", help="Analyze and index an isolated source fixture, then remove its snapshot")
+    graph_evaluation.add_argument("--cases", type=Path)
+    graph_evaluation.add_argument("--output", type=Path)
 
     search = subparsers.add_parser("search", help="Search indexed chunks")
     search.add_argument("--strategy", choices=("keyword", "vector", "hybrid"), default="hybrid")
@@ -203,6 +212,7 @@ def _parser() -> argparse.ArgumentParser:
     retrieval_workflow.add_argument("--baseline", type=Path)
     retrieval_workflow.add_argument("--output", type=Path)
     retrieval_workflow.add_argument("--write-baseline", type=Path)
+    retrieval_workflow.add_argument("--symbol-graph-ab", action="store_true", help="Run the same suite with graph OFF and ON")
 
     answers = subparsers.add_parser(
         "evaluate-answers",
@@ -628,7 +638,17 @@ def _retrieval_controller(
         coverage_checker=coverage_checker,
         source_policy=source_policy,
         observer=observer,
+        graph_expander=_code_graph_expander(settings),
     )
+
+
+def _code_graph_expander(settings: Settings):
+    if not settings.symbol_graph_enabled:
+        return None
+    from devcontext.code_graph.expansion import CodeGraphExpander
+    from devcontext.code_graph.store import CodeGraphStore
+    return CodeGraphExpander(CodeGraphStore(settings.database_url, settings.repository_name,
+                                           settings.symbol_graph_query_timeout_seconds))
 
 
 def _budget(args: argparse.Namespace, *, planned: bool) -> tuple[int, int]:
@@ -774,6 +794,28 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "ingest":
             summary = ingest(settings)
             print(json.dumps(asdict(summary), ensure_ascii=False, indent=2))
+        elif args.command == "evaluate-symbol-graph":
+            from devcontext.evaluation.symbol_graph_runner import run_fixture_evaluation, run_graph_evaluation, load_graph_cases
+            from devcontext.code_graph.store import CodeGraphStore
+            if args.fixture:
+                if args.cases:
+                    raise ValueError("--fixture uses the bundled source benchmark; omit --cases")
+                report = run_fixture_evaluation(settings)
+            else:
+                if args.cases is None:
+                    raise ValueError("Use --fixture or provide --cases matching the indexed repository")
+                report = run_graph_evaluation(CodeGraphStore(settings.database_url, settings.repository_name,
+                    settings.symbol_graph_query_timeout_seconds), load_graph_cases(args.cases))
+            output = args.output or project_root() / "artifacts" / "symbol-graph-v1-report.json"
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_text(json.dumps(report, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+            print(json.dumps({"output": str(output), "summary": report["summary"], "acceptance": report["acceptance"]}, ensure_ascii=False, indent=2))
+        elif args.command == "graph":
+            from devcontext.code_graph.query import CodeGraphQuery
+            from devcontext.code_graph.store import CodeGraphStore
+            result = CodeGraphQuery(CodeGraphStore(settings.database_url, args.repository or settings.repository_name,
+                                                   settings.symbol_graph_query_timeout_seconds)).query(args.operation, args.value)
+            print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
         elif args.command == "search":
             results = RetrievalService(settings).search(args.strategy, args.query, args.top_k)
             _print_results(results, args.format)
@@ -908,7 +950,7 @@ def main(argv: list[str] | None = None) -> int:
                 case: dict, mode: str, observer: RetrievalTraceRecorder
             ) -> RetrievalController:
                 return _retrieval_controller(
-                    settings,
+                    settings.model_copy(update={"symbol_graph_enabled": False}) if args.symbol_graph_ab else settings,
                     observer=observer,
                     frozen_case=case if mode == "frozen" else None,
                 )
@@ -929,6 +971,22 @@ def main(argv: list[str] | None = None) -> int:
                 source_policy_path=source_policy_path,
                 progress=lambda message: print(message, flush=True),
             )
+            if args.symbol_graph_ab:
+                from devcontext.evaluation.symbol_graph_runner import compare_workflow_graph_ab
+                graph_settings = settings.model_copy(update={"symbol_graph_enabled": True})
+                def graph_controller_factory(case, mode, observer):
+                    return _retrieval_controller(graph_settings, observer=observer,
+                                                 frozen_case=case if mode == "frozen" else None)
+                graph_report = run_retrieval_workflow_evaluation(
+                    case_sets=case_sets, modes=modes, runs=args.runs,
+                    controller_factory=graph_controller_factory,
+                    only=[item for item in args.only.split(",") if item] if args.only else None,
+                    limit=args.limit, source_policy_path=source_policy_path,
+                    progress=lambda message: print(message, flush=True),
+                )
+                report["symbol_graph_ab"] = {"off": report["summary"], "on": graph_report,
+                    "comparison": compare_workflow_graph_ab(report, graph_report),
+                    "note": "Same strategy, budgets and initial cases; live planner/coverage calls may vary. Graph traces distinguish direct additions from follow-up changes."}
             baseline_path = (
                 args.baseline or benchmark_root / "baselines" /
                 "retrieval-workflow-v1.json"
@@ -965,6 +1023,7 @@ def main(argv: list[str] | None = None) -> int:
                         "acceptance": report["acceptance"],
                         "quality_passed": report["quality_passed"],
                         "baseline_comparison": report["baseline_comparison"],
+                        **({"symbol_graph_ab": report["symbol_graph_ab"]["comparison"]} if args.symbol_graph_ab else {}),
                     },
                     ensure_ascii=False,
                     indent=2,

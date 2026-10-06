@@ -262,7 +262,7 @@ V1 不判断 Citation 是否在语义上真正支持对应结论，也不实现 
 
 ## 设计边界
 
-当前版本不包含 LangChain、LangGraph、FastAPI、Web UI、SymbolSolver、调用图、增量索引或近似向量索引。`docs/` 中的自有项目文档可以提交；`docs/参考项目/` 及外部 `my12306` 数据源继续排除在 Git 之外。
+当前版本不包含 LangChain、LangGraph、FastAPI、Web UI、增量索引或近似向量索引。Symbol Graph V1 支持仓库内静态代码关系索引，自动检索增强默认关闭。`docs/` 中的自有项目文档可以提交；`docs/参考项目/` 及外部 `my12306` 数据源继续排除在 Git 之外。
 
 
 ### 使用 APINebula 文字模型
@@ -349,3 +349,21 @@ Planner 最多修正一次，修正输入包含原始响应及具体字段错误
 仍无法执行 Full 时，且未发布正文，使用同一批证据、同一模型与思考档位执行一次普通 Markdown 正文兜底，不重新检索。兜底先缓冲再整体发布；正常结束且正文非空为 complete，截断或异常但有正文为 partial，无正文为 failed。已发布章节后出错不兜底、不续写、不重放。HTTP 400/401/402/403/404 等配置、权限或余额错误不重复调用；显式硬截止仍停止后续调用。
 
 Debug 的 `delivery_path` 区分 `full`、`full_repaired`、`full_direct_fallback`；正文兜底也会在普通结果信息中明确标记。兜底计作实际一个交付单元，不把原蓝图章节计为已完成。`--perf-json` 保存原始规划响应、警告、重试、兜底原因及分阶段耗时。最多五次回答模型调用，无无限重试。
+
+## Symbol Graph V1
+
+`ingest` 使用 JavaParser + SymbolSolver 两阶段分析仓库源码，并在同一事务中写入 Chunk、Symbol、Edge。支持 CLASS、INTERFACE、METHOD、CONSTRUCTOR，以及 EXTENDS、IMPLEMENTS、CALLS、CONSTRUCTS、OVERRIDES。无法可靠解析的声明保留 Chunk，无法解析的关系不生成猜测边；重复身份和无效引用属于致命契约错误，不能覆盖旧索引。
+
+```powershell
+uv run devcontext ingest
+uv run devcontext graph symbol PayServiceImpl --json
+uv run devcontext graph callees 'M:完整包名.PayServiceImpl#payCallback(java.lang.String)' --json
+uv run devcontext evaluate-symbol-graph --fixture
+uv run devcontext evaluate-retrieval-workflow --suite l1.5 --mode frozen --symbol-graph-ab
+```
+
+配置 `SYMBOL_GRAPH_ENABLED=true` 后，Fast/Full 共用的 RetrievalController 在已有检索之后添加图证据。现有 keyword/vector/hybrid 策略不变；`SearchExecution.results` 和 `source_candidates` 保留原始检索语义，增强结果放在独立的 `graph_results`，进入证据池时合并。CODE、BOTH、ANY 可以增强其代码侧；DOCUMENT 不增强。每个 action 最多 3 个锚点、2 条物理关系边、每节点 5 个邻居、8 个新增 Chunk，OVERRIDES 计一跳。
+
+`SYMBOL_GRAPH_QUERY_TIMEOUT_SECONDS=2` 是查询安全超时，受请求 Deadline 约束。100ms 仅为图增强 P95 评测目标，不用于提前跳过请求。图缺失或查询失败保留基础检索结果，并记录独立 Trace。
+
+受控 fixture 评测使用固定候选与 Oracle Coverage，不调用 embedding/LLM，临时快照在结束后清理；不能据此推断真实业务召回或回答准确率。真实仓库的 OFF/ON 对照使用 `evaluate-retrieval-workflow --symbol-graph-ab`，会沿用该评测原有的 embedding/LLM 调用。更多契约、限制和验证结果见 [Symbol Graph V1 实现与验收](docs/V4-graph等功能规划/03-symbol-graph-v1实现与验收.md)。

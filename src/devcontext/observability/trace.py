@@ -130,6 +130,7 @@ class PerfRecorder:
     embedding_calls: list[EmbeddingCallTrace] = field(default_factory=list)
     retrieval_actions: list[RetrievalActionTrace] = field(default_factory=list)
     section_executions: list[SectionExecutionTrace] = field(default_factory=list)
+    graph_expansions: list[Any] = field(default_factory=list)
 
     def repeated_embeddings(self) -> dict[str, int]:
         """Queries embedded more than once in this request, with their counts.
@@ -168,4 +169,5 @@ class PerfRecorder:
             "section_executions": [
                 section.to_dict() for section in self.section_executions
             ],
+            "graph_expansions": [trace.to_dict() for trace in self.graph_expansions],
         }
