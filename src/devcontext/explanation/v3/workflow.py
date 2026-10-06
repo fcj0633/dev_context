@@ -4,7 +4,8 @@ import time
 from devcontext.context.budget import TokenBudgetPolicy
 from devcontext.deadline import request_deadline, remaining_seconds
 from devcontext.explanation.budget import OutputBudget
-from devcontext.explanation.v3.errors import UnsupportedQuestionKind
+from devcontext.explanation.v3.errors import UnsupportedQuestionKind, PlannerFailure, EvidencePackUnavailable
+from devcontext.llm.errors import recoverable
 from devcontext.explanation.v3.evidence_organizer import build_writer_evidence_pack, reconcile_evidence
 from devcontext.explanation.v3.prompts import writer_messages
 from devcontext.models import AnswerResult
@@ -17,6 +18,7 @@ def run_v3(host, request, package, *, on_section=None):
     blueprint = pack = budget = None
     trace = {"generation_mode": "v3", "completion_status": "failed", "sections_emitted": 0, "stream_partial": False}
     sections = ()
+    fallback_reason = None
     deadline_seconds = None if request.policy else getattr(host, "request_timeout_seconds", 180)
     with request_deadline(deadline_seconds, started=started):
         try:
@@ -56,18 +58,48 @@ def run_v3(host, request, package, *, on_section=None):
                 finally:
                     stages.append(_stage("teaching_evidence_pack", t, "compression", None, None))
             if not decision.allowed:
-                raise ValueError("V3 Writer 提示词、必要证据及输出预留超出模型窗口")
+                raise EvidencePackUnavailable("V3 Writer 提示词、必要证据及输出预留超出模型窗口")
             remaining_seconds()
             t = time.perf_counter()
+            if hasattr(host.v3_writer, "capabilities"):
+                host.v3_writer.capabilities = host.capabilities
+                host.v3_writer.estimator = host.estimator
             sections, trace = host.v3_writer.write(request.original_query, blueprint, pack, budget,
                 request_started=started, on_section=on_section, messages=messages)
             stages.append(_stage("teaching_draft", t, "llm", host.v3_writer.last_client, "high"))
             trace["writer_prompt_estimated_tokens"] = prompt_tokens
+            if not sections and trace["completion_status"] == "failed" and recoverable(getattr(host.v3_writer, "last_error", None)):
+                fallback_reason = trace.get("error")
         except Exception as exc:
             trace["error"] = str(exc)
             trace["planner_response"] = getattr(host.v3_planner, "last_response", None)
             if isinstance(exc, UnsupportedQuestionKind):
                 trace.update(question_kind="UNSUPPORTED", question_form=exc.question_form, rationale=exc.rationale)
+            elif recoverable(exc) or isinstance(exc, EvidencePackUnavailable):
+                fallback_reason = str(exc)
+        if fallback_reason and not sections:
+            from devcontext.explanation.v3.fallback import write_direct
+            native_trace = trace
+            t = time.perf_counter()
+            fallback_client = None
+            try:
+                remaining_seconds()
+                sections, trace, fallback_client = write_direct(host.v3_writer.client_factory, request, package, pack,
+                    host.capabilities, host.estimator, started=started, on_section=on_section)
+                trace["fallback_reason"] = fallback_reason
+                trace["full_trace"] = native_trace
+                trace["original_sections_planned"] = len(blueprint.sections) if blueprint else None
+            except Exception as exc:
+                trace = native_trace
+                trace["fallback_reason"] = fallback_reason
+                trace["fallback_error"] = str(exc)
+                trace["error"] = str(exc)
+                trace["completion_status"] = "failed"
+            finally:
+                stages.append(_stage("teaching_fallback_draft", t, "llm", fallback_client, "high"))
+        if trace.get("delivery_path") != "full_direct_fallback":
+            repaired = bool(blueprint and blueprint.warnings) or len(getattr(host.v3_planner, "attempts", [])) > 1 or trace.get("stream_retry_count", 0) > 0
+            trace["delivery_path"] = "full_repaired" if repaired else "full"
         trace["total_elapsed_ms"] = (time.perf_counter()-started)*1000
         trace["deadline_seconds"] = request.policy.hard_timeout_seconds if request.policy else deadline_seconds
         trace["planner_attempts"] = getattr(host.v3_planner, "attempts", [])

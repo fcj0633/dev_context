@@ -84,6 +84,14 @@ class EvidenceDrivenWorkflow:
         self.context_budget_override = context_budget_override
 
     def run(self, query: str, top_k: int, *, on_section=None) -> AgenticAnswerResult:
+        runtime = getattr(self.teaching_workflow, "runtime_options", None)
+        if (self.request_policy and self.request_policy.profile == "full") or getattr(runtime, "generation_mode", None) == "v3":
+            from devcontext.llm.errors import fatal_request_scope
+            with fatal_request_scope():
+                return self._run_with_deadline(query, top_k, on_section=on_section)
+        return self._run_with_deadline(query, top_k, on_section=on_section)
+
+    def _run_with_deadline(self, query: str, top_k: int, *, on_section=None) -> AgenticAnswerResult:
         self.on_section = on_section
         if self.request_policy is not None:
             from devcontext.deadline import request_deadline

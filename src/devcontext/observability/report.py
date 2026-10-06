@@ -20,6 +20,7 @@ TOP_LEVEL_STAGES: tuple[str, ...] = (
     "teaching_planning_v3",
     "teaching_evidence_pack",
     "teaching_draft",
+    "teaching_fallback_draft",
     "teaching_review",
     "teaching_revision",
 )
@@ -60,7 +61,7 @@ def build_perf_report(
     calls = [call.to_dict() for call in recorder.llm_calls]
     if policy:
         for call in calls:
-            call["requested_reasoning_effort"] = policy["reasoning_effort"] if call["stage"] in {"explanation_planning", "teaching_planning_v3", "teaching_draft"} else "low"
+            call["requested_reasoning_effort"] = policy["reasoning_effort"] if call["stage"] in {"explanation_planning", "teaching_planning_v3", "teaching_draft", "teaching_fallback_draft"} else "low"
             if call["reasoning_effort"] is None:
                 call["reasoning_omission_reason"] = "model capability does not declare requested effort support"
     sections = [item for item in recorder.section_executions if not item.revision]

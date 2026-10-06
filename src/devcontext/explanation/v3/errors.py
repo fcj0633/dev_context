@@ -1,5 +1,9 @@
 class PlannerFailure(ValueError):
-    pass
+    def __init__(self, message, *, issues=None, recoverable=True):
+        super().__init__(message)
+        self.issues = issues or [{"code": "BLUEPRINT_INVALID", "path": "$", "id": None,
+                                  "expected": "executable blueprint", "actual": message}]
+        self.recoverable = recoverable
 
 
 class UnsupportedQuestionKind(ValueError):

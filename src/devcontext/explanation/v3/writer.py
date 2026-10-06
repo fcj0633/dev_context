@@ -7,6 +7,8 @@ from devcontext.explanation.grounding import grounding_issues
 from devcontext.explanation.stream_writer import SectionParser, validate_section
 from devcontext.explanation.v3.prompts import writer_messages
 from devcontext.llm.streaming import StreamFailure
+from devcontext.llm.client import LLMMessage
+from devcontext.llm.errors import recoverable
 from devcontext.observability import llm_stage, mark_last_call_wasted
 
 
@@ -15,6 +17,9 @@ class TeachingWriterV3:
         self.client_factory = client_factory
         self.permissive = permissive
         self.last_client = None
+        self.last_error = None
+        self.capabilities = None
+        self.estimator = None
 
     def write(self, question, blueprint, pack, budget, *, request_started, on_section=None, messages=None):
         messages = messages or writer_messages(question, blueprint, pack, universal=self.permissive)
@@ -28,12 +33,15 @@ class TeachingWriterV3:
         grounding_warnings = []
         rejected_section = None
         rejected_protocol_buffer = None
+        self.last_error = None
         for attempt in range(2):
             parser = SectionParser(s.id for s in pack.sections)
             iterator = None
             started = time.perf_counter()
             usage = {}
             error = None
+            raw_parts = []
+            finish_reason = None
             try:
                 self.last_client = self.client_factory()
                 if hasattr(self.last_client, "max_tokens"):
@@ -46,6 +54,7 @@ class TeachingWriterV3:
                     for event in iterator:
                         remaining_seconds()
                         if event.type == "content":
+                            raw_parts.append(event.text)
                             if finished:
                                 raise StreamFailure("content after finish")
                             if event.text.strip() and first_content is None:
@@ -94,11 +103,12 @@ class TeachingWriterV3:
                 status = "complete"
                 retryable = False
             except Exception as exc:
+                self.last_error = exc
                 error = str(exc)
                 rejected_protocol_buffer = parser.buffer[:4000]
                 failed_section = failed_section or parser.next_id
                 status = "partial" if sections else "failed"
-                retryable = getattr(exc, "retryable", False)
+                retryable = recoverable(exc)
             finally:
                 if iterator is not None and hasattr(iterator, "close"):
                     with llm_stage("teaching_draft", "v3"):
@@ -108,7 +118,9 @@ class TeachingWriterV3:
                 for key, count in client_usage.items():
                     if type(count) is int:
                         totals[key] = totals.get(key, 0) + count
-                attempts.append({"attempt": attempt+1, "elapsed_ms": (time.perf_counter()-started)*1000, "error": error, "usage": client_usage})
+                attempts.append({"attempt": attempt+1, "elapsed_ms": (time.perf_counter()-started)*1000, "error": error,
+                                 "usage": client_usage, "response": "".join(raw_parts),
+                                 "finish_reason": finish_reason, "model": getattr(self.last_client, "model", None)})
             if status == "complete" or sections or attempt or not retryable:
                 break
             try:
@@ -117,6 +129,15 @@ class TeachingWriterV3:
                 break
             if remaining is not None and remaining < 60:
                 break
+            outline = "\n".join(f"<<<SECTION:{s.id}>>>\n## {s.title}\n（正文）\n<<<END_SECTION:{s.id}>>>" for s in pack.sections)
+            correction = [*messages]
+            if raw_parts:
+                correction.append(LLMMessage("assistant", "".join(raw_parts)))
+            correction.append(LLMMessage("user", f"上次尚未发布正文。错误：{error}。重新输出全部章节，精确协议如下：\n{outline}"))
+            if self.capabilities and self.estimator and sum(self.estimator.estimate(m.content) for m in correction) + budget.max_output_tokens + 1024 > self.capabilities.context_window:
+                attempts[-1]["retry_skipped"] = "correction exceeds model window"
+                break
+            messages = correction
             mark_last_call_wasted("V3 stream rejected before publication", stage="teaching_draft")
         trace = {"generation_mode": "v3", "completion_status": status, "error": error,
                  "failed_section": failed_section, "sections_planned": len(pack.sections), "sections_emitted": len(sections),

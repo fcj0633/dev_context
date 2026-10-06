@@ -302,7 +302,7 @@ uv run devcontext ask "问题" --profile full --hard-timeout 300 --perf-json art
 可选 `ANSWER_HARD_TIMEOUT_SECONDS` / `--hard-timeout` 从检索开始计时。
 外部调用仍有超时：Fast Planner 180 秒、Writer 240 秒；Full Planner 300 秒、Writer 600 秒；检索 LLM 120 秒、嵌入 30 秒、数据库连接 10 秒/查询 30 秒。
 `--debug` 直接显示各阶段耗时、模型、请求档位、实际传参和首节发布时间；`--perf-json` 保存正文、蓝图及诊断。
-`complete` 表示计划正常交付，不是事实审查认证；部分发布后失败返回 partial，不重放已发布章节。
+`complete` 表示当前交付路径正常完成，不是事实审查认证；部分发布后失败返回 partial，不重放已发布章节。
 
 Fast/Full 支持 WHAT、WHY、HOW、COMPARE、DEBUG、LOCATE、GENERAL；空检索仍可解释通用原理，定位未命中不会编造文件路径。
 Full 保留 WHY/HOW 骨架，其他问题采用适配结构；Fast 使用合并检索规划与最多一轮补检。
@@ -339,3 +339,13 @@ uv run devcontext ask "详细解释当前购票占座的数据一致性是如何
 | ANSWER_FULL_WRITER_TIMEOUT_SECONDS | 600 | Full Writer 单次调用超时 |
 
 Full 正常只有 Planner、Organizer、Writer；回答模型调用两次，无 Reviewer。恢复 WHY/HOW 专用场景、完整示范与依赖覆盖检查，WHAT 用职责、关系和贯穿例子解释。证据不足缩小具体断言，必要证据超窗口明确失败。章节流式发布后不重试、不重放；complete 只表示完整交付，不认证内容质量。
+
+## Full 结构恢复与正文兜底
+
+Full 正常路径仍为一次 Planner、一次 Writer。蓝图中的重复编号和悬空核心引用需要修正；合法但跳号的编号可保留。非法场景会设为 NONE，清空章节场景引用，保留机制骨架，不猜测分叉父节点。UNKNOWN 结论不会作为已建立保证。
+
+Planner 最多修正一次，修正输入包含原始响应及具体字段错误；Writer 首节发布前最多重试一次，携带错误与精确章节协议。修正输入超模型窗口时跳过重试。两次 Planner 响应及 Writer 拒绝输出均进入诊断。
+
+仍无法执行 Full 时，且未发布正文，使用同一批证据、同一模型与思考档位执行一次普通 Markdown 正文兜底，不重新检索。兜底先缓冲再整体发布；正常结束且正文非空为 complete，截断或异常但有正文为 partial，无正文为 failed。已发布章节后出错不兜底、不续写、不重放。HTTP 400/401/402/403/404 等配置、权限或余额错误不重复调用；显式硬截止仍停止后续调用。
+
+Debug 的 `delivery_path` 区分 `full`、`full_repaired`、`full_direct_fallback`；正文兜底也会在普通结果信息中明确标记。兜底计作实际一个交付单元，不把原蓝图章节计为已完成。`--perf-json` 保存原始规划响应、警告、重试、兜底原因及分阶段耗时。最多五次回答模型调用，无无限重试。

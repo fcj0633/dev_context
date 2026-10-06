@@ -8,6 +8,7 @@ from devcontext.explanation.v3.prompts import planner_prompt, compact
 from devcontext.explanation.v3.validation import parse_teaching_plan
 from devcontext.llm.client import LLMMessage
 from devcontext.observability import llm_stage, mark_last_call_wasted
+from devcontext.llm.errors import recoverable
 
 
 class TeachingPlannerV3:
@@ -18,6 +19,7 @@ class TeachingPlannerV3:
         self.last_client = None
         self.attempts = []
         self.last_response = None
+        self.last_error = None
 
     def plan(self, request, package):
         payload = _payload(request, package)
@@ -42,8 +44,10 @@ class TeachingPlannerV3:
         messages = [LLMMessage("system", system), LLMMessage("user", compact(payload))]
         self.attempts = []
         self.last_response = None
+        self.last_error = None
         for attempt in range(2):
             started = time.perf_counter()
+            response = None
             try:
                 self.last_client = self.client_factory()
                 if hasattr(self.last_client, "max_tokens"):
@@ -61,20 +65,40 @@ class TeachingPlannerV3:
                     result = parse_answer_blueprint(response, allowed_labels=allowed)
                 else:
                     result = parse_teaching_plan(response, allowed_labels=allowed)
-                self.attempts.append({"attempt": attempt+1, "elapsed_ms": (time.perf_counter()-started)*1000, "error": None})
+                self.attempts.append({"attempt": attempt+1, "elapsed_ms": (time.perf_counter()-started)*1000,
+                                      "error": None, "response": response, "issues": [], "warnings": list(result.warnings),
+                                      "model": getattr(self.last_client, "model", None),
+                                      "reasoning_sent": getattr(self.last_client, "reasoning_effort", None),
+                                      "finish_reason": getattr(self.last_client, "last_finish_reason", None)})
                 return result
             except UnsupportedQuestionKind:
                 raise
             except RequestDeadlineExceeded:
                 raise
             except Exception as exc:
+                self.last_error = exc
                 partial = getattr(self.last_client, "last_partial_response", None)
                 if partial:
                     self.last_response = partial
-                self.attempts.append({"attempt": attempt+1, "elapsed_ms": (time.perf_counter()-started)*1000, "error": str(exc)})
+                response = response or partial
+                issues = getattr(exc, "issues", [])
+                self.attempts.append({"attempt": attempt+1, "elapsed_ms": (time.perf_counter()-started)*1000,
+                                      "error": str(exc), "response": response, "issues": issues,
+                                      "model": getattr(self.last_client, "model", None),
+                                      "finish_reason": getattr(self.last_client, "last_finish_reason", None)})
                 mark_last_call_wasted("V3 blueprint rejected", stage="teaching_planning_v3")
                 remaining = remaining_seconds()
+                if not recoverable(exc):
+                    raise
                 if attempt or (remaining is not None and remaining < 90):
-                    raise PlannerFailure(str(exc)) from exc
-                messages.append(LLMMessage("user", "上次输出未通过结构检查：" + str(exc) + "。请重新输出完整合法蓝图，保持证据边界。"))
+                    raise PlannerFailure(str(exc), issues=issues) from exc
+                correction = [*messages]
+                if response:
+                    correction.append(LLMMessage("assistant", response))
+                correction.append(LLMMessage("user", "上次输出未通过检查：" + compact(issues or [{"code": "CALL_FAILED", "actual": str(exc)}]) +
+                                             "。修正这些具体错误，重新输出完整合法蓝图，保持证据边界。"))
+                if sum(self.estimator.estimate(m.content) for m in correction) + reserve + 1024 > self.capabilities.context_window:
+                    self.attempts[-1]["retry_skipped"] = "correction exceeds model window"
+                    raise PlannerFailure("Planner 修正输入超过模型窗口，进入正文兜底") from exc
+                messages = correction
         raise PlannerFailure("Planner did not produce blueprint")

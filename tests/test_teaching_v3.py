@@ -77,8 +77,9 @@ def test_complete_examples_are_executable_and_match_writer_protocol(kind):
 def test_unknown_cannot_be_promoted_to_established_guarantee():
     raw = load_demo("HOW")["blueprint"]
     raw["how_spine_tail"]["established_guarantee_claim_ids"].append("C4")
-    with pytest.raises(PlannerFailure, match="unknown cannot"):
-        parse(raw)
+    bp = parse(raw)
+    assert "C4" not in bp.data["how_spine_tail"]["established_guarantee_claim_ids"]
+    assert "C4" in bp.data["how_spine_tail"]["unknown_boundary_claim_ids"]
 
 
 def test_redundant_supported_form_is_derived_without_reclassifying():
@@ -107,8 +108,13 @@ def test_broken_cross_references_are_rejected(change):
             s["goal_ids"] = ["G1"]
     else:
         raw["scenario"]["checkpoints"][0]["parent_checkpoint_id"] = "K3"
-    with pytest.raises(PlannerFailure):
-        parse(raw)
+    if change in {"checkpoint", "parent"}:
+        bp = parse(raw)
+        assert bp.data["scenario"]["kind"] == "NONE"
+        assert any(w.startswith("SCENARIO_DISABLED:") for w in bp.warnings)
+    else:
+        with pytest.raises(PlannerFailure):
+            parse(raw)
 
 
 def test_spine_and_checkpoint_dependencies_enter_pack_without_owner_reference():

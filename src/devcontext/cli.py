@@ -277,6 +277,8 @@ def _print_agentic_answer(
         _print_requirement_statuses(trace.final_sufficiency)
     print(f"Retries: {trace.retry_count}")
     teaching_status = (trace.teaching or {}).get("completion_status")
+    if (trace.teaching or {}).get("delivery_path") == "full_direct_fallback":
+        print("Delivery path: full_direct_fallback (Full 正文兜底)")
     if teaching_status in {"failed", "partial"}:
         print(f"Generation status: {teaching_status}; {(trace.teaching or {}).get('error')}")
     if not answer_already_published:
@@ -314,6 +316,9 @@ def _print_teaching_summary(teaching: dict | None) -> None:
     if policy:
         print(f"\nAnswer profile: {policy['profile']}; status: {teaching.get('completion_status')}; intent: {teaching.get('question_kind', policy['primary_intent'])}")
         print(f"Sections: {teaching.get('sections_emitted', 0)} / {teaching.get('sections_planned', 0)}")
+        print(f"Delivery path: {teaching.get('delivery_path', 'full')}")
+        if teaching.get("fallback_reason"):
+            print(f"Fallback reason: {teaching['fallback_reason']}")
         print(f"Total request: {teaching.get('total_elapsed_ms', 0)/1000:.2f}s")
         return
     if teaching.get("generation_mode") == "v3":

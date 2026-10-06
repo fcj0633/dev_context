@@ -21,6 +21,7 @@ class StreamFailure(RuntimeError):
     def __init__(self, message: str, *, retryable: bool = True):
         super().__init__(message)
         self.retryable = retryable
+        self.recoverable = retryable
 
 
 def parse_sse(chunks: Iterable[bytes]) -> Iterator[StreamEvent]:
@@ -139,8 +140,8 @@ def curl_stream(client, messages: Sequence[LLMMessage]) -> Iterator[bytes]:
                 status_codes = re.findall(r"HTTP/\S+\s+(\d{3})", headers.read_text(encoding="utf-8")) if headers.exists() else []
                 status = int(status_codes[-1]) if status_codes else 0
                 if not 200 <= status < 300:
-                    raise StreamFailure(f"stream request failed (HTTP {status})",
-                                        retryable=status in {0, 408, 429} or status >= 500)
+                    from devcontext.llm.errors import http_failure
+                    raise http_failure(f"stream request failed (HTTP {status})", status)
             try:
                 process.stdin.write(config.encode("utf-8"))
                 process.stdin.close()
@@ -173,6 +174,8 @@ def curl_stream(client, messages: Sequence[LLMMessage]) -> Iterator[bytes]:
 
 
 def generate_stream(client, messages: Sequence[LLMMessage]) -> Iterator[StreamEvent]:
+    from devcontext.llm.errors import check_fatal_request
+    check_fatal_request()
     from devcontext.deadline import bounded_timeout
     original_timeout = client.timeout_seconds
     client.timeout_seconds = bounded_timeout(original_timeout)

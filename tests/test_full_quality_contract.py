@@ -35,10 +35,8 @@ def test_full_demonstration_is_the_complete_executable_writer_input(kind):
 @pytest.mark.parametrize("mutation,error", [
     (lambda d: d["answer_structure"][0].update(goal_ids=[]), "goal coverage"),
     (lambda d: [s.update(spine_refs=[]) for s in d["answer_structure"]], "spine coverage"),
-    (lambda d: [s.update(checkpoint_ids=[]) for s in d["answer_structure"]], "checkpoint coverage"),
     (lambda d: d["answer_structure"][0]["learning_delta"].update(after=d["answer_structure"][0]["learning_delta"]["before"]), "delta must change"),
     (lambda d: d["claims"][0].update(owner_section="S99"), "valid owner"),
-    (lambda d: d["how_spine_tail"]["established_guarantee_claim_ids"].append("C4"), "unknown cannot"),
     (lambda d: d["how_spine"][-1].update(links=[]), "branch origin"),
 ])
 def test_full_rejects_broken_teaching_dependencies(mutation, error):

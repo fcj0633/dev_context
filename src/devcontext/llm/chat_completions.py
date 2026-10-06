@@ -11,6 +11,7 @@ from collections.abc import Sequence
 from devcontext.llm.client import LLMMessage
 from devcontext.observability.recorder import record_llm_call
 from devcontext.deadline import bounded_timeout
+from devcontext.llm.errors import LLMRequestError, http_failure, check_fatal_request
 
 
 class ChatCompletionsLLMClient:
@@ -64,9 +65,11 @@ class ChatCompletionsLLMClient:
         taken as an argument, so the ``LLMClient`` protocol - and every test
         double that implements it - keeps its single-parameter shape.
         """
+        check_fatal_request()
         started = time.perf_counter()
         self.last_usage = {}
         self.last_finish_reason = None
+        self.last_partial_response = None
         try:
             content = self._generate(messages)
         except Exception as exception:
@@ -111,7 +114,7 @@ class ChatCompletionsLLMClient:
             raise ValueError("messages must not be empty")
         executable = shutil.which("curl.exe") or shutil.which("curl")
         if executable is None:
-            raise RuntimeError(f"{self.display_name} request requires curl, but curl is unavailable")
+            raise LLMRequestError(f"{self.display_name} request requires curl, but curl is unavailable")
 
         body = {
             "model": self.model,
@@ -161,8 +164,8 @@ class ChatCompletionsLLMClient:
                 )
                 self.last_latency_ms = (time.perf_counter() - started) * 1000
             except subprocess.TimeoutExpired as exception:
-                raise RuntimeError(
-                    f"{self.display_name} request timed out after {self.timeout_seconds} seconds"
+                raise LLMRequestError(
+                    f"{self.display_name} request timed out after {self.timeout_seconds} seconds", retryable=True, category="transient"
                 ) from exception
         finally:
             if request_path is not None:
@@ -179,8 +182,8 @@ class ChatCompletionsLLMClient:
                 if value
             )
             message = message.replace(self.api_key, "[redacted]")
-            raise RuntimeError(
-                f"{self.display_name} request failed (HTTP {status_code}): {message or 'unknown error'}"
+            raise http_failure(
+                f"{self.display_name} request failed (HTTP {status_code}): {message or 'unknown error'}", status_code
             )
         try:
             payload = json.loads(response_body)
@@ -197,13 +200,14 @@ class ChatCompletionsLLMClient:
                 if isinstance(details, dict) and type(details.get("reasoning_tokens")) is int:
                     self.last_usage["reasoning_tokens"] = details["reasoning_tokens"]
         except (json.JSONDecodeError, KeyError, IndexError, TypeError) as exception:
-            raise RuntimeError(f"{self.display_name} returned an invalid response payload") from exception
+            raise LLMRequestError(f"{self.display_name} returned an invalid response payload", retryable=True, category="response") from exception
         if finish_reason != "stop":
-            raise RuntimeError(
-                f"{self.display_name} generation did not complete normally: finish_reason={finish_reason}"
+            self.last_partial_response = content if isinstance(content, str) else None
+            raise LLMRequestError(
+                f"{self.display_name} generation did not complete normally: finish_reason={finish_reason}", retryable=True, category="truncation"
             )
         if not isinstance(content, str) or not content.strip():
-            raise RuntimeError(f"{self.display_name} returned an empty answer")
+            raise LLMRequestError(f"{self.display_name} returned an empty answer", retryable=True, category="response")
         return content.strip()
 
     @staticmethod
