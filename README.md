@@ -45,7 +45,7 @@ uv run devcontext ask "OrderServiceImpl.createTicketOrder 如何保证事务和�
 uv run devcontext ask "订单超时关闭的设计依据是什么？" --top-k 10 --max-chars 8000
 uv run devcontext ask "购票库存参数由哪个责任链 handler 校验，为什么要先挡掉非法请求？" --debug
 uv run devcontext ask "详细解释当前购票占座的数据一致性是如何保证的" --answer-mode explain --debug
-uv run devcontext ask "详细解释项目的余票桶是如何设计的" --answer-mode teach --depth detailed --debug
+uv run devcontext ask "详细解释项目的余票桶是如何设计的" --answer-mode teach --debug
 ```
 
 `--answer-mode` 三种取值的差别、以及 `teach` 为什么更贵，见下文 Teaching Explain。
@@ -71,7 +71,7 @@ uv run devcontext evaluate-retrieval-workflow --suite l1.5 --mode live --runs 3
 | `devcontext ingest` | 全量重建 `my12306` 索引 |
 | `devcontext search` | 运行关键词、向量或混合检索 |
 | `devcontext context` | 按问题类型检索证据，并构建带 `[C1]` 引用和字符预算的 LLM-ready Context |
-| `devcontext ask` | 按问题类型检索，检查证据充分性，必要时定向改写并有限重试，最后生成带 Citation 的回答。`--answer-mode` 取 `legacy`（模板式单次生成）、`explain`（证据驱动）或 `teach`（规划、逐节生成、编排、审稿）；`--depth` 取 `brief`/`standard`/`detailed`，`teach` 另支持 `deep` |
+| `devcontext ask` | 按问题类型检索，检查证据充分性，必要时定向改写并有限重试，最后生成带 Citation 的回答。`--answer-mode` 取 `legacy`（模板式单次生成）、`explain`（证据驱动）或 `teach`（规划、逐节生成、编排、审稿）；正文按理解任务自适应展开，不提供四档回答深度配置 |
 | `devcontext evaluate` | 运行 36 条分层基准问题，输出 Router Accuracy、分类指标、分段耗时、失败诊断和策略差异 |
 | `devcontext evaluate-retrieval-workflow` | 运行 18 条 L1.5 与 5 条关键回归案例，评估 RetrievalController 的证据覆盖、False READY、Context 保留和二次补查效果 |
 
@@ -91,11 +91,11 @@ Context Builder 的后续方向包括 tokenizer 预算、语义去重、相邻 C
 
 ## Evidence-driven Explain
 
-`ask --answer-mode explain` 启用“先找事实、再设计回答”的证据驱动路径。输入层只校验原始问题、回答模式、回答深度和显式 Context 预算；Evidence Planner 随后把原问题转换为 1–6 条可验证的证据需求。每条需求只描述要确认的项目事实、满足条件、优先级、时间范围和所需来源，不包含搜索 Query、回答目标、解释策略或章节结构。`--plan-only` 默认展示这一版 EvidencePlan；兼容期可用 `--plan-format legacy` 查看旧 QuestionPlan。
+`ask --answer-mode explain` 启用“先找事实、再设计回答”的证据驱动路径。输入层只校验原始问题、回答模式和显式 Context 预算；Evidence Planner 随后把原问题转换为 1–6 条可验证的证据需求。每条需求只描述要确认的项目事实、满足条件、优先级、时间范围和所需来源，不包含搜索 Query、回答目标、解释策略或章节结构。`--plan-only` 默认展示这一版 EvidencePlan；兼容期可用 `--plan-format legacy` 查看旧 QuestionPlan。
 
 Retrieval Controller 根据每条证据需求动态生成 SearchAction，并只调用系统已有的 keyword、vector、hybrid 与来源过滤能力。CORE 和 SUPPORTING 需求第一轮分别取得 5 个和 3 个候选；Coverage Checker 逐条检查来源与语义是否满足，只有仍为 PARTIAL 或 MISSING 的 CORE 才能执行第二条查询。第二轮会利用第一轮真实发现的类名、方法名、文件名、标题和明确缺口调整查询。单次请求最多 6 条需求、12 个逻辑 SearchAction 和两轮 Coverage 检查；检查器自身失败记为 UNVERIFIED，不冒充“没有证据”，也不会触发盲目补查。
 
-检索 Context 预算由证据计划复杂度决定，而不是由回答深度决定：单条且非双来源需求使用 8000 字符，2–3 条需求或存在一条 BOTH 使用 16000 字符，4–6 条需求或存在多条 BOTH/当前核心需求使用 28000 字符；显式 `--max-chars` 优先。因而同一问题的 `--depth brief` 与 `--depth detailed` 使用相同 EvidencePlan、SearchAction、检索预算和 Coverage，只在后续 AnswerPlan 与回答篇幅上不同。
+检索 Context 预算由证据计划复杂度决定，而不是由回答深度决定：单条且非双来源需求使用 8000 字符，2–3 条需求或存在一条 BOTH 使用 16000 字符，4–6 条需求或存在多条 BOTH/当前核心需求使用 28000 字符；显式 `--max-chars` 优先。正文篇幅由理解任务决定，不以固定深度档位改变检索范围。
 
 > 上面这套字符预算是 `legacy` 与 `explain` 两条路径的口径，保留不变以便与既有基线对比。`teach` 路径不走它——它从模型窗口推导每个视图的上限，见下文 Teaching Explain。
 
@@ -109,7 +109,7 @@ Package 的状态为 READY、PARTIAL、EMPTY 或 RETRIEVAL_FAILED：全部核心
 
 文档来源由 `config/source-policy.json` 按路径规则标记为验证报告、当前设计、普通文档、历史计划或未知来源；代码固定标记为当前实现。这些标记进入内部 Context、Answer Planner 和 `--debug` Trace，普通回答不会显示优先级。设计说明只能证明设计意图，历史或未来文档不能覆盖当前代码；无法消解的冲突必须在回答中明确说明。
 
-Answer Planner 只在 EvidencePackage 形成后决定回答目标、深度、解释策略、章节和目标篇幅。Requirement 不等于回答章节：一节可以组合多条证据需求，一条需求也可以服务于多个解释位置。detailed 固定审稿一次；standard 在冲突、零有效引用、结构失败、核心遗漏或篇幅失败时审稿；brief 默认不审稿。审稿失败保留原草稿，不阻断回答。最终 `AnswerResult` 仍保持原结构并剥离 Citation，`--debug` 会显示证据计划、SearchAction、Coverage、回答规划、冲突、审稿、来源及阶段耗时。
+Answer Planner 在 EvidencePackage 形成后决定回答目标、解释策略和章节。旧显式 explain 路径根据章节复杂度、冲突和结构问题决定审阅；Fast/Full 没有 Reviewer。审稿失败保留原草稿，不阻断回答。最终 `AnswerResult` 仍保持原结构并剥离 Citation，`--debug` 会显示证据计划、SearchAction、Coverage、回答规划、冲突、审稿、来源及阶段耗时。
 
 **当前默认回答模式已切换为 `teach`**（`--answer-mode` 不给就用它）。切换依据与尚未闭合的部分一并说明如下，不把未跑的门槛当作已通过：
 
@@ -158,6 +158,26 @@ EvidencePlan 回答"我要查什么"，ExplanationPlan 回答"这些事实应该
 计划器的其余硬约束：章节标题不得等于任何 Evidence Requirement 的 target（命名即调查项，说明是复制而非规划）；`LOCATION_ONLY` 最多 2 节（简单定位不该被过度规划）；`NEGATIVE_CORRECTION` 必须含 `MISCONCEPTION` 节。
 
 ### 生成：Fast / Deep 双路径
+
+普通 ask 默认 Fast＋低。下面记录旧生成路径，显式 `--teaching-generation-mode multi_pass` 可继续使用。
+`single_stream` 兼容参数现映射到 Fast：轻量 Micro Planner 一次规划，单个 Streaming Writer
+按章节连续生成，每节完整后检查引用及证据 allowlist，校验通过才发布给章节回调。
+该模式跳过 Composer、Reviewer 和 Revision，仍使用原有检索、证据工作区与模型。
+
+```powershell
+uv run devcontext ask "详细解释当前购票占座的数据一致性是如何保证的" --answer-mode teach --teaching-generation-mode single_stream --perf --perf-json artifacts/single-stream.json
+```
+
+新入口的 profile 参数优先于 ANSWER_PROFILE；显式 `--teaching-generation-mode multi_pass` 可使用旧流程。
+CLI 当前仍在生成结束后输出聚合答案，`--perf-json` 的 `stream` 字段提供首正文时间 TTFT、
+首个校验通过章节时间 TTFS、章节计数、重试和完成状态。它们以整个请求开始为原点，
+另有相对 Writer 开始的时间。发布章节前最多重试一次；发布后失败保留有效章节并标记
+`partial`，不重播或自动切换模式。无有效输出则标记 `failed`。
+
+需要复现实验时运行 `.venv\Scripts\python.exe scripts/run_single_stream_experiment.py`：
+只执行 Q1/Q3 每种模式一次，共四次请求，没有预热、质量裁判或自动重跑。
+产物保存在 `artifacts/single-stream-experiment/`；目录非空时拒绝覆盖，另一次实验须使用
+`--output` 指定新目录。结果与限制见 [Single-Stream 实验报告](docs/performance/05-single-stream-teaching-experiment.md)。
 
 节数 ≤ 3 且深度为 `brief`/`standard` 时走 **Fast Path**：一次生成。否则走 **Deep Path**：逐节生成，一节一次调用，每节**只喂该节绑定的证据**，最后交给 Composer 编排。
 
@@ -243,3 +263,89 @@ V1 不判断 Citation 是否在语义上真正支持对应结论，也不实现 
 ## 设计边界
 
 当前版本不包含 LangChain、LangGraph、FastAPI、Web UI、SymbolSolver、调用图、增量索引或近似向量索引。`docs/` 中的自有项目文档可以提交；`docs/参考项目/` 及外部 `my12306` 数据源继续排除在 Git 之外。
+
+
+### 使用 APINebula 文字模型
+
+项目 `.env` 设置 `LLM_PROVIDER=openai` 与 `OPENAI_MODEL=gpt-6.1-sol`。
+`CHATGPT_API_KEY` 和 `OPENAI_BASE_URL` 从环境读取；当前网关地址为
+`https://apinebula.ai/v1`。读取顺序为进程环境、项目 `.env`、Windows 用户环境、
+Windows 系统环境。密钥不必写进项目文件。
+
+OpenAI 模式下，检索规划、改写、覆盖检查、教学规划、正文和 Reviewer
+统一使用 `OPENAI_MODEL`，不继承 `DEEPSEEK_*_MODEL`；显式模型参数仍优先。
+百炼嵌入、数据库及现有索引保持原配置，无需重新入库。
+普通 ask 默认 Fast；可用 `--profile full` 或兼容参数 `--teaching-generation-mode v3` 显式选择 Full。
+切回 DeepSeek 时设置 `LLM_PROVIDER=deepseek`；调用失败不会自动切换供应商。
+
+
+APINebula 接入会分离返回正文开头的 `<think>...</think>` 推理前缀，
+传输与章节协议仍检查完整性，新流程的证据校验改为宽松策略。
+
+### 回答执行模式与思考深度
+
+新回答入口默认 **Fast＋低思考深度**；显式 `--profile full` 默认高。两档都支持
+`--reasoning-effort low|medium|high`，只控制回答 Planner/Writer；检索阶段使用低。
+正文按问题理解任务自适应展开；`--depth` 已移除，可在问题中说明简要或详细。
+模型没有声明支持所选档位时真正省略 `reasoning_effort`，使用模型默认行为，并在 debug 中显示。
+DeepSeek Flash 原生为 low/high/max，中档兼容值映射为高；本项目按用户选择省略 medium，不做映射。
+未知模型可通过 `LLM_SUPPORTED_REASONING_EFFORTS` 显式声明原生支持，不要只因网关接受参数就声明支持。
+
+```powershell
+uv run devcontext ask "详细解释项目为何要使用责任链校验。" --debug
+uv run devcontext ask "详细解释项目为何要使用责任链校验。" --profile full --debug
+uv run devcontext ask "问题" --profile full --reasoning-effort high
+uv run devcontext ask "问题" --profile full --hard-timeout 300 --perf-json artifacts/request.json
+```
+
+默认没有请求总时间截止，Fast 45 秒、Full 300 秒只是观测目标，超时不降档、不截断正文。
+可选 `ANSWER_HARD_TIMEOUT_SECONDS` / `--hard-timeout` 从检索开始计时。
+外部调用仍有超时：Fast Planner 180 秒、Writer 240 秒；Full Planner 300 秒、Writer 600 秒；检索 LLM 120 秒、嵌入 30 秒、数据库连接 10 秒/查询 30 秒。
+`--debug` 直接显示各阶段耗时、模型、请求档位、实际传参和首节发布时间；`--perf-json` 保存正文、蓝图及诊断。
+`complete` 表示当前交付路径正常完成，不是事实审查认证；部分发布后失败返回 partial，不重放已发布章节。
+
+Fast/Full 支持 WHAT、WHY、HOW、COMPARE、DEBUG、LOCATE、GENERAL；空检索仍可解释通用原理，定位未命中不会编造文件路径。
+Full 保留 WHY/HOW 骨架，其他问题采用适配结构；Fast 使用合并检索规划与最多一轮补检。
+`single_stream` / `v3` 兼容参数映射 Fast / Full。旧 `multi_pass`、`legacy`、`explain` 可显式使用，不能与新 Profile/思考参数混用。
+旧 `OPENAI_V3_REASONING_EFFORT`、`TEACHING_REQUEST_TIMEOUT_SECONDS` 不再控制新 Fast/Full。
+
+OpenAI 的 JSON 结果内部通过 SSE 收集，完成后才交给结构解析器，避免长非流式蓝图触发网关 524。
+
+
+## 当前 Full 教学流程与配置迁移
+
+普通 ask 默认 Fast＋low；Full 默认 high，按问题需要安排解释，章节和例子不再由四档深度控制。
+
+```powershell
+uv run devcontext ask "项目中的责任链校验是什么，它与业务流程是什么关系？" --profile full --debug
+uv run devcontext ask "详细解释项目为何要使用责任链校验。" --profile full --reasoning-effort high --debug
+uv run devcontext ask "详细解释当前购票占座的数据一致性是如何保证的。" --profile full --debug --perf-json artifacts/full-how.json
+```
+
+`--depth` 已移除；请在问题中表达简要或详细。旧计划/诊断中的深度字段读取时忽略，旧显式模式也不再用档位控制章节数、预算或审阅。`--teaching-generation-mode v3` 映射当前 Full，不还原历史版本。
+
+配置优先级为命令参数、进程环境、项目 .env、代码默认。`ANSWER_REASONING_EFFORT` 是全局覆盖项；不设置时 Fast 用 low、Full 用 high。思考参数只影响回答 Planner/Writer，检索阶段保持 low；能力未知时省略参数并在 debug 说明。
+
+| 配置 | 默认 | 行为 |
+|---|---:|---|
+| ANSWER_PROFILE | fast | 默认模式 |
+| ANSWER_REASONING_EFFORT | 未设置 | 可用 low/medium/high；显式值覆盖模式默认 |
+| ANSWER_HARD_TIMEOUT_SECONDS | 未设置 | 可选完整请求截止，包含检索和重试 |
+| ANSWER_FAST_LATENCY_TARGET_SECONDS | 45 | Fast 软观测目标 |
+| ANSWER_FULL_LATENCY_TARGET_SECONDS | 300 | Full 软观测目标，不中断或降档 |
+| ANSWER_PLANNER_TIMEOUT_SECONDS | 180 | Fast Planner 单次调用超时 |
+| ANSWER_WRITER_TIMEOUT_SECONDS | 240 | Fast Writer 单次调用超时 |
+| ANSWER_FULL_PLANNER_TIMEOUT_SECONDS | 300 | Full Planner 单次调用超时 |
+| ANSWER_FULL_WRITER_TIMEOUT_SECONDS | 600 | Full Writer 单次调用超时 |
+
+Full 正常只有 Planner、Organizer、Writer；回答模型调用两次，无 Reviewer。恢复 WHY/HOW 专用场景、完整示范与依赖覆盖检查，WHAT 用职责、关系和贯穿例子解释。证据不足缩小具体断言，必要证据超窗口明确失败。章节流式发布后不重试、不重放；complete 只表示完整交付，不认证内容质量。
+
+## Full 结构恢复与正文兜底
+
+Full 正常路径仍为一次 Planner、一次 Writer。蓝图中的重复编号和悬空核心引用需要修正；合法但跳号的编号可保留。非法场景会设为 NONE，清空章节场景引用，保留机制骨架，不猜测分叉父节点。UNKNOWN 结论不会作为已建立保证。
+
+Planner 最多修正一次，修正输入包含原始响应及具体字段错误；Writer 首节发布前最多重试一次，携带错误与精确章节协议。修正输入超模型窗口时跳过重试。两次 Planner 响应及 Writer 拒绝输出均进入诊断。
+
+仍无法执行 Full 时，且未发布正文，使用同一批证据、同一模型与思考档位执行一次普通 Markdown 正文兜底，不重新检索。兜底先缓冲再整体发布；正常结束且正文非空为 complete，截断或异常但有正文为 partial，无正文为 failed。已发布章节后出错不兜底、不续写、不重放。HTTP 400/401/402/403/404 等配置、权限或余额错误不重复调用；显式硬截止仍停止后续调用。
+
+Debug 的 `delivery_path` 区分 `full`、`full_repaired`、`full_direct_fallback`；正文兜底也会在普通结果信息中明确标记。兜底计作实际一个交付单元，不把原蓝图章节计为已完成。`--perf-json` 保存原始规划响应、警告、重试、兜底原因及分阶段耗时。最多五次回答模型调用，无无限重试。

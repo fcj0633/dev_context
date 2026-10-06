@@ -19,11 +19,7 @@ if TYPE_CHECKING:
     from devcontext.agentic.evidence_models import EvidencePackage
 
 
-DEPTH_LIMITS = {
-    "brief": (0, 2, 150, 500),
-    "standard": (2, 5, 800, 1800),
-    "detailed": (3, 8, 2200, 5000),
-}
+TASK_LIMITS = (0, 16, 0, 1000000)
 
 ANSWER_PLANNER_SYSTEM_PROMPT = """你是 DevContext-Java 的回答编排器。你只设计回答结构，不写最终长文。
 依据 Question Plan 与带 Citation 的 Context，先形成一个有证据支持的直接答案，再把调查项合并为读者容易理解的章节。
@@ -57,10 +53,10 @@ class AnswerPlanner:
             "known_gaps": list(unresolved_gaps),
             "context": context.rendered_text,
             "section_constraints": {
-                "minimum_sections": DEPTH_LIMITS[question_plan.answer_depth][0],
-                "maximum_sections": DEPTH_LIMITS[question_plan.answer_depth][1],
-                "minimum_total_target_chars": DEPTH_LIMITS[question_plan.answer_depth][2],
-                "maximum_total_target_chars": DEPTH_LIMITS[question_plan.answer_depth][3],
+                "minimum_sections": TASK_LIMITS[0],
+                "maximum_sections": TASK_LIMITS[1],
+                "minimum_total_target_chars": TASK_LIMITS[2],
+                "maximum_total_target_chars": TASK_LIMITS[3],
             },
             "output_schema": {
                 "direct_answer": "string",
@@ -102,18 +98,8 @@ class AnswerPlanner:
             "retrieval_state": evidence_package.retrieval_state,
             "available_citations": [item.citation.label for item in context.items],
             "context": context.rendered_text,
-            "depth_constraints": {
-                depth: {
-                    "minimum_sections": limits[0],
-                    "maximum_sections": limits[1],
-                    "minimum_total_target_chars": limits[2],
-                    "maximum_total_target_chars": limits[3],
-                }
-                for depth, limits in DEPTH_LIMITS.items()
-            },
             "output_schema": {
                 "answer_goal": "string",
-                "answer_depth": "brief|standard|detailed",
                 "direct_answer": "string",
                 "summary_citation_labels": ["C1"],
                 "explanation_strategy": "string",
@@ -130,9 +116,8 @@ class AnswerPlanner:
             },
         }
         system_prompt = ANSWER_PLANNER_SYSTEM_PROMPT + """
-回答深度、回答目标、解释策略和章节结构全部由本阶段决定；Evidence Requirement 只是事实覆盖契约，不是章节目录。
-不得按 Requirement 一一生成章节。若 answer_options.depth_override 非空，answer_depth 必须使用该值；否则根据用户问题决定。
-输出 JSON 还必须包含 answer_goal 和 answer_depth。"""
+回答目标、解释策略和章节结构由用户理解任务决定；Evidence Requirement 只是事实覆盖契约，不是章节目录。
+不得按 Requirement 一一生成章节，不固定字数。输出 JSON 还必须包含 answer_goal。"""
         self.last_client = self.llm_client_factory()
         response = self.last_client.generate([
             LLMMessage("system", system_prompt),
@@ -152,6 +137,8 @@ class AnswerPlanner:
             "direct_answer", "summary_citation_labels", "explanation_strategy",
             "sections", "unresolved_gaps", "conflicts",
         }
+        if isinstance(value, dict):
+            value.pop("answer_depth", None)
         if not isinstance(value, dict) or set(value) != required:
             raise AnswerPlanError("answer plan has invalid fields")
         allowed = {item.citation.label for item in context.items}
@@ -159,9 +146,7 @@ class AnswerPlanner:
         if not summary:
             raise AnswerPlanError("direct answer requires a summary citation")
         raw_sections = value["sections"]
-        minimum, maximum, min_chars, max_chars = DEPTH_LIMITS[
-            question_plan.answer_depth
-        ]
+        minimum, maximum, min_chars, max_chars = TASK_LIMITS
         if not isinstance(raw_sections, list) or not minimum <= len(raw_sections) <= maximum:
             raise AnswerPlanError("answer plan section count is invalid")
         sections: list[AnswerSection] = []
@@ -233,25 +218,20 @@ class AnswerPlanner:
         except json.JSONDecodeError as exception:
             raise AnswerPlanError("answer plan is not valid JSON") from exception
         required = {
-            "answer_goal", "answer_depth", "direct_answer",
+            "answer_goal", "direct_answer",
             "summary_citation_labels", "explanation_strategy", "sections",
             "unresolved_gaps", "conflicts",
         }
+        if isinstance(value, dict):
+            value.pop("answer_depth", None)
         if not isinstance(value, dict) or set(value) != required:
             raise AnswerPlanError("answer plan has invalid fields")
-        depth = value["answer_depth"]
-        if depth not in DEPTH_LIMITS:
-            raise AnswerPlanError("answer_depth is invalid")
-        override = request.answer_options.depth_override
-        if override is not None and depth != override:
-            raise AnswerPlanError("answer_depth does not honor the explicit override")
-
         context = evidence_package.context_bundle
         allowed = {item.citation.label for item in context.items}
         summary = _labels(value["summary_citation_labels"], allowed)
         if not summary:
             raise AnswerPlanError("direct answer requires a summary citation")
-        minimum, maximum, min_chars, max_chars = DEPTH_LIMITS[depth]
+        minimum, maximum, min_chars, max_chars = TASK_LIMITS
         raw_sections = value["sections"]
         if not isinstance(raw_sections, list) or not minimum <= len(raw_sections) <= maximum:
             raise AnswerPlanError("answer plan section count is invalid")
@@ -296,7 +276,6 @@ class AnswerPlanner:
             conflicts,
             "llm",
             _text(value["answer_goal"], "answer_goal"),
-            depth,
         )
 
 
@@ -304,7 +283,7 @@ def fallback_answer_plan(
     question_plan: QuestionPlan, context: ContextBundle, gaps: Sequence[str]
 ) -> AnswerPlan:
     labels = tuple(item.citation.label for item in context.items)
-    minimum, maximum, min_chars, max_chars = DEPTH_LIMITS[question_plan.answer_depth]
+    minimum, maximum, min_chars, max_chars = TASK_LIMITS
     selected = list(question_plan.sub_questions[:maximum])
     section_count = max(1, max(minimum, len(selected)))
     per_section = max(150, (min_chars + section_count - 1) // section_count)
@@ -339,7 +318,6 @@ def fallback_answer_plan(
         (),
         "fallback",
         question_plan.answer_goal or question_plan.intent_summary,
-        question_plan.answer_depth,
     )
 
 
@@ -349,10 +327,7 @@ def fallback_evidence_answer_plan(
 ) -> AnswerPlan:
     context = evidence_package.context_bundle
     labels = tuple(item.citation.label for item in context.items)
-    depth = request.answer_options.depth_override or _default_depth(
-        len(evidence_package.evidence_plan.requirements)
-    )
-    minimum, maximum, min_chars, _ = DEPTH_LIMITS[depth]
+    minimum, maximum, min_chars, _ = TASK_LIMITS
     requirements = list(evidence_package.evidence_plan.requirements)
     section_count = max(1, min(maximum, max(minimum, min(3, len(requirements)))))
     per_section = max(150, (min_chars + section_count - 1) // section_count)
@@ -382,7 +357,6 @@ def fallback_evidence_answer_plan(
         (),
         "fallback",
         f"依据当前项目证据回答：{request.original_query}",
-        depth,
     )
 
 
@@ -407,14 +381,6 @@ def _parse_conflicts(
             _text(raw["explanation"], "explanation"),
         ))
     return tuple(conflicts)
-
-
-def _default_depth(requirement_count: int) -> str:
-    if requirement_count <= 1:
-        return "brief"
-    if requirement_count <= 3:
-        return "standard"
-    return "detailed"
 
 
 def _text(value: object, name: str) -> str:

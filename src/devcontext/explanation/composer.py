@@ -57,7 +57,6 @@ class SectionComposer:
         payload = {
             "question": query,
             "core_mental_model": plan.core_mental_model,
-            "answer_depth": plan.answer_depth,
             "sections": [
                 {
                     "id": draft.section_id,

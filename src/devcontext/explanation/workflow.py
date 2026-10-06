@@ -33,6 +33,8 @@ from devcontext.explanation.reviewer import (
     needs_llm_review,
 )
 from devcontext.explanation.writer import TeachingDraft, TeachingWriter
+from devcontext.explanation.micro import TeachingRuntimeOptions, MicroSectionPlan, micro_budget
+from devcontext.explanation.v3.models import TeachingBlueprint
 from devcontext.models import AnswerResult, ContextBundle
 from devcontext.observability import (
     SectionExecutionTrace,
@@ -56,7 +58,7 @@ FIXED_PROMPT_TOKENS = 4_000
 @dataclass(frozen=True, slots=True)
 class TeachingAnswerResult:
     answer: AnswerResult
-    explanation_plan: ExplanationPlan | None
+    explanation_plan: ExplanationPlan | MicroSectionPlan | TeachingBlueprint | None
     # What the answer was written from, under workspace labels.
     context_bundle: ContextBundle
     draft: TeachingDraft | None
@@ -69,6 +71,9 @@ class TeachingAnswerResult:
     # Per-section costs. Child diagnostics of the teaching_draft stage, not a
     # partition of the request: they are counted inside it, never beside it.
     section_traces: tuple[SectionExecutionTrace, ...] = ()
+    completion_status: str = "complete"
+    failed_section: str | None = None
+    error: str | None = None
 
 
 class TeachingExplanationWorkflow:
@@ -90,6 +95,11 @@ class TeachingExplanationWorkflow:
         max_chars: int = DEFAULT_TEACHING_MAX_CHARS,
         capabilities: ModelCapabilities | None = None,
         estimator: TokenEstimator | None = None,
+        runtime_options: TeachingRuntimeOptions | None = None,
+        micro_planner=None,
+        streaming_writer=None,
+        v3_planner=None,
+        v3_writer=None,
     ) -> None:
         self.planner = planner
         self.writer = writer
@@ -101,12 +111,26 @@ class TeachingExplanationWorkflow:
         # character ceiling; model_capabilities alone made that possible.
         self.policy = TokenBudgetPolicy(self.capabilities)
         self.max_chars = max_chars
+        self.runtime_options = runtime_options or TeachingRuntimeOptions()
+        self.micro_planner = micro_planner
+        self.streaming_writer = streaming_writer
+        self.v3_planner = v3_planner
+        self.v3_writer = v3_writer
 
     def run(
         self,
         request: UserRequest,
         evidence_package: EvidencePackage,
+        *,
+        on_section=None,
     ) -> TeachingAnswerResult:
+        if (request.policy and request.policy.profile == "full") or self.runtime_options.generation_mode == "v3":
+            from devcontext.explanation.v3.workflow import run_v3
+            return run_v3(self, request, evidence_package, on_section=on_section)
+        if request.policy is not None:
+            return self._run_single_stream(request, evidence_package, on_section=on_section)
+        if self.runtime_options.generation_mode == "single_stream":
+            return self._run_single_stream(request, evidence_package, on_section=on_section)
         stages: list[Any] = []
 
         started = time.perf_counter()
@@ -226,6 +250,84 @@ class TeachingExplanationWorkflow:
             review=review,
             section_traces=tuple(section_traces),
         )
+
+    def _run_single_stream(self, request, package, *, on_section=None):
+        from devcontext.observability import mark_last_call_wasted
+
+        if self.micro_planner is None or self.streaming_writer is None:
+            raise ValueError("single_stream requires micro planner and streaming writer")
+        request_started = getattr(self, "request_started_at", time.perf_counter())
+        stages = []
+        plan = None
+        budget = None
+        bound = package.context_bundle
+        started = time.perf_counter()
+        try:
+            plan = self.micro_planner.plan(request, package)
+        except Exception as exc:
+            mark_last_call_wasted("micro plan rejected", stage="explanation_planning")
+            error = str(exc)
+            stages.append(_stage("explanation_planning", started, "failed",
+                                 self.micro_planner.last_client, "high"))
+            trace = {"generation_mode": "single_stream", "completion_status": "failed",
+                     "planning_error": error, "error": error, "stream_partial": False,
+                     "stream_retry_count": 0, "sections_emitted": 0}
+            return TeachingAnswerResult(AnswerResult("教学规划失败，未生成回答。", [], zero_valid_citation=True),
+                                        None, bound, None, tuple(stages), {"trace": trace},
+                                        completion_status="failed", error=error)
+        stages.append(_stage("explanation_planning", started, "llm",
+                             self.micro_planner.last_client, "high"))
+        budget = micro_budget(self.capabilities, len(plan.sections))
+        self._view_max_chars = self._view_char_budget(request.original_query, plan, budget)
+        started = time.perf_counter()
+        pack_done = False
+        try:
+            bound = self._bound_bundle(request.original_query, package, plan)
+            # The budget accounts for the full writer scaffolding, not just evidence.
+            from devcontext.explanation.stream_writer import STREAM_WRITER_PROMPT
+            fixed = self.estimator.estimate(STREAM_WRITER_PROMPT) + self.estimator.estimate(
+                json.dumps({"question": request.original_query, "plan": plan.to_dict(),
+                            "total_output_budget": budget.max_output_tokens}, ensure_ascii=False))
+            if not self.policy.decide(fixed_tokens=fixed + self.estimator.estimate(bound.rendered_text),
+                                      requested_output_tokens=budget.max_output_tokens).allowed:
+                raise ValueError("single stream prompt exceeds model window")
+            if request.policy:
+                stages.append(_stage("teaching_evidence_pack", started, "rules", None, None))
+                started = time.perf_counter()
+            pack_done = True
+            sections, trace = self.streaming_writer.write(
+                request.original_query, plan, bound, budget, request_started=request_started,
+                on_section=on_section,
+            )
+        except Exception as exc:
+            if request.policy and not pack_done:
+                stages.append(_stage("teaching_evidence_pack", started, "failed", None, None))
+            sections = ()
+            trace = {"generation_mode": "single_stream", "completion_status": "failed",
+                     "error": str(exc), "sections_planned": len(plan.sections), "sections_emitted": 0,
+                     "missing_sections": [s.id for s in plan.sections], "stream_partial": False,
+                     "stream_retry_count": 0, "stream_cancelled": False}
+        if pack_done or not request.policy:
+            stages.append(_stage("teaching_draft", started, "llm" if trace["completion_status"] == "complete" else "failed",
+                                 self.streaming_writer.last_client, "high"))
+        trace["core_mental_model"] = plan.core_mental_model
+        if request.policy:
+            trace["question_kind"] = plan.question_kind
+            trace["plan"] = plan.to_dict()
+            trace["evidence_pack"] = {"sections": [s for s in plan.to_dict()["sections"]], "bundle": bound.to_dict()}
+        trace["output_budget"] = budget.to_dict()
+        trace["context_views"] = {"bound_evidence": len(bound.items)}
+        trace["section_drafts"] = [{"id": s.section_id, "chars": len(s.markdown),
+                                     "used_citations": list(s.citations)} for s in sections]
+        text = "\n\n".join(s.markdown for s in sections)
+        citations = list(dict.fromkeys(c for s in sections for c in s.citations))
+        status = trace["completion_status"]
+        answer = AnswerResult(text or "流式回答生成失败，未发布任何章节。", citations,
+                              zero_valid_citation=not citations)
+        return TeachingAnswerResult(answer, plan, bound, None, tuple(stages),
+                                    {"path": "single_stream", "trace": trace}, budget=budget,
+                                    completion_status=status, failed_section=trace.get("failed_section"),
+                                    error=trace.get("error"))
 
     def _view(
         self,
@@ -411,6 +513,7 @@ def _trace_block(
     """The teach path's intermediate state, shaped for --debug and for interviews."""
     workspace = evidence_package.evidence_workspace
     return {
+        "generation_mode": "multi_pass",
         "decision_source": plan.decision_source,
         "planning_error": planning_error,
         "primary_strategy": plan.primary_strategy,

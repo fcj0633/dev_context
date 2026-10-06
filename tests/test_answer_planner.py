@@ -80,13 +80,13 @@ def test_answer_planner_rejects_unknown_citation() -> None:
         )
 
 
-def test_fallback_plan_keeps_detailed_shape_without_old_template() -> None:
+def test_fallback_plan_does_not_pad_sections() -> None:
     bundle = ContextBuilder().build("问题", [search_result()])
 
     result = fallback_answer_plan(question_plan("detailed"), bundle, ("缺少设计说明",))
 
     assert result.decision_source == "fallback"
-    assert 3 <= len(result.sections) <= 8
+    assert 1 <= len(result.sections) <= 16
     assert all("结论 → 依据" not in section.purpose for section in result.sections)
 
 
@@ -130,40 +130,36 @@ def evidence_package() -> EvidencePackage:
     )
 
 
-def test_evidence_answer_planner_owns_depth_goal_and_structure() -> None:
+def test_evidence_answer_planner_owns_goal_and_structure() -> None:
     response = valid_response()
     response["answer_goal"] = "让读者理解当前实现和边界"
     response["answer_depth"] = "standard"
-    request = UserRequest("问题", AnswerOptions("standard", "explain"))
+    request = UserRequest("问题", AnswerOptions(answer_mode="explain"))
 
     result = AnswerPlanner(lambda: FakeClient(response)).plan_evidence(
         request, evidence_package()
     )
 
     assert result.answer_goal == "让读者理解当前实现和边界"
-    assert result.answer_depth == "standard"
+    assert "answer_depth" not in result.to_dict()
     assert result.sections[0].title == "主流程"
     assert "answer_depth" not in evidence_package().evidence_plan.to_dict()
 
 
-def test_evidence_answer_planner_must_honor_explicit_depth_override() -> None:
+def test_evidence_answer_planner_ignores_historical_depth() -> None:
     response = valid_response()
     response["answer_goal"] = "解释当前实现"
     response["answer_depth"] = "brief"
-
-    with pytest.raises(AnswerPlanError, match="override"):
-        AnswerPlanner(lambda: FakeClient(response)).plan_evidence(
-            UserRequest("问题", AnswerOptions("standard", "explain")),
-            evidence_package(),
-        )
+    result = AnswerPlanner._parse_evidence(json.dumps(response), UserRequest("q", AnswerOptions(answer_mode="explain")), evidence_package())
+    assert "answer_depth" not in result.to_dict()
 
 
-def test_evidence_fallback_plan_uses_answer_options_not_evidence_plan() -> None:
+def test_evidence_fallback_plan_is_task_sized() -> None:
     result = fallback_evidence_answer_plan(
-        UserRequest("问题", AnswerOptions("detailed", "explain")),
+        UserRequest("问题", AnswerOptions(answer_mode="explain")),
         evidence_package(),
     )
 
-    assert result.answer_depth == "detailed"
+    assert "answer_depth" not in result.to_dict()
     assert result.decision_source == "fallback"
-    assert 3 <= len(result.sections) <= 8
+    assert 1 <= len(result.sections) <= 16

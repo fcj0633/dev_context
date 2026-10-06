@@ -167,12 +167,9 @@ def test_unknown_answer_mode_does_not_fall_through_to_explain() -> None:
         subject._answer(request, package)
 
 
-def test_deep_depth_is_not_available_outside_teach() -> None:
-    for mode in ("legacy", "explain"):
-        with pytest.raises(ValueError, match="not available"):
-            AnswerOptions("deep", mode)
-
-    assert AnswerOptions("deep", "teach").depth_override == "deep"
+def test_answer_options_only_expose_mode() -> None:
+    for mode in ("legacy", "explain", "teach"):
+        assert AnswerOptions(answer_mode=mode).to_dict() == {"answer_mode": mode}
 
 
 def test_teach_mode_is_accepted_and_reaches_the_workflow_constructor() -> None:

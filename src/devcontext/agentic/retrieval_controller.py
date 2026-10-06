@@ -23,14 +23,18 @@ from devcontext.evidence import EvidencePool, SourcePolicy
 from devcontext.models import ContextBundle, SearchExecution
 from devcontext.planning import EvidencePlan, EvidencePlanner, EvidenceRequirement
 from devcontext.request import UserRequest
+from devcontext.deadline import remaining_seconds
 from devcontext.observability import RetrievalActionTrace, record_retrieval_action
 from devcontext.retrieval import RetrievalPolicy
+from devcontext.retrieval.symbols import code_strategy_for
 
 
 COMPACT_CONTEXT_BUDGET = 8_000
 BALANCED_CONTEXT_BUDGET = 16_000
 BROAD_CONTEXT_BUDGET = 28_000
 MAX_SEARCH_ACTIONS = 12
+V3_TEACHING_RESERVE_SECONDS = 120
+FOLLOWUP_ESTIMATED_SECONDS = 35
 CORE_TOP_K = 5
 SUPPORTING_TOP_K = 3
 
@@ -164,6 +168,13 @@ class RetrievalController:
         )
         remaining_budget = MAX_SEARCH_ACTIONS - len(history)
         followup_requirements = followup_requirements[:remaining_budget]
+        remaining = None if request.policy else remaining_seconds()
+        if request.policy is None and followup_requirements and remaining is not None and remaining < V3_TEACHING_RESERVE_SECONDS + FOLLOWUP_ESTIMATED_SECONDS:
+            # Reserve 120s for teaching plus 35s for a possible follow-up.
+            # A shared deadline is installed only for V3. Preserve partial
+            # coverage as-is; never upgrade missing evidence to satisfied.
+            stages.append(StageUsage("retrieval_followup_skipped", 0.0, "answer_time_reserve"))
+            followup_requirements = ()
         if followup_requirements:
             action_started = time.perf_counter()
             followup_actions = self.action_planner.plan_actions(
@@ -250,18 +261,38 @@ class RetrievalController:
         by_id = {item.id: item for item in plan.requirements}
         executed: list[SearchAction] = []
         for action in actions:
+            from devcontext.deadline import remaining_seconds, RequestDeadlineExceeded
+            try:
+                remaining_seconds()
+            except RequestDeadlineExceeded:
+                break
             if len(executed) >= MAX_SEARCH_ACTIONS:
                 break
             requirement = by_id[action.requirement_id]
             per_action_top_k = (
                 CORE_TOP_K if requirement.priority == "CORE" else SUPPORTING_TOP_K
             )
+            # Stage-aware CODE routing. Round 0 usually has nothing but business
+            # semantics to go on, so there is no exact term for a keyword half to
+            # match and hybrid only adds its ranking noise; round 1 usually has
+            # real class/method names discovered from round-0 evidence, which is
+            # exactly what keyword search is good at. The decision is driven by
+            # whether a real symbol exists, never by the round number as such.
+            code_strategy: str | None = None
+            symbols: tuple[str, ...] = ()
+            if action.source_scope == "CODE":
+                code_strategy, symbols = code_strategy_for(
+                    action.query, workspace, action.requirement_id
+                )
             try:
                 execution = self.retrieval_policy.search_scope_with_trace(
                     action.query,
                     action.source_scope,
                     per_action_top_k,
+                    code_strategy=code_strategy,
                 )
+                if code_strategy is not None:
+                    execution.symbols = symbols
                 record_retrieval_action(
                     _action_trace(action, execution, round_index, per_action_top_k)
                 )

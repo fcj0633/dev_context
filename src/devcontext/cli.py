@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from devcontext.llm.factory import create_llm_client
+
 import argparse
 import json
 import sys
@@ -63,8 +65,10 @@ from devcontext.explanation import (
 from devcontext.explanation.composer import COMPOSER_MAX_TOKENS
 from devcontext.explanation.reviewer import REVIEWER_MAX_TOKENS as TEACHING_REVIEWER_MAX_TOKENS
 from devcontext.explanation.writer import TEACHING_ANSWER_MAX_TOKENS, TeachingWriter
+from devcontext.explanation.micro import TeachingRuntimeOptions, MicroExplanationPlanner
+from devcontext.explanation.stream_writer import SingleStreamingTeachingWriter
 from devcontext.planning import EvidencePlan, EvidencePlanner, QuestionPlan, QuestionPlanner
-from devcontext.request import ANSWER_MODES, TEACH_DEPTHS
+from devcontext.request import ANSWER_MODES
 from devcontext.retrieval import RetrievalPolicy, RetrievalService
 from devcontext.routing import QueryRouter, RouteDecision
 from devcontext.storage import ChunkStore
@@ -141,6 +145,11 @@ def _parser() -> argparse.ArgumentParser:
         help="Choose the plan schema printed by --plan-only",
     )
     ask.add_argument("--debug", action="store_true")
+    ask.add_argument("--profile", choices=("fast", "full"), default=None)
+    ask.add_argument("--reasoning-effort", choices=("low", "medium", "high"), default=None)
+    ask.add_argument("--hard-timeout", type=float, default=None)
+    ask.add_argument("--teaching-generation-mode", choices=("multi_pass", "single_stream", "v3"), default=None,
+                     help="Compatibility override: single_stream=fast, v3=full; multi_pass retains the legacy workflow")
     ask.add_argument(
         "--answer-mode",
         choices=ANSWER_MODES,
@@ -149,15 +158,6 @@ def _parser() -> argparse.ArgumentParser:
             "teach = planned teaching explanation (default), "
             "explain = evidence-driven explanation, "
             "legacy = template single-pass answer"
-        ),
-    )
-    ask.add_argument(
-        "--depth",
-        choices=TEACH_DEPTHS,
-        default=None,
-        help=(
-            "Force presentation depth without changing evidence retrieval. "
-            "'deep' is only available with --answer-mode teach."
         ),
     )
     ask.add_argument(
@@ -247,6 +247,7 @@ def _print_agentic_answer(
     *,
     debug: bool,
     include_plan: bool = False,
+    answer_already_published: bool = False,
 ) -> None:
     trace = result.trace
     print("Question:")
@@ -261,7 +262,6 @@ def _print_agentic_answer(
     elif include_plan and trace.plan:
         print(f"\nPlan: {trace.plan['decision_source']}")
         print(f"Intent: {trace.plan['intent_summary']}")
-        print(f"Depth: {trace.plan['answer_depth']}")
         for sub_question in trace.plan["sub_questions"]:
             print(
                 f"  {sub_question['id']}. {sub_question['question']}"
@@ -276,13 +276,20 @@ def _print_agentic_answer(
     if debug:
         _print_requirement_statuses(trace.final_sufficiency)
     print(f"Retries: {trace.retry_count}")
-    print("\nAnswer:")
-    print(result.answer_result.answer)
+    teaching_status = (trace.teaching or {}).get("completion_status")
+    if (trace.teaching or {}).get("delivery_path") == "full_direct_fallback":
+        print("Delivery path: full_direct_fallback (Full 正文兜底)")
+    if teaching_status in {"failed", "partial"}:
+        print(f"Generation status: {teaching_status}; {(trace.teaching or {}).get('error')}")
+    if not answer_already_published:
+        print("\nAnswer:")
+        print(result.answer_result.answer)
     if debug:
         _print_teaching_summary(trace.teaching)
         _print_sources(result)
-        print("\nTrace:")
-        print(json.dumps(trace.to_dict(), ensure_ascii=False, indent=2))
+        if not (trace.teaching or {}).get("request_policy"):
+            print("\nTrace:")
+            print(json.dumps(trace.to_dict(), ensure_ascii=False, indent=2))
 
 
 def _print_requirement_statuses(sufficiency: SufficiencyResult) -> None:
@@ -304,6 +311,24 @@ def _print_requirement_statuses(sufficiency: SufficiencyResult) -> None:
 def _print_teaching_summary(teaching: dict | None) -> None:
     """The teach path's shape at a glance, instead of reading the whole trace."""
     if not teaching:
+        return
+    policy = teaching.get("request_policy")
+    if policy:
+        print(f"\nAnswer profile: {policy['profile']}; status: {teaching.get('completion_status')}; intent: {teaching.get('question_kind', policy['primary_intent'])}")
+        print(f"Sections: {teaching.get('sections_emitted', 0)} / {teaching.get('sections_planned', 0)}")
+        print(f"Delivery path: {teaching.get('delivery_path', 'full')}")
+        if teaching.get("fallback_reason"):
+            print(f"Fallback reason: {teaching['fallback_reason']}")
+        print(f"Total request: {teaching.get('total_elapsed_ms', 0)/1000:.2f}s")
+        return
+    if teaching.get("generation_mode") == "v3":
+        blueprint = teaching.get("blueprint") or {}
+        print(f"\nV3 Teaching: {teaching.get('question_kind')}; {teaching.get('completion_status')}")
+        print(f"Learning Goal: {blueprint.get('learning_goal', '(none)')}")
+        for relation in blueprint.get("core_mental_model", []):
+            print(f"  {relation['statement']}")
+        print(f"Sections: {teaching.get('sections_emitted', 0)} / {teaching.get('sections_planned', 0)}")
+        print(f"Total request: {teaching.get('total_elapsed_ms', 0) / 1000:.1f}s")
         return
     strategies = " + ".join(
         [teaching.get("primary_strategy") or ""]
@@ -347,76 +372,91 @@ def _print_evidence_plan(plan: EvidencePlan) -> None:
     print(json.dumps(plan.to_dict(), ensure_ascii=False, indent=2))
 
 
+def _v3_client_factory(settings: Settings, factory):
+    def create():
+        client = factory()
+        if settings.llm_provider == "openai":
+            client.reasoning_effort = settings.openai_v3_reasoning_effort
+        return client
+    return create
+
+
+def _profile_answer_factory(settings: Settings, *, planner=False):
+    return lambda: create_llm_client(settings, deepseek_client_type=DeepSeekLLMClient,
+        legacy_model=(settings.deepseek_answer_planner_model if planner else settings.deepseek_answer_model) or settings.deepseek_model,
+        requested_reasoning_effort=settings.answer_reasoning_effort or ("low" if settings.answer_profile == "fast" else "high"),
+        max_tokens=min(settings.model_capabilities().max_output_tokens, 32768 if settings.answer_profile == "full" else (8000 if planner else 16000)),
+        timeout_seconds=(settings.answer_full_planner_timeout_seconds if planner else settings.answer_full_writer_timeout_seconds) if settings.answer_profile == "full" else (settings.answer_planner_timeout_seconds if planner else settings.answer_writer_timeout_seconds),
+        json_mode=planner)
+
+
 def _query_router(settings: Settings) -> QueryRouter:
     return QueryRouter(
-        lambda: DeepSeekLLMClient(
-            api_key=settings.deepseek_key(),
-            base_url=settings.deepseek_base_url,
-            model=settings.deepseek_model,
+        lambda: create_llm_client(
+        settings, deepseek_client_type=DeepSeekLLMClient,
+            legacy_model=settings.deepseek_model,
             max_tokens=1024,
         )
     )
 
 
 def _short_llm_factory(settings: Settings) -> Callable[[], LLMClient]:
-    return lambda: DeepSeekLLMClient(
-        api_key=settings.deepseek_key(),
-        base_url=settings.deepseek_base_url,
-        model=settings.deepseek_model,
+    return lambda: create_llm_client(
+        settings, deepseek_client_type=DeepSeekLLMClient,
+        legacy_model=settings.deepseek_model,
         max_tokens=1024,
     )
 
 
 def _answer_client(settings: Settings, *, explain: bool = False) -> DeepSeekLLMClient:
-    return DeepSeekLLMClient(
-        api_key=settings.deepseek_key(),
-        base_url=settings.deepseek_base_url,
-        model=settings.deepseek_answer_model or settings.deepseek_model,
+    return create_llm_client(
+        settings, deepseek_client_type=DeepSeekLLMClient,
+        legacy_model=settings.deepseek_answer_model or settings.deepseek_model,
         reasoning_effort="high" if explain else "low",
         max_tokens=EXPLAIN_ANSWER_MAX_TOKENS if explain else ANSWER_MAX_TOKENS,
     )
 
 
 def _planner_llm_factory(settings: Settings) -> Callable[[], LLMClient]:
-    return lambda: DeepSeekLLMClient(
-        api_key=settings.deepseek_key(),
-        base_url=settings.deepseek_base_url,
-        model=settings.deepseek_planner_model or settings.deepseek_model,
-        reasoning_effort="high",
+    return lambda: create_llm_client(
+        settings, deepseek_client_type=DeepSeekLLMClient,
+        legacy_model=settings.deepseek_planner_model or settings.deepseek_model,
+        reasoning_effort="low" if settings.llm_provider == "openai" else "high",
         max_tokens=PLANNER_MAX_TOKENS,
+        timeout_seconds=120 if settings.answer_engine_enabled else (35 if settings.llm_provider == "openai" else 120),
         json_mode=True,
+        **({"requested_reasoning_effort": "low"} if settings.answer_engine_enabled else {}),
     )
 
 
 def _rewrite_llm_factory(settings: Settings) -> Callable[[], LLMClient]:
-    return lambda: DeepSeekLLMClient(
-        api_key=settings.deepseek_key(),
-        base_url=settings.deepseek_base_url,
-        model=settings.deepseek_model,
+    return lambda: create_llm_client(
+        settings, deepseek_client_type=DeepSeekLLMClient,
+        legacy_model=settings.deepseek_model,
         reasoning_effort="low",
         max_tokens=REWRITE_MAX_TOKENS,
         json_mode=True,
+        **({"requested_reasoning_effort": "low"} if settings.answer_engine_enabled else {}),
     )
 
 
 def _sub_question_sufficiency_factory(
     settings: Settings,
 ) -> Callable[[], LLMClient]:
-    return lambda: DeepSeekLLMClient(
-        api_key=settings.deepseek_key(),
-        base_url=settings.deepseek_base_url,
-        model=settings.deepseek_model,
+    return lambda: create_llm_client(
+        settings, deepseek_client_type=DeepSeekLLMClient,
+        legacy_model=settings.deepseek_model,
         reasoning_effort="low",
         max_tokens=SUB_QUESTION_SUFFICIENCY_MAX_TOKENS,
         json_mode=True,
+        **({"requested_reasoning_effort": "low"} if settings.answer_engine_enabled else {}),
     )
 
 
 def _answer_planner_factory(settings: Settings) -> Callable[[], LLMClient]:
-    return lambda: DeepSeekLLMClient(
-        api_key=settings.deepseek_key(),
-        base_url=settings.deepseek_base_url,
-        model=settings.deepseek_answer_planner_model or settings.deepseek_model,
+    return lambda: create_llm_client(
+        settings, deepseek_client_type=DeepSeekLLMClient,
+        legacy_model=settings.deepseek_answer_planner_model or settings.deepseek_model,
         reasoning_effort="high",
         max_tokens=ANSWER_PLANNER_MAX_TOKENS,
         json_mode=True,
@@ -424,10 +464,9 @@ def _answer_planner_factory(settings: Settings) -> Callable[[], LLMClient]:
 
 
 def _reviewer_factory(settings: Settings) -> Callable[[], LLMClient]:
-    return lambda: DeepSeekLLMClient(
-        api_key=settings.deepseek_key(),
-        base_url=settings.deepseek_base_url,
-        model=settings.deepseek_reviewer_model or settings.deepseek_model,
+    return lambda: create_llm_client(
+        settings, deepseek_client_type=DeepSeekLLMClient,
+        legacy_model=settings.deepseek_reviewer_model or settings.deepseek_model,
         reasoning_effort="high",
         max_tokens=REVIEWER_MAX_TOKENS,
         json_mode=True,
@@ -435,10 +474,9 @@ def _reviewer_factory(settings: Settings) -> Callable[[], LLMClient]:
 
 
 def _explanation_planner_factory(settings: Settings) -> Callable[[], LLMClient]:
-    return lambda: DeepSeekLLMClient(
-        api_key=settings.deepseek_key(),
-        base_url=settings.deepseek_base_url,
-        model=settings.deepseek_answer_planner_model or settings.deepseek_model,
+    return lambda: create_llm_client(
+        settings, deepseek_client_type=DeepSeekLLMClient,
+        legacy_model=settings.deepseek_answer_planner_model or settings.deepseek_model,
         reasoning_effort="high",
         max_tokens=EXPLANATION_PLANNER_MAX_TOKENS,
         json_mode=True,
@@ -446,20 +484,18 @@ def _explanation_planner_factory(settings: Settings) -> Callable[[], LLMClient]:
 
 
 def _teaching_writer_factory(settings: Settings) -> Callable[[], LLMClient]:
-    return lambda: DeepSeekLLMClient(
-        api_key=settings.deepseek_key(),
-        base_url=settings.deepseek_base_url,
-        model=settings.deepseek_answer_model or settings.deepseek_model,
+    return lambda: create_llm_client(
+        settings, deepseek_client_type=DeepSeekLLMClient,
+        legacy_model=settings.deepseek_answer_model or settings.deepseek_model,
         reasoning_effort="high",
         max_tokens=TEACHING_ANSWER_MAX_TOKENS,
     )
 
 
 def _teaching_reviewer_factory(settings: Settings) -> Callable[[], LLMClient]:
-    return lambda: DeepSeekLLMClient(
-        api_key=settings.deepseek_key(),
-        base_url=settings.deepseek_base_url,
-        model=settings.deepseek_reviewer_model or settings.deepseek_model,
+    return lambda: create_llm_client(
+        settings, deepseek_client_type=DeepSeekLLMClient,
+        legacy_model=settings.deepseek_reviewer_model or settings.deepseek_model,
         reasoning_effort="high",
         max_tokens=TEACHING_REVIEWER_MAX_TOKENS,
         json_mode=True,
@@ -467,10 +503,9 @@ def _teaching_reviewer_factory(settings: Settings) -> Callable[[], LLMClient]:
 
 
 def _composer_factory(settings: Settings) -> Callable[[], LLMClient]:
-    return lambda: DeepSeekLLMClient(
-        api_key=settings.deepseek_key(),
-        base_url=settings.deepseek_base_url,
-        model=settings.deepseek_answer_model or settings.deepseek_model,
+    return lambda: create_llm_client(
+        settings, deepseek_client_type=DeepSeekLLMClient,
+        legacy_model=settings.deepseek_answer_model or settings.deepseek_model,
         reasoning_effort="high",
         max_tokens=COMPOSER_MAX_TOKENS,
     )
@@ -481,17 +516,16 @@ def _question_planner(settings: Settings) -> QuestionPlanner:
 
 
 def _evidence_planner(settings: Settings) -> EvidencePlanner:
-    return EvidencePlanner(_planner_llm_factory(settings))
+    return EvidencePlanner(_planner_llm_factory(settings), full_teaching=settings.answer_engine_enabled and settings.answer_profile == "full")
 
 
 def _answer_judge_factory(
     settings: Settings, model: str | None = None
 ) -> Callable[[], LLMClient]:
     """The blind judge reads two long answers and emits a tiny verdict."""
-    return lambda: DeepSeekLLMClient(
-        api_key=settings.deepseek_key(),
-        base_url=settings.deepseek_base_url,
-        model=model or settings.deepseek_model,
+    return lambda: create_llm_client(
+        settings, deepseek_client_type=DeepSeekLLMClient,
+        model=model,
         reasoning_effort="high",
         max_tokens=JUDGE_MAX_TOKENS,
         json_mode=True,
@@ -519,12 +553,13 @@ def _planned_workflow(
     legacy_builder: ContextBuilder,
     answer_mode: str = "legacy",
     context_budget_override: int | None = None,
-    depth_override: str | None = None,
+    request_policy=None,
 ) -> EvidenceDrivenWorkflow:
     # Keep the builder arguments for one-cycle factory compatibility.  The new
     # controller derives its budget from EvidencePlan complexity unless the
     # caller explicitly supplies context_budget_override.
     _ = planned_builder, legacy_builder
+    request_policy = request_policy or settings.answer_request_policy
     controller = _retrieval_controller(settings)
     teaching_workflow = None
     if answer_mode == "teach":
@@ -537,7 +572,17 @@ def _planned_workflow(
             SectionComposer(_composer_factory(settings)),
             TeachingReviewer(_teaching_reviewer_factory(settings)),
             capabilities=settings.model_capabilities(),
+            runtime_options=TeachingRuntimeOptions(settings.teaching_generation_mode),
+            micro_planner=MicroExplanationPlanner(_profile_answer_factory(settings, planner=True) if request_policy else _explanation_planner_factory(settings), settings.model_capabilities()),
+            streaming_writer=SingleStreamingTeachingWriter(_profile_answer_factory(settings) if request_policy else _teaching_writer_factory(settings), permissive=request_policy is not None),
         )
+        if settings.teaching_generation_mode == "v3" or (request_policy and request_policy.profile == "full"):
+            from devcontext.explanation.v3.planner import TeachingPlannerV3
+            from devcontext.explanation.v3.writer import TeachingWriterV3
+            teaching_workflow.request_timeout_seconds = settings.teaching_request_timeout_seconds
+            teaching_workflow.v3_planner = TeachingPlannerV3(
+                _profile_answer_factory(settings, planner=True) if request_policy else _v3_client_factory(settings, _explanation_planner_factory(settings)), teaching_workflow.capabilities, teaching_workflow.estimator)
+            teaching_workflow.v3_writer = TeachingWriterV3(_profile_answer_factory(settings) if request_policy else _v3_client_factory(settings, _teaching_writer_factory(settings)), permissive=request_policy is not None)
     return EvidenceDrivenWorkflow(
         controller,
         answer_generator_factory=lambda: AnswerGenerator(
@@ -547,8 +592,8 @@ def _planned_workflow(
         answer_reviewer=AnswerReviewer(_reviewer_factory(settings)),
         answer_mode=answer_mode,
         context_budget_override=context_budget_override,
-        depth_override=depth_override,
         teaching_workflow=teaching_workflow,
+        request_policy=request_policy,
     )
 
 
@@ -567,6 +612,11 @@ def _retrieval_controller(
         coverage_checker = CoverageChecker(
             _sub_question_sufficiency_factory(settings)
         )
+        if settings.answer_engine_enabled and settings.answer_profile == "fast":
+            from devcontext.agentic.fast import FastRetrievalPlanner, FastActionPlanner, FastCoverageChecker
+            evidence_planner = FastRetrievalPlanner(_planner_llm_factory(settings))
+            action_planner = FastActionPlanner(evidence_planner)
+            coverage_checker = FastCoverageChecker(CoverageChecker(_sub_question_sufficiency_factory(settings), max_attempts=1), evidence_planner)
     else:
         evidence_planner = FrozenEvidencePlanner(frozen_case)
         action_planner = FrozenSearchActionPlanner(frozen_case)
@@ -615,7 +665,7 @@ def _run_ask(
     the command behaves exactly as it did before tracing existed.
     """
     repeats = max(1, args.repeat)
-    profiling = bool(args.perf) or args.perf_json is not None or repeats > 1
+    profiling = bool(args.perf) or args.perf_json is not None or repeats > 1 or (args.debug and getattr(args, "_answer_engine_enabled", False))
     if not profiling:
         return run_once(), []
 
@@ -632,7 +682,7 @@ def _run_ask(
                 result=result,
                 query=args.query,
                 answer_mode=answer_mode,
-                depth=args.depth,
+                depth=None,
                 top_k=top_k,
                 wall_clock_ms=(time.perf_counter() - started) * 1000,
                 sample_kind="first_sample" if index == 0 else "repeat_sample",
@@ -648,10 +698,23 @@ def _emit_perf(args: argparse.Namespace, reports: list[dict]) -> None:
         return
     # Repeating without asking for a summary still prints one: N identical
     # answers with no numbers would be useless.
-    if args.perf or len(reports) > 1:
+    if args.perf or len(reports) > 1 or (args.debug and getattr(args, "_answer_engine_enabled", False)):
         for report in reports:
             print()
             print(render_summary(report))
+            if args.debug:
+                policy = (report.get("stream") or {}).get("request_policy") or {}
+                if policy:
+                    print(f"Profile: {policy['profile']}; intent: {(report.get('stream') or {}).get('question_kind', policy['primary_intent'])}")
+                    print(f"Reasoning requested: {policy['reasoning_effort']}; hard timeout: {policy['hard_timeout_seconds']}")
+                    print(f"Latency target: {policy['latency_target_seconds']}s; exceeded: {(report.get('stream') or {}).get('latency_target_exceeded')}")
+                for call in report['llm_calls']:
+                    requested = call.get('requested_reasoning_effort') or call.get('reasoning_effort') or 'unspecified'
+                    sent = call.get('reasoning_effort') or 'omitted (model default)'
+                    print(f"  {call['stage']}: {call.get('model')}; requested={requested}; sent={sent}; {call['latency_ms']/1000:.2f}s")
+                first = (report.get('stream') or {}).get('first_section_ready_ms')
+                if first is not None:
+                    print(f"First section: {first/1000:.2f}s from request entry")
     if args.perf_json is not None:
         payload: object = reports[0] if len(reports) == 1 else {"samples": reports}
         args.perf_json.parent.mkdir(parents=True, exist_ok=True)
@@ -665,9 +728,36 @@ def main(argv: list[str] | None = None) -> int:
     if sys.platform == "win32":
         sys.stdout.reconfigure(encoding="utf-8")
         sys.stderr.reconfigure(encoding="utf-8")
+    supplied = sys.argv[1:] if argv is None else argv
+    if any(arg == "--depth" or arg.startswith("--depth=") for arg in supplied):
+        _parser().error("--depth 已移除，请直接在问题中表达简要或详细；回答按理解任务展开。")
     args = _parser().parse_args(argv)
     settings = Settings()
     try:
+        request_policy = None
+        if args.command == "ask":
+            from devcontext.answer_policy import resolve_policy
+            mapping = {"single_stream": "fast", "v3": "full"}
+            engine = args.teaching_generation_mode
+            new_controls = args.profile is not None or args.reasoning_effort is not None
+            if new_controls and (args.answer_mode != "teach" or engine == "multi_pass" or args.no_plan or args.plan_only):
+                raise ValueError("--profile/--reasoning-effort conflict with legacy/explain/multi_pass or plan-only/no-plan")
+            if engine in mapping and args.profile is not None and mapping[engine] != args.profile:
+                raise ValueError("--profile conflicts with --teaching-generation-mode")
+            if args.answer_mode == "teach" and engine != "multi_pass" and not args.no_plan and not args.plan_only:
+                request_policy = resolve_policy(args.query, settings, profile=args.profile or mapping.get(engine),
+                    reasoning_effort=args.reasoning_effort, hard_timeout=args.hard_timeout)
+                settings = settings.model_copy(update={"answer_engine_enabled": True, "answer_profile": request_policy.profile,
+                    "answer_reasoning_effort": request_policy.reasoning_effort,
+                    "answer_request_policy": request_policy,
+                    "teaching_generation_mode": "single_stream" if request_policy.profile == "fast" else "v3"})
+                args._answer_engine_enabled = True
+            elif args.hard_timeout is not None:
+                raise ValueError("--hard-timeout requires the Fast/Full answering workflow")
+        if args.command == "ask" and args.teaching_generation_mode is not None:
+            if args.answer_mode != "teach" or args.no_plan or args.plan_only:
+                raise ValueError("--teaching-generation-mode requires the teach answering workflow")
+            settings = settings.model_copy(update={"teaching_generation_mode": args.teaching_generation_mode})
         if args.command == "init-db":
             ChunkStore(settings.database_url).initialize()
             print("Database schema is ready.")
@@ -721,26 +811,40 @@ def main(argv: list[str] | None = None) -> int:
                 top_k, max_chars = _budget(args, planned=True)
                 legacy_top_k, legacy_max_chars = _budget(args, planned=False)
 
+                streamed_sections = []
+
+                def publish_section(section):
+                    if not streamed_sections:
+                        print("\nAnswer:", flush=True)
+                    print(section.markdown + "\n", flush=True)
+                    streamed_sections.append(section)
+
                 def run_planned() -> AgenticAnswerResult:
                     # Rebuilt per repetition: samples share an interpreter, not
                     # mutable workflow state.
-                    return _planned_workflow(
+                    workflow = _planned_workflow(
                         settings,
                         ContextBuilder(max_chars=max_chars),
                         ContextBuilder(max_chars=legacy_max_chars),
                         args.answer_mode,
                         args.max_chars,
-                        args.depth,
-                    ).run(args.query, top_k)
+                    )
+                    if request_policy is not None or (settings.teaching_generation_mode == "v3" and args.answer_mode == "teach"):
+                        return workflow.run(args.query, top_k, on_section=publish_section)
+                    return workflow.run(args.query, top_k)
 
                 result, reports = _run_ask(
                     run_planned, args=args, top_k=top_k,
                     answer_mode=args.answer_mode,
                 )
                 _print_agentic_answer(
-                    args.query, result, debug=args.debug, include_plan=True
+                    args.query, result, debug=args.debug, include_plan=True,
+                    answer_already_published=bool(streamed_sections),
                 )
                 _emit_perf(args, reports)
+                teaching_trace = getattr(getattr(result, "trace", None), "teaching", None) or {}
+                if teaching_trace.get("generation_mode") in {"v3", "single_stream"} and teaching_trace.get("completion_status") != "complete":
+                    return 1
         elif args.command == "evaluate":
             report = evaluate(settings, benchmark=args.benchmark, baseline=args.baseline)
             summary = [
@@ -884,7 +988,6 @@ def main(argv: list[str] | None = None) -> int:
                     ContextBuilder(max_chars=LEGACY_MAX_CHARS),
                     mode,
                     None,
-                    depth,
                 )
 
             outcome = run_answer_quality_evaluation(

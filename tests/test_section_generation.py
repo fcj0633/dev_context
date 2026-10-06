@@ -114,12 +114,12 @@ def make_plan(sections, *, depth: str = "detailed") -> ExplanationPlan:
         core_mental_model="Redis 令牌是准入凭证，MySQL 座位才是库存事实",
         primary_strategy="PROBLEM_SOLUTION",
         sections=tuple(sections),
-        answer_depth=depth,
+
     )
 
 
 def request_for(question: str = "详细解释项目的余票桶是如何设计的", depth=None):
-    return UserRequest(question, AnswerOptions(depth, "teach"))
+    return UserRequest(question, AnswerOptions(answer_mode="teach"))
 
 
 class TestSectionScopedCitations:
@@ -201,18 +201,18 @@ class TestSectionScopedCitations:
 
 
 class TestOutputBudget:
-    def test_a_deep_answer_is_not_bounded_by_the_old_5000_character_window(self) -> None:
-        plan = make_plan([section(i) for i in range(1, 9)], depth="deep")
+    def test_complex_plan_is_not_bounded_by_the_old_character_window(self) -> None:
+        plan = make_plan([section(i) for i in range(1, 9)])
 
         budget = budget_for(plan, ModelCapabilities(131_072, 32_768))
 
         # Eight sections at 2800 tokens is far past 5000 characters' worth.
-        assert budget.max_output_tokens > 20_000
+        assert budget.max_output_tokens > 10_000
         assert budget.allow_multi_pass is True
         assert budget.reason == "sized from the explanation plan"
 
     def test_no_minimum_length_is_imposed(self) -> None:
-        plan = make_plan([section(1)], depth="brief")
+        plan = make_plan([section(1)])
 
         budget = budget_for(plan, ModelCapabilities(131_072, 32_768))
 
@@ -222,7 +222,7 @@ class TestOutputBudget:
 
     def test_brief_locate_answer_stays_brief(self) -> None:
         locate = make_plan(
-            [section(1, section_type="DIRECT_ANSWER")], depth="brief"
+            [section(1, section_type="DIRECT_ANSWER")]
         )
 
         budget = budget_for(locate, ModelCapabilities(131_072, 32_768))
@@ -231,7 +231,7 @@ class TestOutputBudget:
         assert budget.max_output_tokens < 5_000
 
     def test_budget_is_capped_by_the_model(self) -> None:
-        plan = make_plan([section(i) for i in range(1, 13)], depth="deep")
+        plan = make_plan([section(i) for i in range(1, 13)])
 
         budget = budget_for(plan, ModelCapabilities(32_768, 4_096))
 
@@ -339,7 +339,7 @@ class TestMultiPassWorkflow:
 class TestViewBudget:
     def _run(self, capabilities: ModelCapabilities):
         package = make_package()
-        plan = make_plan([section(1)], depth="brief")
+        plan = make_plan([section(1)])
         client = ScriptedClient(["一 [E1]。"])
         workflow = TeachingExplanationWorkflow(
             FixedPlanner(plan),

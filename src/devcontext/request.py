@@ -2,19 +2,11 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from typing import Any
+from devcontext.answer_policy import RequestPolicy
 
 
-ANSWER_DEPTHS = ("brief", "standard", "detailed")
-TEACH_DEPTHS = ("brief", "standard", "detailed", "deep")
 ANSWER_MODES = ("legacy", "explain", "teach")
-# The two paths that predate the teaching pipeline. They share its depth
-# vocabulary but not `deep`: a single-pass generator has no way to honour it, so
-# accepting it would silently produce an ordinary answer under a deep label.
 EXPLAIN_MODES = ("legacy", "explain")
-
-
-def depths_for(answer_mode: str) -> tuple[str, ...]:
-    return TEACH_DEPTHS if answer_mode == "teach" else ANSWER_DEPTHS
 
 
 # Which evidence set decides whether anything was retrieved at all. The teach
@@ -36,7 +28,6 @@ class AnswerOptions:
     much prose the user wants must not change which project facts are searched.
     """
 
-    depth_override: str | None = None
     answer_mode: str = "legacy"
 
     def __post_init__(self) -> None:
@@ -44,16 +35,6 @@ class AnswerOptions:
             raise ValueError(
                 "answer_mode must be one of " + ", ".join(ANSWER_MODES)
             )
-        if self.depth_override is None:
-            return
-        allowed = depths_for(self.answer_mode)
-        if self.depth_override not in allowed:
-            raise ValueError(
-                f"depth {self.depth_override!r} is not available for "
-                f"answer_mode {self.answer_mode!r}; expected one of "
-                + ", ".join(allowed)
-            )
-
     @property
     def evidence_source(self) -> str:
         return EVIDENCE_SOURCE_BY_MODE.get(self.answer_mode, "bundle")
@@ -69,6 +50,7 @@ class UserRequest:
     original_query: str
     answer_options: AnswerOptions = AnswerOptions()
     context_budget_override: int | None = None
+    policy: RequestPolicy | None = None
 
     def __post_init__(self) -> None:
         if not self.original_query.strip():
@@ -84,4 +66,5 @@ class UserRequest:
             "original_query": self.original_query,
             "answer_options": self.answer_options.to_dict(),
             "context_budget_override": self.context_budget_override,
+            **({"policy": self.policy.to_dict()} if self.policy else {}),
         }

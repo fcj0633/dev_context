@@ -58,7 +58,7 @@ EXPLAIN_ANSWER_PROMPT = """写作要求：
 5. 历史缺陷必须明确写成过去存在、当前已修复，或当前仍无法确认；不得让历史计划覆盖当前代码。
    验证报告只能证明其中明确记录的测试结果，设计文档只能证明设计意图，不能单独证明代码已经落地。
 6. 每个关键事实使用该章节绑定的真实 Citation。证据缺口集中说明，不要在每节重复免责声明。
-7. 必须执行 Answer Plan 中每节的 target_chars，并使正文总字数落入 answer_depth 对应范围：brief 150–500、standard 800–1800、detailed 2200–5000 中文字符。不能靠重复内容凑字数。
+7. target_chars 是章节软权重；按理解任务解释必要关系，不凑字数或重复理由。
 8. 结尾用一小段收束中心结论，不增加新事实。只输出带 Citation 的回答正文，不要 Sources 列表。"""
 
 
@@ -122,7 +122,6 @@ Context:
 Answer Plan:
 {json.dumps(answer_plan.to_dict(), ensure_ascii=False, indent=2)}
 
-Required Output Depth: {answer_plan.answer_depth}
 Required Target Total Characters: {target_total}
 
 {EXPLAIN_ANSWER_PROMPT}"""

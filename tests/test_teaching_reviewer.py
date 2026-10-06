@@ -97,7 +97,7 @@ def make_plan(sections, *, depth: str = "detailed", strategy: str = "PROBLEM_SOL
         core_mental_model="Redis 令牌是准入凭证，MySQL 座位才是库存事实",
         primary_strategy=strategy,
         sections=tuple(sections),
-        answer_depth=depth,
+
     )
 
 
@@ -210,20 +210,20 @@ class TestReviewParsing:
 
 
 class TestReviewTier:
-    def test_brief_uses_deterministic_reviewer_only(self) -> None:
-        assert needs_llm_review(make_plan([section(1)], depth="brief"), ()) is False
+    def test_short_plan_uses_deterministic_reviewer_only(self) -> None:
+        assert needs_llm_review(make_plan([section(1)]), ()) is False
 
     def test_location_only_never_gets_an_llm_review(self) -> None:
-        plan = make_plan([section(1)], depth="standard", strategy="LOCATION_ONLY")
+        plan = make_plan([section(1)], strategy="LOCATION_ONLY")
 
         assert needs_llm_review(plan, ()) is False
 
-    def test_detailed_always_gets_one(self) -> None:
-        assert needs_llm_review(make_plan([section(1)], depth="detailed"), ()) is True
-        assert needs_llm_review(make_plan([section(1)], depth="deep"), ()) is True
+    def test_complex_plan_uses_existing_legacy_reviewer(self) -> None:
+        assert needs_llm_review(make_plan([section(i) for i in range(1, 5)]), ()) is True
+        assert needs_llm_review(make_plan([section(i) for i in range(1, 5)]), ()) is True
 
-    def test_standard_only_when_something_is_off(self) -> None:
-        plan = make_plan([section(1)], depth="standard")
+    def test_short_plan_requests_legacy_review_when_grounding_is_off(self) -> None:
+        plan = make_plan([section(1)])
 
         assert needs_llm_review(plan, ()) is False
         assert needs_llm_review(
@@ -254,7 +254,7 @@ class TestTargetedRevision:
         ])
         workflow = self._workflow(client, plan, review_payload())
 
-        result = workflow.run(UserRequest("q", AnswerOptions("detailed", "teach")), package)
+        result = workflow.run(UserRequest("q", AnswerOptions(answer_mode="teach")), package)
 
         assert result.review is not None
         assert result.review.revision_required == ("S2",)
@@ -278,7 +278,7 @@ class TestTargetedRevision:
         ])
         workflow = self._workflow(client, plan, "")
 
-        result = workflow.run(UserRequest("q", AnswerOptions("detailed", "teach")), package)
+        result = workflow.run(UserRequest("q", AnswerOptions(answer_mode="teach")), package)
 
         # Four section writes, one review, one compose - nothing regenerated.
         assert len(client.prompts) == 6
@@ -298,7 +298,7 @@ class TestTargetedRevision:
         ])
         workflow = self._workflow(client, plan, "")
 
-        workflow.run(UserRequest("q", AnswerOptions("detailed", "teach")), package)
+        workflow.run(UserRequest("q", AnswerOptions(answer_mode="teach")), package)
 
         revision_prompt = client.prompts[6]
         assert "revision_notes" in revision_prompt

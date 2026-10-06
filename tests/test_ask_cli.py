@@ -505,7 +505,7 @@ def test_ask_cli_planned_path_fans_out_over_sub_questions(
     monkeypatch.setattr(cli_module, "RetrievalService", FakeRetrievalService)
     monkeypatch.setattr(cli_module, "DeepSeekLLMClient", FakeDeepSeekClient)
 
-    exit_code = cli_module.main(["ask", "订单关闭是怎么实现的，为什么这样设计？"])
+    exit_code = cli_module.main(["ask", "订单关闭是怎么实现的，为什么这样设计？", "--answer-mode", "legacy"])
     captured = capsys.readouterr()
 
     assert exit_code == 0
@@ -513,7 +513,10 @@ def test_ask_cli_planned_path_fans_out_over_sub_questions(
     assert "ER1. 确认订单关闭的触发与入口实现 — CODE" in captured.out
     assert "ER2. 确认订单关闭时序的设计依据 — DOCUMENT" in captured.out
     assert "Route: MIXED (rules)" in captured.out
-    assert retrieval_calls == [("hybrid", "CODE"), ("vector", "DOCUMENT")]
+    # Round 0 CODE now searches semantically: neither this question nor anything
+    # retrieved yet names a real project symbol, so there is no exact term for a
+    # keyword half to match. DOCUMENT is untouched.
+    assert retrieval_calls == [("vector", "CODE"), ("vector", "DOCUMENT")]
     assert "订单关闭分为入口与设计两部分。" in captured.out
     assert "Sources:" not in captured.out
 
@@ -552,7 +555,7 @@ def test_ask_cli_debug_prints_per_requirement_status(monkeypatch, capsys) -> Non
     monkeypatch.setattr(cli_module, "RetrievalService", FakeRetrievalService)
     monkeypatch.setattr(cli_module, "DeepSeekLLMClient", FakeDeepSeekClient)
 
-    exit_code = cli_module.main(["ask", "订单关闭怎么实现？", "--debug"])
+    exit_code = cli_module.main(["ask", "订单关闭怎么实现？", "--debug", "--answer-mode", "legacy"])
     captured = capsys.readouterr()
 
     assert exit_code == 0
@@ -771,7 +774,7 @@ def test_ask_cli_planning_failure_falls_back_to_legacy_single_query(
     monkeypatch.setattr(cli_module, "RetrievalService", FakeRetrievalService)
     monkeypatch.setattr(cli_module, "DeepSeekLLMClient", FakeDeepSeekClient)
 
-    exit_code = cli_module.main(["ask", "创建订单的代码在哪里？"])
+    exit_code = cli_module.main(["ask", "创建订单的代码在哪里？", "--answer-mode", "legacy"])
     captured = capsys.readouterr()
 
     assert exit_code == 0
@@ -849,7 +852,7 @@ def test_evaluate_answers_forces_the_case_depth_and_report_path(
     args, _ = workflow_calls[0]
     assert args[3] == "explain"  # answer_mode
     assert args[4] is None  # no explicit context override; EvidencePlan complexity governs
-    assert args[5] == "detailed"  # depth_override
+    assert len(args) == 5  # case depth is historical metadata, not a runtime control
     assert json.loads(output.read_text(encoding="utf-8"))["summary"]["judge_winners"] == {
         "V2": 18
     }

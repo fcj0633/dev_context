@@ -68,7 +68,7 @@ def plan(*entries: tuple[str, tuple[str, ...]], decision_source: str = "llm") ->
             )
             for index, (question, sources) in enumerate(entries, start=1)
         ),
-        answer_depth="detailed",
+
         decision_source=decision_source,
     )
 
@@ -254,7 +254,6 @@ def workflow(
         max_sub_questions=max_sub_questions,
         sub_question_top_k=sub_question_top_k,
         max_rewrites=max_rewrites,
-        depth_override=depth_override,
         answer_mode=answer_mode,
     )
     return subject, policy, legacy, generator, query_rewriter, checker
@@ -418,7 +417,7 @@ def test_answer_receives_the_plan_outline() -> None:
     outline = generator.generate_calls[0]
     assert outline is not None
     assert "Answer Outline:" in outline
-    assert "Depth: detailed" in outline
+    assert "Depth:" not in outline
     assert "1. 入口在哪里" in outline
     assert "2. 设计依据是什么" in outline
 
@@ -680,7 +679,7 @@ def test_explain_mode_plans_drafts_and_reviews_detailed_answers() -> None:
     assert draft_usage.output_tokens == 7
 
 
-def test_brief_explain_mode_skips_answer_planner_and_reviewer() -> None:
+def test_historical_brief_does_not_skip_explanation_planning() -> None:
     planned = plan(sq("入口在哪里"))
     planned = QuestionPlan(
         planned.original_query,
@@ -707,11 +706,11 @@ def test_brief_explain_mode_skips_answer_planner_and_reviewer() -> None:
 
     subject.run(QUERY, 5)
 
-    assert answer_planner.calls == 0
-    assert reviewer.calls == 0
+    assert answer_planner.calls == 1
+    assert reviewer.calls == 1
 
 
-def test_depth_override_replaces_the_planner_choice_and_budget() -> None:
+def test_runtime_plan_has_no_depth_field() -> None:
     subject, _, _, _, _, _ = workflow(
         plan(sq("入口在哪里", "CODE"), sq("设计依据是什么", "DOCUMENT")),
         {
@@ -719,18 +718,17 @@ def test_depth_override_replaces_the_planner_choice_and_budget() -> None:
             "设计依据是什么": [result(2, "DOCUMENT")],
         },
         [enough()],
-        depth_override="brief",
-    )
+        )
 
     output = subject.run(QUERY, 5)
 
     # The plan was authored as detailed; the override wins and drives the budget.
     assert output.trace.plan is not None
-    assert output.trace.plan["answer_depth"] == "brief"
-    assert output.context_bundle.max_chars == 8000
+    assert "answer_depth" not in output.trace.plan
+    assert output.context_bundle.max_chars == 28000
 
 
-def test_depth_override_keeps_the_planner_choice_when_absent() -> None:
+def test_context_budget_is_independent_of_historical_depth() -> None:
     subject, _, _, _, _, _ = workflow(
         plan(sq("入口在哪里", "CODE")),
         {"入口在哪里": [result(1, "CODE")]},
@@ -740,15 +738,10 @@ def test_depth_override_keeps_the_planner_choice_when_absent() -> None:
     output = subject.run(QUERY, 5)
 
     assert output.trace.plan is not None
-    assert output.trace.plan["answer_depth"] == "detailed"
+    assert "answer_depth" not in output.trace.plan
     assert output.context_bundle.max_chars == 28000
 
 
-def test_invalid_depth_override_is_rejected() -> None:
-    with pytest.raises(ValueError, match="depth_override"):
-        workflow(
-            plan(sq("入口在哪里", "CODE")),
-            {"入口在哪里": [result(1, "CODE")]},
-            [enough()],
-            depth_override="verbose",
-        )
+def test_removed_programmatic_depth_override_is_rejected() -> None:
+    with pytest.raises(TypeError, match="depth_override"):
+        PlannedRetrievalWorkflow(depth_override="verbose", planner=None, retrieval_policy=None, context_builder=None, sufficiency_checker=None, query_rewriter=None, legacy_workflow=None, answer_generator_factory=None)

@@ -9,20 +9,11 @@ if TYPE_CHECKING:
     from devcontext.explanation.models import ExplanationPlan
 
 
-# Tokens a section is expected to need, by depth. These are planning weights, not
-# ceilings: nothing refuses an answer for exceeding them, which is the point -
-# the old 2200-5000 character window was the binding constraint on hard
-# questions, not the model's window.
-_TOKENS_PER_SECTION = {
-    "brief": 400,
-    "standard": 900,
-    "detailed": 1_800,
-    "deep": 2_800,
-}
+# Section weights reflect the planned understanding task, not a depth tier.
 _COMPOSER_RESERVE_TOKENS = 2_000
 # Above this many sections a single pass stops being able to hold the whole
 # argument, so the answer is written section by section and joined afterwards.
-FAST_PATH_MAX_SECTIONS = 3
+FAST_PATH_MAX_SECTIONS = 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,17 +39,15 @@ def budget_for(
     """Size the answer from the plan and the model, not from a fixed window."""
     section_count = len(plan.sections)
     per_section = sum(
-        section.target_tokens or _TOKENS_PER_SECTION[plan.answer_depth]
+        section.target_tokens or 1800
         for section in plan.sections
     )
     wanted = per_section + _COMPOSER_RESERVE_TOKENS
 
-    multi_pass = plan.answer_depth in {"detailed", "deep"} or (
-        section_count > FAST_PATH_MAX_SECTIONS
-    )
+    multi_pass = section_count > FAST_PATH_MAX_SECTIONS
     if not multi_pass:
         wanted = max(
-            _TOKENS_PER_SECTION[plan.answer_depth], wanted // 2
+            1800, wanted // 2
         )
 
     if wanted <= capabilities.max_output_tokens:

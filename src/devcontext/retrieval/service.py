@@ -50,7 +50,7 @@ class RetrievalService:
             results = self._keyword_search(query, top_k, source_type)
             timings.keyword_sql_ms = _elapsed_ms(started)
             timings.total_ms = _elapsed_ms(total_started)
-            return SearchExecution(results, timings)
+            return SearchExecution(results, timings, strategy=strategy)
 
         started = time.perf_counter()
         client = BailianEmbeddingClient(
@@ -67,7 +67,7 @@ class RetrievalService:
             results = self._vector_search(query_vector, top_k, source_type)
             timings.vector_sql_ms = _elapsed_ms(started)
             timings.total_ms = _elapsed_ms(total_started)
-            return SearchExecution(results, timings)
+            return SearchExecution(results, timings, strategy=strategy)
 
         pool_size = max(20, top_k)
         started = time.perf_counter()
@@ -80,7 +80,7 @@ class RetrievalService:
         results = reciprocal_rank_fusion([keyword, vector], k=60, top_k=top_k)
         timings.fusion_ms = _elapsed_ms(started)
         timings.total_ms = _elapsed_ms(total_started)
-        return SearchExecution(results, timings)
+        return SearchExecution(results, timings, strategy=strategy)
 
     def _keyword_search(
         self, query: str, top_k: int, source_type: str | None

@@ -1,0 +1,302 @@
+{
+  "input": {
+    "question": "什么是缓存过期？",
+    "evidence": [
+      {
+        "label": "E1",
+        "content": "示范缓存为条目记录到期时刻，读取时跳过已过期条目。"
+      },
+      {
+        "label": "E2",
+        "content": "未过期命中直接返回；到期后读取原始数据并重新填充。"
+      },
+      {
+        "label": "E3",
+        "content": "更新原始数据不会自动刷新所有未过期缓存。"
+      }
+    ]
+  },
+  "blueprint": {
+    "question_form": "WHAT",
+    "question_kind": "WHAT",
+    "kind_rationale": "定义与用途→关键关系→例子与边界",
+    "reader_assumption": {
+      "basis": "DEFAULT",
+      "profile": "Java 基础学习者",
+      "prerequisites": []
+    },
+    "learning_goal": "能够解释到期控制的是哪次读取，区分缓存失效、重新加载与数据一致性。",
+    "goal_capabilities": [
+      {
+        "id": "G1",
+        "applicable": true,
+        "capability": "说明到期判定的职责",
+        "reason": null
+      },
+      {
+        "id": "G2",
+        "applicable": true,
+        "capability": "重建到期前后两次读取",
+        "reason": null
+      },
+      {
+        "id": "G3",
+        "applicable": true,
+        "capability": "区分过期与即时一致性",
+        "reason": null
+      }
+    ],
+    "comprehension_checks": [
+      {
+        "id": "Q1",
+        "question": "到期时没有读取，是否必然发生重新加载？",
+        "goal_ids": [
+          "G1",
+          "G2"
+        ],
+        "answer_claim_ids": [
+          "C1",
+          "C2"
+        ]
+      },
+      {
+        "id": "Q2",
+        "question": "原始数据已更新，缓存未到期时为什么还可能返回旧值？",
+        "goal_ids": [
+          "G3"
+        ],
+        "answer_claim_ids": [
+          "C3"
+        ]
+      }
+    ],
+    "claims": [
+      {
+        "id": "C1",
+        "statement": "示范缓存为条目记录到期时刻，读取时跳过已过期条目。",
+        "claim_type": "PROJECT_FACT",
+        "status": "CONFIRMED",
+        "evidence_labels": [
+          "E1"
+        ],
+        "preconditions": [],
+        "reason": null,
+        "owner_section": "S1"
+      },
+      {
+        "id": "C2",
+        "statement": "未过期命中直接返回；到期后读取原始数据并重新填充。",
+        "claim_type": "PROJECT_FACT",
+        "status": "CONFIRMED",
+        "evidence_labels": [
+          "E2"
+        ],
+        "preconditions": [],
+        "reason": null,
+        "owner_section": "S2"
+      },
+      {
+        "id": "C3",
+        "statement": "更新原始数据不会自动刷新所有未过期缓存。",
+        "claim_type": "PROJECT_FACT",
+        "status": "CONFIRMED",
+        "evidence_labels": [
+          "E3"
+        ],
+        "preconditions": [],
+        "reason": null,
+        "owner_section": "S3"
+      }
+    ],
+    "core_mental_model": [
+      {
+        "id": "M1",
+        "statement": "到期判定决定能否复用旧条目，未命中路径负责加载，两者不等于主动感知更新。",
+        "relation": "FUNCTION",
+        "roles": [
+          "boundary"
+        ],
+        "claim_ids": [
+          "C1",
+          "C2",
+          "C3"
+        ]
+      }
+    ],
+    "critical_distinctions": [
+      {
+        "left": "旧条目失去读取资格",
+        "right": "新值已被加载",
+        "why_confusable": "到期只让旧值不可用，加载仍由后续读取触发。",
+        "claim_ids": [
+          "C1",
+          "C2"
+        ]
+      }
+    ],
+    "scenario": {
+      "kind": "RELATION_EXAMPLE",
+      "setup": "假设缓存保存商品名称，零分钟写入，十分钟到期，第三分钟原始名称更新。",
+      "actors": [
+        "读取者",
+        "缓存",
+        "原始数据"
+      ],
+      "assumptions": [
+        "到期时间仅为示范",
+        "读取检查期限，更新没有主动失效通知"
+      ],
+      "simplification_reason": "单世界两次读取足以解释期限与加载的关系，不需要比较两个实现。",
+      "checkpoints": [
+        {
+          "id": "K1",
+          "spine_refs": [
+            "U2",
+            "U3"
+          ],
+          "branch": "SHARED",
+          "parent_checkpoint_id": null,
+          "trigger": "第五分钟读取",
+          "state_before": "原始数据已更新，条目尚未到期",
+          "action": "读取检查期限后复用旧值",
+          "state_after": "调用者仍得到旧名称",
+          "claim_ids": [
+            "C2",
+            "C3"
+          ]
+        },
+        {
+          "id": "K2",
+          "spine_refs": [
+            "U2"
+          ],
+          "branch": "SHARED",
+          "parent_checkpoint_id": "K1",
+          "trigger": "第十一分钟读取",
+          "state_before": "旧条目已到期",
+          "action": "跳过旧条目，回源并填充",
+          "state_after": "调用者得到新名称，后续可以复用新条目",
+          "claim_ids": [
+            "C1",
+            "C2"
+          ]
+        }
+      ]
+    },
+    "explanation_units": [
+      {
+        "id": "U1",
+        "role": "RELATION",
+        "problem": "过期控制的是读取资格",
+        "action": "示范缓存为条目记录到期时刻，读取时跳过已过期条目。",
+        "state_result": "示范缓存为条目记录到期时刻，读取时跳过已过期条目。",
+        "preconditions": [],
+        "remaining_boundary": "不超出示范材料",
+        "claim_ids": [
+          "C1"
+        ],
+        "links": []
+      },
+      {
+        "id": "U2",
+        "role": "RELATION",
+        "problem": "期限怎样影响读取",
+        "action": "未过期命中直接返回；到期后读取原始数据并重新填充。",
+        "state_result": "未过期命中直接返回；到期后读取原始数据并重新填充。",
+        "preconditions": [],
+        "remaining_boundary": "不超出示范材料",
+        "claim_ids": [
+          "C2"
+        ],
+        "links": []
+      },
+      {
+        "id": "U3",
+        "role": "RELATION",
+        "problem": "过期不等于同时刷新",
+        "action": "更新原始数据不会自动刷新所有未过期缓存。",
+        "state_result": "更新原始数据不会自动刷新所有未过期缓存。",
+        "preconditions": [],
+        "remaining_boundary": "不超出示范材料",
+        "claim_ids": [
+          "C3"
+        ],
+        "links": []
+      }
+    ],
+    "answer_structure": [
+      {
+        "id": "S1",
+        "title": "过期控制的是读取资格",
+        "section_goal": "过期控制的是读取资格",
+        "goal_ids": [
+          "G1"
+        ],
+        "spine_refs": [
+          "U1"
+        ],
+        "learning_delta": {
+          "before_kind": "GAP",
+          "before": "把到期与更新当成同一个动作",
+          "after": "到期只决定旧条目的使用资格"
+        },
+        "may_reference": [],
+        "checkpoint_ids": [],
+        "support_labels": [],
+        "target_chars": 400
+      },
+      {
+        "id": "S2",
+        "title": "期限怎样影响读取",
+        "section_goal": "期限怎样影响读取",
+        "goal_ids": [
+          "G2"
+        ],
+        "spine_refs": [
+          "U2"
+        ],
+        "learning_delta": {
+          "before_kind": "GAP",
+          "before": "不知道一次读取什么时候访问原始数据",
+          "after": "能够沿两次读取判断命中或回源"
+        },
+        "may_reference": [
+          "C1"
+        ],
+        "checkpoint_ids": [
+          "K1",
+          "K2"
+        ],
+        "support_labels": [],
+        "target_chars": 400
+      },
+      {
+        "id": "S3",
+        "title": "过期不等于同时刷新",
+        "section_goal": "过期不等于同时刷新",
+        "goal_ids": [
+          "G3"
+        ],
+        "spine_refs": [
+          "U3"
+        ],
+        "learning_delta": {
+          "before_kind": "GAP",
+          "before": "认为设置期限就能立即看见更新",
+          "after": "能根据有效期说明旧值窗口及主动失效需求"
+        },
+        "may_reference": [
+          "C1",
+          "C2"
+        ],
+        "checkpoint_ids": [
+          "K1"
+        ],
+        "support_labels": [],
+        "target_chars": 400
+      }
+    ]
+  },
+  "body": "<<<SECTION:S1>>>\n## 过期控制的是读取资格\n缓存过期是对旧条目使用资格的限制：到了期限，读取就不再使用它。它解决的是“同一个结果可以复用多久”，不是“原始数据一更新，所有副本马上跟着更新”。示范中，缓存为条目记录到期时刻，每次读取先检查该时刻。[E1]\n\n可以先把三个动作分开：保存缓存是留下可复用的结果；到期判定决定这个结果现在还能不能用；重新加载是在不能用时取得原始数据并保存新结果。前两者并不会自动完成第三者。这个关系说明，过期不是一个保证所有更新立即传播的同步机制。\n\n假设缓存中保存一个商品名称，零分钟写入，十分钟到期。这里的时间是假设值，用来观察一次读取究竟作了什么，不表示任何项目采用固定十分钟期限。\n<<<END_SECTION:S1>>>\n<<<SECTION:S2>>>\n## 期限怎样影响读取\n沿着同一个条目看两次读取。第三分钟原始名称已更新，第五分钟请求到来时，缓存里的旧名称还未到期。读取检查通过，就直接返回旧名称，没有访问原始数据。[E2] 因此“数据库已更新”与“这次读取看见更新”是两个不同结果。\n\n第十一分钟再读取，期限检查已经不通过。读取先跳过旧条目，再取得原始名称，随后将新名称写入缓存并返回。[E2] 旧条目过期与新条目写入之间可能存在加载工作，后者是这次读取完成的，不是时钟自动替读取者完成的。\n\n所以同一个期限产生了两种效果：期限内允许复用，减少重复加载；期限后限制旧值继续被使用，但首次回源要承担加载成本。若到期后没有请求，示范的读取规则本身并不能推出系统会立即刷新。\n<<<END_SECTION:S2>>>\n<<<SECTION:S3>>>\n## 过期不等于同时刷新\n回到第五分钟的旧值：读取的条件只有“未到期”，没有“与原始数据最新版本相同”。所以第三分钟的更新可能在期限内暂时不可见。[E3] 期限限定旧值的使用窗口，却不能据此推导即时一致性。\n\n这就是过期与主动失效的区别。过期由时间条件改变读取资格；主动失效需要更新方通知、删除条目或其它协调。示范材料没有描述后一条路径，因此这里只把它作为可能需要的设计，而不是已经实现的保证。\n\n读这个机制时，关键是分别确认资格判定、回源触发和更新传播。明确这三个动作，才能判断某次读取为什么返回旧值，以及业务要求立即可见时还缺少哪条关系。\n<<<END_SECTION:S3>>>",
+  "annotation": "先定义读取资格，再沿同一个条目两次读取落实状态变化，最后解释一致性边界；三节分别建立新关系，不重复缓存收益。虚构示范不证明任何项目实现。"
+}

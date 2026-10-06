@@ -3,7 +3,6 @@ from __future__ import annotations
 from devcontext.explanation.models import (
     CLAIM_TYPES,
     CONFIDENCES,
-    DEPTHS,
     PRIMARY_STRATEGIES,
     SECTION_TYPES,
     TEACHING_DEVICES,
@@ -63,7 +62,6 @@ GENERAL_CONCEPT（通用原理，不得反推项目实现）／ILLUSTRATIVE_EXAM
   "unresolved_gaps": ["证据无法确认之处"],
   "conflicts": [{"topic": "string", "evidence_labels": ["E1"],
                  "resolution": "UNRESOLVED", "explanation": "string"}],
-  "answer_depth": "DEPTHS 之一"
 }"""
 
 
@@ -75,5 +73,5 @@ def allowed_values_block() -> str:
         f"teaching_devices 只能取：{', '.join(TEACHING_DEVICES)}。\n"
         f"claim_type 只能取：{', '.join(CLAIM_TYPES)}。\n"
         f"confidence / evidence_state 只能取：{', '.join(CONFIDENCES)}。\n"
-        f"answer_depth 只能取：{', '.join(DEPTHS)}。"
+        "展开由问题和独立理解任务决定，不设固定深度档位。"
     )

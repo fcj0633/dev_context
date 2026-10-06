@@ -76,7 +76,7 @@ def test_valid_plan_is_accepted() -> None:
 
     assert plan.decision_source == "llm"
     assert plan.original_query == QUERY
-    assert plan.answer_depth == "detailed"
+
     assert [item.id for item in plan.sub_questions] == ["SQ1", "SQ2"]
     assert plan.sub_questions[0].question == "注册入口在哪个类"
     assert plan.sub_questions[0].purpose == "确定流程起点"
@@ -150,9 +150,9 @@ def test_both_sources_are_allowed_and_order_is_kept() -> None:
         "not json",
         '{"intent_summary": "a", "sub_questions": [], "answer_depth": "standard"}',
         plan_payload(
-            sub_questions=[sub_question()], answer_depth="standard", confidence=1
+            sub_questions=[sub_question()], confidence=1
         ),
-        plan_payload(sub_questions=[sub_question()], answer_depth="huge"),
+        plan_payload(sub_questions=[sub_question()], extra_field="unexpected"),
         '{"intent_summary": "a", "sub_questions": {}, "answer_depth": "standard"}',
         plan_payload(sub_questions=[]),
         plan_payload(
@@ -192,7 +192,7 @@ def test_invalid_plan_falls_back_without_raising(response: str) -> None:
     assert plan.decision_source == "fallback"
     assert len(plan.sub_questions) == 1
     assert plan.sub_questions[0].question == QUERY
-    assert plan.answer_depth == "standard"
+
 
 
 def test_network_failure_falls_back_and_leaks_nothing() -> None:

@@ -3,7 +3,7 @@ from __future__ import annotations
 import copy
 import json
 import subprocess
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from hashlib import sha256
@@ -58,6 +58,11 @@ class RetrievalTraceRecorder(RetrievalObserver):
                 "action": action.to_dict(),
                 "results": copy.deepcopy(execution.results),
                 "timings": execution.timings.to_dict(),
+                # Strategy trace: which retrieval actually ran for this action and
+                # which real code symbols (if any) selected it. Without these the
+                # report can only see that a round scored worse, not why.
+                "strategy": execution.strategy,
+                "symbols": list(execution.symbols),
             }
         )
 
@@ -492,6 +497,7 @@ def score_workflow_case(
     )
     survival = _context_survival(case, observer, final_context)
     rescue = _second_round_rescue(case, package, observer, final_context)
+    _annotate_action_gold(observer.action_candidates, case)
     trace = observer.to_dict()
     return {
         "case_id": case["id"], "suite": suite, "mode": mode,
@@ -524,6 +530,10 @@ def score_workflow_case(
         "ready_with_dropped_evidence": ready_with_dropped_evidence,
         "context_survival": survival,
         "second_round_rescue": rescue,
+        "round_zero": _round_zero_metrics(case, observer),
+        "round_one_new_gold_group_count": sum(
+            len(item["round_1_new_groups"]) for item in rescue["details"]
+        ),
         "stage_usage": stage_usage,
         "error": None,
     }
@@ -656,6 +666,100 @@ def _second_round_rescue(
     }
 
 
+def _annotate_action_gold(
+    entries: Sequence[dict[str, Any]], case: Mapping[str, Any]
+) -> None:
+    """Attach per-action gold matching, in place, to the recorded candidates.
+
+    ``gold_rank`` is the 1-based position of the first retrieved result matching
+    any gold group of that requirement, or None when none matched. Temporal
+    scope is deliberately NOT applied: the recorded candidates are raw
+    ``SearchResult`` rows, which carry no temporal status, so filtering them
+    would silently match nothing. The oracle's coverage numbers are the
+    temporal-aware ones; this rank is a ranking-quality signal only.
+    """
+    specs = {spec["id"]: spec for spec in case["requirements"]}
+    for entry in entries:
+        spec = specs.get(entry["action"]["requirement_id"])
+        if spec is None or not spec["relevant"]:
+            entry["gold_hit"] = False
+            entry["gold_rank"] = None
+            continue
+        rank = None
+        for index, result in enumerate(entry["results"], start=1):
+            if any(_matches_group(result, group) for group in spec["relevant"]):
+                rank = index
+                break
+        entry["gold_hit"] = rank is not None
+        entry["gold_rank"] = rank
+
+
+def _strategy_counts(entries: Sequence[dict[str, Any]]) -> dict[str, int]:
+    """How many actions ran under each source scope / strategy pair.
+
+    The pair matters rather than the strategy alone: ``CODE:vector`` versus
+    ``CODE:keyword`` is the comparison this experiment exists to make, and a
+    bare strategy tally would let a DOCUMENT action hide a CODE one.
+    """
+    counts: dict[str, int] = {}
+    for entry in entries:
+        scope = entry["action"].get("source_scope") or "?"
+        strategy = entry.get("strategy") or "unknown"
+        key = f"{scope}:{strategy}"
+        counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+def _merge_counts(values: Iterable[Mapping[str, int]]) -> dict[str, int]:
+    merged: dict[str, int] = {}
+    for value in values:
+        for key, count in value.items():
+            merged[key] = merged.get(key, 0) + count
+    return merged
+
+
+def _round_zero_metrics(
+    case: Mapping[str, Any], observer: RetrievalTraceRecorder
+) -> dict[str, Any] | None:
+    """What round 0 alone achieved, scored on round 0's own context.
+
+    The final numbers cannot say whether a case was answered by the first
+    semantic sweep or rescued by the second exact one - and that distinction is
+    the whole question this experiment asks - so round 0 is scored separately.
+    """
+    round_zero = observer.round_contexts.get(0)
+    if round_zero is None:
+        return None
+    core = [spec for spec in case["requirements"] if spec["priority"] == "CORE"]
+    satisfiable = [spec for spec in case["requirements"] if spec["expected_satisfied"]]
+    core_satisfied = sum(
+        _gold_requirement_satisfied(spec, round_zero) for spec in core
+    )
+    group_total = sum(len(spec["relevant"]) for spec in case["requirements"])
+    group_hit = sum(
+        len(_matched_group_indexes(round_zero.items, spec["relevant"]))
+        for spec in case["requirements"]
+    )
+    round_zero_actions = [
+        entry
+        for entry in observer.action_candidates
+        if entry["action"]["round_index"] == 0
+    ]
+    return {
+        "core_requirement_total": len(core),
+        "core_requirement_satisfied": core_satisfied,
+        "core_satisfaction_rate": _rate(core_satisfied, len(core)),
+        "gold_group_total": group_total,
+        "gold_group_hit": group_hit,
+        "gold_group_recall": _rate(group_hit, group_total),
+        "full_case_success": all(
+            _gold_requirement_satisfied(spec, round_zero) for spec in satisfiable
+        ),
+        "action_count": len(round_zero_actions),
+        "strategy_counts": _strategy_counts(round_zero_actions),
+    }
+
+
 def _summarize(records: Sequence[dict[str, Any]]) -> dict[str, Any]:
     valid = [item for item in records if item["error"] is None]
     predicted_ready = [item for item in valid if item["actual_retrieval_state"] == "READY"]
@@ -670,6 +774,16 @@ def _summarize(records: Sequence[dict[str, Any]]) -> dict[str, Any]:
     )
     core_total = sum(item["core_requirement_total"] for item in valid)
     core_satisfied = sum(item["core_requirement_satisfied"] for item in valid)
+    round_zero = [
+        item["round_zero"] for item in valid if item.get("round_zero") is not None
+    ]
+    r0_core_total = sum(item["core_requirement_total"] for item in round_zero)
+    r0_core_satisfied = sum(
+        item["core_requirement_satisfied"] for item in round_zero
+    )
+    r0_group_total = sum(item["gold_group_total"] for item in round_zero)
+    r0_group_hit = sum(item["gold_group_hit"] for item in round_zero)
+    r0_full_success = sum(item["full_case_success"] for item in round_zero)
     core_cases = [item for item in valid if item["core_requirement_total"] > 0]
     ready_gold = [
         item for item in valid if item["expected_retrieval_state"] == "READY"
@@ -730,6 +844,23 @@ def _summarize(records: Sequence[dict[str, Any]]) -> dict[str, Any]:
         ),
         "average_search_action_count": (
             mean(len(item["search_actions"]) for item in valid) if valid else None
+        ),
+        # Round-level reporting. The final numbers average the two rounds
+        # together and so cannot answer this experiment's question - whether the
+        # first semantic sweep was enough, or the second exact one did the work.
+        "round0_core_requirement_total": r0_core_total,
+        "round0_core_requirement_satisfied": r0_core_satisfied,
+        "round0_core_satisfaction_rate": _rate(r0_core_satisfied, r0_core_total),
+        "round0_gold_group_total": r0_group_total,
+        "round0_gold_group_hit": r0_group_hit,
+        "round0_gold_group_recall": _rate(r0_group_hit, r0_group_total),
+        "round0_full_case_success_count": r0_full_success,
+        "round0_full_case_success_rate": _rate(r0_full_success, len(round_zero)),
+        "round0_strategy_counts": _merge_counts(
+            item["strategy_counts"] for item in round_zero
+        ),
+        "round1_new_gold_group_count": sum(
+            item["round_one_new_gold_group_count"] for item in valid
         ),
     }
     summary["by_tag"] = {
