@@ -208,6 +208,7 @@ class AgenticTrace:
     # reviewer asked to redo. Absent from the dict unless the teach path ran.
     teaching: dict[str, Any] | None = None
     agent_retrieval: dict[str, Any] | None = None
+    structural_retrieval: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         value = {
@@ -242,6 +243,8 @@ class AgenticTrace:
             value["explanation_plan"] = self.explanation_plan
         if self.teaching is not None:
             value["teaching"] = self.teaching
+        if self.structural_retrieval is not None:
+            value["structural_retrieval"] = self.structural_retrieval
         if self.agent_retrieval is not None:
             value["agent_retrieval"] = self.agent_retrieval
         return value

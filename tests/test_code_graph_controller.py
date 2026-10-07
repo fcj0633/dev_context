@@ -34,7 +34,7 @@ def test_controller_merges_graph_into_workspace_without_mutating_raw_candidates(
     controller = RetrievalController(FrozenEvidencePlanner(spec), FrozenSearchActionPlanner(spec), Policy(),
         OracleCoverageChecker(spec), SourcePolicy(), observer, graph_expander=Expander())
     outcome = controller.retrieve(UserRequest("调用链路", AnswerOptions("teach")), 5)
-    assert outcome.package.retrieval_state == "READY"
+    assert outcome.package.retrieval_state == "PARTIAL"  # No physical relation was provided by this expander.
     refs = outcome.package.evidence_workspace.for_requirement("ER1")
     assert [ref.chunk_id for ref in refs] == [1, 2]
     assert refs[1].citation.file_path == "Service.java"
@@ -61,7 +61,7 @@ def test_followup_original_evidence_precedes_early_graph_noise_in_small_bundle()
     class Expander:
         def expand(self, action, requirement, execution, round_index):
             return GraphExpansion([noise], GraphExpansionTrace(action.action_id, requirement.id, round_index, "CALL_CHAIN"))
-    spec = {"requirements": [{"id": "ER1", "target": "调用链路", "success_criteria": "找到 gold",
+    spec = {"requirements": [{"id": "ER1", "target": "普通代码证据", "success_criteria": "找到 gold",
             "priority": "CORE", "temporal_scope": "CURRENT", "source_requirement": "CODE", "expected_satisfied": True,
             "queries": {"round_0": "流程", "round_1": "seed gold"},
             "relevant": [{"source_type": "CODE", "symbol": "gold"}]}]}

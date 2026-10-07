@@ -88,7 +88,8 @@ class RetrievalController:
         self.evidence_planner = evidence_planner
         self.action_planner = action_planner
         self.retrieval_policy = retrieval_policy
-        self.coverage_checker = coverage_checker
+        from devcontext.agentic.structural_coverage import combined
+        self.coverage_checker = combined(coverage_checker)
         self.source_policy = source_policy
         self.observer = observer
         self.graph_expander = graph_expander
@@ -100,6 +101,8 @@ class RetrievalController:
 
         started = time.perf_counter()
         plan = self.evidence_planner.plan(request.original_query)
+        if plan.schema_version != 3:
+            raise ValueError("Retrieval requires a normalized v3 plan")
         stages.append(
             _stage_usage(
                 "evidence_planning",
@@ -180,7 +183,9 @@ class RetrievalController:
             item
             for item in plan.requirements
             if item.priority == "CORE"
-            and coverage_by_id[item.id].state in {"PARTIAL", "MISSING"}
+            and (coverage_by_id[item.id].state in {"PARTIAL", "MISSING"}
+                 or coverage_by_id[item.id].state == 'UNVERIFIED'
+                 and self.coverage_checker.last_diagnostics.get(item.id, {}).get('structural', {}).get('state') == 'UNVERIFIED')
         )
         remaining_budget = MAX_SEARCH_ACTIONS - len(history)
         followup_requirements = followup_requirements[:remaining_budget]
@@ -240,6 +245,11 @@ class RetrievalController:
                 )
             )
 
+        termination_reason = None
+        try:
+            remaining_seconds()
+        except RequestDeadlineExceeded:
+            termination_reason = 'DEADLINE'
         state = package_state(
             plan,
             bundle,
@@ -248,6 +258,7 @@ class RetrievalController:
             len(workspace)
             if request.answer_options.evidence_source == "workspace"
             else None,
+            termination_reason=termination_reason,
         )
         unresolved = tuple(
             item.requirement_id for item in coverage if not item.satisfied
@@ -264,7 +275,7 @@ class RetrievalController:
             workspace.freeze(),
             workspace,
         )
-        return RetrievalOutcome(package, tuple(stages))
+        return RetrievalOutcome(package, tuple(stages), structural_trace={"evidence": workspace.structural_metadata(), "coverage": self.coverage_checker.last_diagnostics})
 
     def _execute(
         self,
@@ -309,6 +320,7 @@ class RetrievalController:
                 )
                 if code_strategy is not None:
                     execution.symbols = symbols
+                expansion = None
                 if self.graph_expander is not None:
                     expansion = self.graph_expander.expand(action, requirement, execution, round_index)
                     execution.graph_results = expansion.results
@@ -328,6 +340,9 @@ class RetrievalController:
                 # Register + ingest per round, so a round's snapshot reflects only
                 # what that round found rather than everything found so far.
                 workspace.ingest(annotated, round_index)
+                if expansion is not None:
+                    workspace.add_symbols(expansion.symbols, requirement.id, round_index)
+                    workspace.add_relations(expansion.relations, requirement.id, round_index, 'auto_graph', action.action_id)
                 if self.observer is not None:
                     self.observer.on_action_completed(action, execution)
                 executed.append(action)

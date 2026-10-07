@@ -35,8 +35,8 @@ class ToolDrivenRetrievalController:
         coverage = outcome.memory.coverage
         state = package_state(plan, bundle, coverage, outcome.search_history,
             len(workspace) if request.answer_options.evidence_source == "workspace" else None,
-            tool_summary=outcome.memory.execution_summary())
+            tool_summary=outcome.memory.execution_summary(), termination_reason=outcome.memory.stop_reason)
         package = EvidencePackage(request.original_query, plan, bundle, coverage,
             tuple(c.requirement_id for c in coverage if not c.satisfied), state, outcome.search_history,
             outcome.coverage_rounds, workspace.freeze(), workspace)
-        return RetrievalOutcome(package, tuple(stages), outcome.trace())
+        return RetrievalOutcome(package, tuple(stages), outcome.trace(), {"evidence": workspace.structural_metadata(), "coverage": self.runtime.coverage_checker.last_diagnostics})

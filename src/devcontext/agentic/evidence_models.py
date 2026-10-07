@@ -183,6 +183,7 @@ def package_state(
     search_history: tuple[SearchAction, ...] = (),
     evidence_count: int | None = None,
     tool_summary: ToolExecutionSummary | None = None,
+    termination_reason: str | None = None,
 ) -> str:
     """``evidence_count`` overrides what counts as "any evidence at all".
 
@@ -191,6 +192,11 @@ def package_state(
     retrieval came back empty. Pass ``len(workspace)`` for that path and leave it
     None for the paths that answer from the bundle.
     """
+    if termination_reason in {'PLANNER_FAILED', 'DEADLINE', 'ALL_TOOLS_FAILED'}:
+        has_evidence = bool(context.items) if evidence_count is None else evidence_count > 0
+        if has_evidence:
+            return 'PARTIAL'
+        return 'RETRIEVAL_FAILED'
     if tool_summary is None and search_history and all(action.error for action in search_history):
         return "RETRIEVAL_FAILED"
     has_evidence = bool(context.items) if evidence_count is None else evidence_count > 0

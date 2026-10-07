@@ -207,6 +207,7 @@ class EvidenceDrivenWorkflow:
             ),
             teaching=(outcome.workspace_stats or {}).get("trace"),
             agent_retrieval=retrieval.agent_trace,
+            structural_retrieval=getattr(retrieval, "structural_trace", None),
         )
         return AgenticAnswerResult(
             answer_result,

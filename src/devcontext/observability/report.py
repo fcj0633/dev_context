@@ -69,6 +69,7 @@ def build_perf_report(
     revisions = [item for item in recorder.section_executions if item.revision]
 
     return {
+        **({"structural_retrieval": trace.structural_retrieval} if getattr(trace, "structural_retrieval", None) else {}),
         **({"agent_retrieval": trace.agent_retrieval} if getattr(trace, "agent_retrieval", None) else {}),
         **({"answer_text": answer_text, "answer_plan": trace.explanation_plan,
             "retrieval_plan": trace.evidence_plan} if policy else {}),
