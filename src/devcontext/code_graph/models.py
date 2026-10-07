@@ -148,3 +148,5 @@ class GraphExpansionTrace:
 class GraphExpansion:
     results: list[SearchResult]
     trace: GraphExpansionTrace
+    symbols: tuple = ()
+    relations: tuple = ()

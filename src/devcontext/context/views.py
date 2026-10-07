@@ -55,7 +55,7 @@ class WorkspaceCoverageView:
     def items_for(self, requirement_id: str) -> tuple[ContextItem, ...]:
         refs = self.workspace.for_requirement(requirement_id)
         if self.round_index is not None:
-            refs = tuple(ref for ref in refs if ref.first_seen_round <= self.round_index)
+            refs = tuple(ref for ref in refs if self.workspace._chunk_ownership_round.get((requirement_id, ref.chunk_id), ref.first_seen_round) <= self.round_index)
         return tuple(context_item_from_ref(ref) for ref in refs)
 
 
