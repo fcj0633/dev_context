@@ -135,6 +135,7 @@ NEED_PROMPT += '''
 3. 用户明确要求两段连续路径，例如 Controller 方法→接口方法→实现方法，必须用一条 PATH need，segments=[CALLS/OUTGOING,OVERRIDES/INCOMING]。不要拆成两条独立 RELATION；只有超过两段才拆需求。
 4. anchor_hint/target_hint 只能填用户已提供的 Java 标识符/限定名称/签名。未提供具体目标则 target_hint=""，不能填“下游方法”“实现类”等普通词。
 5. 对独立的方法实现问题用 RELATION/OVERRIDES/INCOMING，对独立的类实现接口问题用 RELATION/IMPLEMENTS/INCOMING。
+6. 假设名称和一般概念问题也保持正常计划格式（至少一条 CORE requirement，retrieval_needs 不为空）。明确不查项目实现时可用 DOCUMENT need 支持概念说明，不添加 RELATION/PATH，不把假设名称当作已存在的项目实体。
 例如下游：{"need_type":"RELATION","relation_spec":{"edge_type":"CALLS","direction":"OUTGOING","anchor_requirement":"NEED_METHOD","anchor_hint":"OrderServiceImpl.closeTimeoutOrder","target_hint":""}}。
 例如构造：{"need_type":"RELATION","relation_spec":{"edge_type":"CONSTRUCTS","direction":"OUTGOING","anchor_requirement":"NEED_METHOD","anchor_hint":"OrderServiceImpl.closePayOrder","target_hint":""}}。
 例如两段路径：{"need_type":"PATH","path_spec":{"mode":"CALL_CHAIN","segments":[{"edge_type":"CALLS","direction":"OUTGOING"},{"edge_type":"OVERRIDES","direction":"INCOMING"}],"anchor_requirement":"NEED_METHOD","anchor_hint":"TicketOrderController.createTicketOrder","target_hint":""}}。

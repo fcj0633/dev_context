@@ -1,5 +1,6 @@
 """Batch metadata verification confined to requirement-owned evidence."""
 import psycopg
+from dataclasses import replace
 from devcontext.code_graph.models import AnalysisContractError
 from devcontext.context.relations import EvidenceSymbol, EvidenceRelation, RelationProbe
 from devcontext.deadline import RequestDeadlineExceeded
@@ -29,6 +30,7 @@ class GraphMetadataHydrator:
             # Reuse completed probes only for the identical endpoint set.
             done = [p for p in workspace.probes_for(requirement.id, round_index) if p.scope == 'INDUCED' and p.status == 'COMPLETED' and p.edge_types == types]
             if done and set(keys) == set(done[-1].symbol_keys) and set(chunks) == {s.chunk_id for s in workspace.symbols_for(requirement.id, round_index)}:
+                workspace.add_probe(replace(done[-1], round_index=round_index, observation_id=f'hydrate-reuse:{round_index}'))
                 continue
             status, error, relations = 'NOT_QUERIED', None, []
             try:

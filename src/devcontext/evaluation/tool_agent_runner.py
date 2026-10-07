@@ -69,6 +69,8 @@ def _score(case, outcome, result_lookup=None):
         if requirement["priority"] == "CORE":
             all_core &= bool(satisfied)
     trace = outcome.agent_trace or {}
+    structural = workspace.structural_metadata() if workspace is not None else {}
+    structural_need_count = sum(n.need_type in {'RELATION', 'PATH'} for r in outcome.package.evidence_plan.requirements for n in r.retrieval_needs)
     calls = trace.get("tool_calls", [])
     tools = [c["call"]["tool_name"] for c in calls if c["status"] not in {"INVALID_ARGUMENT", "ERROR", "DEADLINE"}]
     sequences = case.get("allowed_tool_sequences", [])
@@ -87,6 +89,7 @@ def _score(case, outcome, result_lookup=None):
             "core_total": core_total, "core_satisfied": core_found,
             "gold_total": gold_total, "gold_found": gold_found,
             "relation_gold_total": relation_total, "relation_gold_found": relation_found,
+            "structural_need_count": structural_need_count, "structural_proved_count": len(structural.get('paths', [])),
             "full_case_success": gold_found == gold_total and all_relation_gold and (bool(gold_total) or outcome.package.retrieval_state == case["expected_retrieval_state"]),
             "false_ready": outcome.package.retrieval_state == "READY" and not all_core,
             "tool_selection_correct": selection,
@@ -100,7 +103,7 @@ def _score(case, outcome, result_lookup=None):
             "stop_reason": trace.get("stop_reason"), "agent_trace": outcome.agent_trace,
             "package": outcome.package.to_dict(),
             "workspace": workspace.metadata_view() if workspace else [],
-            "structural_evidence": workspace.structural_metadata() if workspace is not None else {},
+            "structural_evidence": structural,
             "policy_violations": len(trace.get("policy_violations", []))}
 
 
@@ -197,6 +200,8 @@ def summarize(records):
     total = sum(r["core_total"] for r in valid)
     gold_total = sum(r["gold_total"] for r in valid)
     calls = sum(r["tool_calls"] for r in valid)
+    probes = [p for r in valid for p in r.get('structural_evidence', {}).get('probes', [])]
+    structural_total = sum(r.get('structural_need_count', 0) for r in valid)
     selection = [r["tool_selection_correct"] for r in valid if r["tool_selection_correct"] is not None]
     return {"cases": len(records), "errors": len(records) - len(valid),
             "core_coverage": sum(r["core_satisfied"] for r in valid) / total if total else 0.,
@@ -212,6 +217,11 @@ def summarize(records):
             "redundant_call_rate": sum(r["redundant_calls"] for r in valid) / calls if calls else None,
             "tool_selection_accuracy": mean(selection) if selection else None,
             "graph_calls": sum(r["graph_calls"] for r in valid),
+            "graph_call_rate": sum(r['graph_calls'] for r in valid) / calls if calls else None,
+            "probe_count": len(probes),
+            "probe_statuses": {s: sum(p['status'] == s for p in probes) for s in ('NOT_QUERIED','COMPLETED','TIMEOUT','INDEX_UNAVAILABLE','FAILED','DEADLINE')},
+            "metadata_reuses": sum(p.get('observation_id', '').startswith('hydrate-reuse:') for p in probes),
+            "relation_completion_rate": sum(r.get('structural_proved_count', 0) for r in valid) / structural_total if structural_total else None,
             "graph_tool_p95_ms": percentile([c["latency_ms"] for r in valid for c in (r.get("agent_trace") or {}).get("tool_calls", [])
                 if c["call"]["tool_name"] in {"find_callers", "find_callees", "find_implementations", "find_hierarchy"}]),
             "ambiguous_recovery_rate": sum(r.get("ambiguous_recovered", 0) for r in valid) / sum(r.get("ambiguous_events", 0) for r in valid)

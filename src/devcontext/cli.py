@@ -860,7 +860,7 @@ def main(argv: list[str] | None = None) -> int:
             def checker_factory(case):
                 return OracleCoverageChecker(case) if args.checker == "oracle" else CoverageChecker(
                     _sub_question_sufficiency_factory(settings), max_attempts=1)
-            output = args.output or project_root() / "artifacts" / "tool-agent-v1-report.json"
+            output = args.output or project_root() / "artifacts" / "tool-agent-v5-report.json"
             output.parent.mkdir(parents=True, exist_ok=True)
             def checkpoint(report):
                 output.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -874,6 +874,8 @@ def main(argv: list[str] | None = None) -> int:
             report["checker_configuration"] = {"kind": args.checker, "max_attempts": 1 if args.checker == "semantic" else None,
                                                "model": settings.text_model() if args.checker == "semantic" else None}
             report["datasets"] = [{"path": str(path), "sha256": sha256(path.read_bytes()).hexdigest()} for path in paths]
+            from devcontext.evaluation.v5_fingerprint import configuration_hash
+            report["configuration_sha256"] = configuration_hash(settings)
             checkpoint(report)
             print(json.dumps({"output": str(output), "summary": report["summary"], "acceptance": report["acceptance"]}, ensure_ascii=False, indent=2))
         elif args.command == "evaluate-symbol-graph":

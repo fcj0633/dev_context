@@ -19,6 +19,7 @@ from devcontext.answer_policy import resolve_policy
 from devcontext.context import ContextBuilder
 from devcontext.deadline import request_deadline
 from devcontext.evaluation.v5_acceptance import release_decision
+from devcontext.evaluation.v5_fingerprint import configuration_hash
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -57,13 +58,15 @@ def production_check(settings, output):
                     plan.schema_version = 2
                 except FrozenInstanceError:
                     immutable = True
-                record.update(passed=bool(native_v3 and immutable and match and plan.decision_source == 'llm'), plan=plan.to_dict(), native_v3=native_v3)
+                record.update(passed=bool(native_v3 and immutable and match and plan.decision_source == 'llm'), plan=plan.to_dict(), native_v3=native_v3,
+                              response=planner.last_response, rejection=getattr(planner, 'last_error', None))
             except Exception as error:
                 record['error'] = type(error).__name__
             records.append(record)
             write(output, {'schema_version':3,'status':'running','records':records})
     result = {'schema_version':3,'status':'complete','records':records,'positive_count':20,'negative_count':8,
-              'passed':all(r['passed'] for r in records), 'model':settings.text_model(), 'provider':settings.llm_provider}
+              'passed':all(r['passed'] for r in records), 'model':settings.text_model(), 'provider':settings.llm_provider,
+              'configuration_sha256':configuration_hash(settings)}
     write(output,result)
     return result
 

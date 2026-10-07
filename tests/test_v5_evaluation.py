@@ -11,12 +11,12 @@ from test_v5_structure import req, workspace, edge, A, B
 
 def report(kind, coverage=1., success=1., false_ready=0):
     arm={'cases':24 if kind=='oracle' else 48,'errors':0,'core_coverage':coverage,'full_case_success':success,'false_ready':false_ready}
-    return {'schema_version':3,'scoring_version':3,'status':'complete','checker_kind':kind,'corpus_sha256':'same',
+    return {'schema_version':3,'scoring_version':3,'status':'complete','checker_kind':kind,'corpus_sha256':'same', 'configuration_sha256':'cfg', 'top_k':12,
             'summary':{a:dict(arm) for a in ('fixed','auto_graph','tool_agent')},'quality_passed':True}
 
 
 def evidence_checks():
-    return ({'status':'complete','passed':True,'positive_count':20,'negative_count':8},
+    return ({'status':'complete','passed':True,'positive_count':20,'negative_count':8,'configuration_sha256':'cfg'},
             {'status':'complete','passed':True,'records':[{}]*12},
             {k:True for k in ('python','postgresql','java','structure','policy')})
 
@@ -51,6 +51,14 @@ def test_historical_and_different_corpus_reports_are_rejected():
 def test_all_gates_allow_a_separate_default_configuration_change():
     decision=release_decision(report('semantic'),report('oracle'),*evidence_checks())
     assert decision['default_enable_allowed'] and not decision['default_enabled']
+
+
+def test_configuration_changes_require_complete_paired_re_evaluation():
+    semantic, oracle = report('semantic'), report('oracle')
+    oracle['configuration_sha256'] = 'different'
+    decision = release_decision(semantic, oracle, *evidence_checks())
+    assert not decision['gates']['same_model_configuration']
+    assert not decision['default_enable_allowed']
 
 
 def test_new_suites_are_v3_and_do_not_mutate_historical_cases():

@@ -47,10 +47,17 @@ class StructuralCoverageChecker:
         missing, matched, states = [], [], []
         for index, need in needs:
             anchors = anchor_symbols(need, symbols.values())
+            current_keys = set(symbols)
+            required_types = {s.edge_type for s in need.segments}
+            required_directions = {d for s in need.segments for d in (('INCOMING','OUTGOING') if s.direction == 'BOTH' else (s.direction,))}
+            complete = any(p.status == 'COMPLETED' and not p.truncated and index in p.need_indices
+                           and required_types <= set(p.edge_types)
+                           and required_directions <= {d for direction in p.directions for d in (('INCOMING','OUTGOING') if direction == 'BOTH' else (direction,))}
+                           and (p.scope == 'INDUCED' and current_keys <= set(p.symbol_keys)
+                                or p.scope == 'NEIGHBORS' and len(need.segments) == 1 and any(a.symbol_key in p.symbol_keys for a in anchors))
+                           for p in probes)
             # An unresolved hint is not a capability; ambiguity requires retrieval.
             if need.spec.anchor_hint and len(anchors) != 1:
-                relevant = [p for p in probes if index in p.need_indices]
-                complete = any(p.status == 'COMPLETED' and not p.truncated for p in relevant)
                 states.append('PARTIAL' if complete else 'UNVERIFIED')
                 missing.append('需要唯一确认的锚点及其实体正文')
                 continue
@@ -99,15 +106,6 @@ class StructuralCoverageChecker:
                 continue
             # A successful induced query proves only relations amongst these
             # endpoints, never absence of external/runtime neighbors.
-            current_keys = set(symbols)
-            required_types = {s.edge_type for s in need.segments}
-            required_directions = {d for s in need.segments for d in (('INCOMING','OUTGOING') if s.direction == 'BOTH' else (s.direction,))}
-            complete = any(p.status == 'COMPLETED' and not p.truncated and index in p.need_indices
-                           and required_types <= set(p.edge_types)
-                           and required_directions <= {d for direction in p.directions for d in (('INCOMING','OUTGOING') if direction == 'BOTH' else (direction,))}
-                           and (p.scope == 'INDUCED' and current_keys <= set(p.symbol_keys)
-                                or p.scope == 'NEIGHBORS' and len(need.segments) == 1 and any(a.symbol_key in p.symbol_keys for a in anchors))
-                           for p in probes)
             states.append('PARTIAL' if complete else 'UNVERIFIED')
             missing.append(f'尚未证明 {need.need_type}：' + ' → '.join(f'{s.edge_type}/{s.direction}' for s in need.segments) + ' 及所需端点正文')
         state = 'UNVERIFIED' if 'UNVERIFIED' in states else ('PARTIAL' if states else 'SATISFIED')

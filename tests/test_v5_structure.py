@@ -69,6 +69,14 @@ def test_source_check_precedes_structure_and_semantic():
     assert semantic.calls == 0
 
 
+def test_missing_anchor_does_not_treat_unrelated_completed_probe_as_verified():
+    ws = workspace()
+    ws.add_probe(RelationProbe('ER1', (0,), (A, B), ('CALLS',), ('OUTGOING',), 0, 'COMPLETED'))
+    missing_anchor = req(RetrievalNeed('RELATION', RelationSpec('OVERRIDES', 'INCOMING', 'NEED_METHOD', 'FutureService.run')))
+    result = StructuralCoverageChecker().check(missing_anchor, ws, 0)
+    assert result.state == 'UNVERIFIED'
+
+
 def test_incoming_proof_preserves_physical_source_and_target():
     ws = workspace()
     relation = edge()
@@ -159,6 +167,7 @@ def test_hydration_batches_needs_and_cannot_discover_neighbor_bodies():
     assert len(store.queries) == 1
     assert len(ws) == 2
     assert ws.probes_for('ER1')[0].status == 'COMPLETED'
+    assert ws.probes_for('ER1')[1].observation_id == 'hydrate-reuse:1'
 
 
 def test_policy_rejects_other_requirement_key_and_does_not_consume_calls():

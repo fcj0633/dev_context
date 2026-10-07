@@ -20,6 +20,9 @@ def release_decision(semantic, oracle, production, answers, checks):
             gates['semantic_absolute_full'] = valid and c.get('full_case_success', 0) > .85
             gates['semantic_absolute_false_ready'] = valid and c.get('false_ready', 999) <= 5
     gates['same_corpus'] = bool(semantic and oracle and semantic.get('corpus_sha256') and semantic['corpus_sha256'] == oracle.get('corpus_sha256'))
+    gates['same_model_configuration'] = bool(semantic and oracle and production and semantic.get('configuration_sha256')
+        and semantic['configuration_sha256'] == oracle.get('configuration_sha256') == production.get('configuration_sha256')
+        and semantic.get('top_k') == oracle.get('top_k'))
     gates['production_planners'] = bool(production and production.get('status') == 'complete' and production.get('passed') is True
                                        and production.get('positive_count') == 20 and production.get('negative_count') == 8)
     gates['fast_full_answers'] = bool(answers and answers.get('status') == 'complete' and answers.get('passed') is True and len(answers.get('records', [])) == 12)
