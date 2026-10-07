@@ -7,7 +7,7 @@ from devcontext.observability import llm_stage, mark_last_call_wasted
 from devcontext.tool_agent.models import AgentDecision, ToolCall, MAX_CALLS_PER_STEP
 
 SYSTEM_PROMPT = """你是仓库证据检索 Agent，只选择工具取证，不回答问题、不修改需求、不判断 READY。
-根据 CORE 需求、Coverage 缺口、已发现 Symbol 和历史，选择最多三个有效动作；避免重复。
+根据 CORE 需求、Coverage 缺口、已发现 Symbol 和历史，选择最多三个有效动作；避免重复。每条需求只能使用其 candidate_tools；关系需求优先使用 pending_graph_actions 补齐结构缺口，不用搜索代替尚未执行的关系查询。
 代码/文档检索用业务 Query；已知名称可 find_symbol；缺调用者用 find_callers，缺下游用 find_callees，缺接口实现用 find_implementations，继承关系用 find_hierarchy。
 Graph 参数只能取本次 known_symbols 中 state=CONFIRMED 的完整 key。candidates 只是歧义线索，不能用来调用 Graph；先用上下文检索或限定全名 find_symbol 确认。
 同一步动作不能依赖本步尚未执行工具的结果。不要指定 strategy、top_k、hops、timeout 或 SQL。
@@ -97,7 +97,23 @@ def fallback_decision(view, plan, memory, step):
             continue
         known = [s for s in memory.available_symbols.values() if s.symbol_key in view.confirmed_keys
                  and r.id in memory.symbol_requirements.get(s.symbol_key, ()) and s.symbol_kind == "METHOD"]
-        options = []
+        from devcontext.agentic.structural_coverage import anchor_symbols
+        from devcontext.tool_agent.policy import relation_tool
+        requirement_view = next(x for x in view.payload['requirements'] if x['id'] == r.id)
+        allowed = set(requirement_view['candidate_tools'])
+        options = [(a["tool"], {"symbol_key": a["symbol_key"]}) for a in requirement_view.get("pending_graph_actions", [])]
+        scoped = [s for s in memory.available_symbols.values() if s.symbol_key in view.keys_for(r.id)]
+        for need in r.retrieval_needs:
+            if need.need_type not in {'RELATION', 'PATH'}:
+                continue
+            anchors = anchor_symbols(need, scoped)
+            if not anchors and need.spec.anchor_hint:
+                options.append(('find_symbol', {'name': need.spec.anchor_hint}))
+            for segment in need.segments:
+                tool = relation_tool(segment.edge_type, segment.direction)
+                nodes = anchors if need.need_type == 'RELATION' else tuple(anchors) + tuple(s for s in scoped if s not in anchors)
+                for symbol in nodes:
+                    options.append((tool, {'symbol_key': symbol.symbol_key}))
         if len(known) == 1 and any(term in (r.success_criteria + " ".join(coverage[r.id].missing_criteria)) for term in ("下游", "callee")):
             options.append(("find_callees", {"symbol_key": known[0].symbol_key}))
         sources = ["DOCUMENT"] if r.source_requirement == "DOCUMENT" else ["CODE"]
@@ -112,7 +128,7 @@ def fallback_decision(view, plan, memory, step):
         options.extend(("search_docs" if s == "DOCUMENT" else "search_code", {"query": query}) for s in sources)
         for tool, args in options:
             call = ToolCall(f"TA{step + 1}-{len(calls) + 1}", r.id, tool, args, "Deterministic gap recovery")
-            if call_fingerprint(call) not in history:
+            if tool in allowed and call_fingerprint(call) not in history:
                 calls.append(call)
                 break
         if len(calls) == min(MAX_CALLS_PER_STEP, view.payload["remaining_calls"]):

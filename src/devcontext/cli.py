@@ -274,6 +274,7 @@ def _print_agentic_answer(
     if include_plan and trace.evidence_plan:
         print(f"\nEvidence Plan: {trace.evidence_plan['decision_source']}")
         for requirement in trace.evidence_plan["requirements"]:
+            print("  RetrievalNeed: " + json.dumps(requirement.get("retrieval_needs", []), ensure_ascii=False))
             print(
                 f"  {requirement['id']}. {requirement['target']}"
                 f" — {requirement['source_requirement']}"
@@ -305,6 +306,10 @@ def _print_agentic_answer(
         print(result.answer_result.answer)
     if debug:
         _print_teaching_summary(trace.teaching)
+        if getattr(trace, "structural_retrieval", None):
+            print("\nStructural Coverage: " + json.dumps(trace.structural_retrieval['coverage'], ensure_ascii=False))
+            for probe in trace.structural_retrieval['evidence']['probes']:
+                print(f"  Probe {probe['requirement_id']}: {probe['status']} {probe['edge_types']} scope={probe['scope']}")
         if getattr(trace, "agent_retrieval", None):
             from devcontext.tool_agent.trace import render_agent_trace
             print("\n" + render_agent_trace(trace.agent_retrieval))
@@ -637,11 +642,10 @@ def _retrieval_controller(
             _sub_question_sufficiency_factory(settings)
         )
         if settings.answer_engine_enabled and settings.answer_profile == "fast" and frozen_plan is None:
-            from devcontext.agentic.fast import FastRetrievalPlanner, FastActionPlanner, FastCoverageChecker
+            from devcontext.agentic.fast import FastRetrievalPlanner, FastActionPlanner
             evidence_planner = FastRetrievalPlanner(_planner_llm_factory(settings))
             action_planner = FastActionPlanner(evidence_planner)
-            if not settings.tool_agent_enabled and shared_coverage_factory is None:
-                coverage_checker = FastCoverageChecker(CoverageChecker(_sub_question_sufficiency_factory(settings), max_attempts=1), evidence_planner)
+            coverage_checker = CoverageChecker(_sub_question_sufficiency_factory(settings), max_attempts=1)
     else:
         evidence_planner = FrozenEvidencePlanner(frozen_case)
         action_planner = FrozenSearchActionPlanner(frozen_case)
@@ -651,6 +655,11 @@ def _retrieval_controller(
         evidence_planner = FixedEvidencePlanner(frozen_plan)
     if shared_coverage_factory is not None:
         coverage_checker = shared_coverage_factory()
+    from devcontext.agentic.structural_coverage import combined
+    from devcontext.code_graph.hydration import GraphMetadataHydrator
+    from devcontext.code_graph.store import CodeGraphStore
+    hydrator = GraphMetadataHydrator(CodeGraphStore(settings.database_url, settings.repository_name, settings.symbol_graph_query_timeout_seconds), "tool_agent" if settings.tool_agent_enabled else "auto_graph" if settings.symbol_graph_enabled else "fixed_search")
+    coverage_checker = combined(coverage_checker, hydrator)
     if settings.tool_agent_enabled:
         from devcontext.agentic.tool_driven_retrieval_controller import ToolDrivenRetrievalController
         from devcontext.code_graph.store import CodeGraphStore
@@ -660,7 +669,7 @@ def _retrieval_controller(
         from devcontext.tool_agent.runtime import AgentRuntime
         from devcontext.tool_agent.tools import RepositoryTools
         if shared_coverage_factory is None and frozen_case is None:
-            coverage_checker = CoverageChecker(_sub_question_sufficiency_factory(settings), max_attempts=1)
+            coverage_checker = combined(CoverageChecker(_sub_question_sufficiency_factory(settings), max_attempts=1), hydrator)
         tools = RepositoryTools(RetrievalPolicy(RetrievalService(settings)),
             CodeGraphStore(settings.database_url, settings.repository_name, settings.symbol_graph_query_timeout_seconds), observer)
         factory = lambda: create_llm_client(settings, deepseek_client_type=DeepSeekLLMClient,
@@ -834,7 +843,7 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(asdict(summary), ensure_ascii=False, indent=2))
         elif args.command == "evaluate-tool-agent":
             from devcontext.evaluation.tool_agent_runner import load_tool_cases, run_paired_evaluation, corpus_hash
-            paths = args.cases or [project_root() / "benchmark" / "tool-agent-v1.jsonl"]
+            paths = args.cases or [project_root() / "benchmark" / "tool-agent-v5.jsonl"]
             cases = [case for path in paths for case in load_tool_cases(path)]
             if len({case["id"] for case in cases}) != len(cases):
                 raise ValueError("Case ids must be unique across suites")
@@ -861,7 +870,7 @@ def main(argv: list[str] | None = None) -> int:
                     return session.chunks_for_symbols([{"chunk_id": i} for i in ids])
             report = run_paired_evaluation(cases, factory, checker_factory, runs=args.runs, top_k=args.top_k,
                 progress=lambda text: print(text, flush=True), corpus_fingerprint=lambda: corpus_hash(settings), checkpoint=checkpoint,
-                result_lookup=result_lookup)
+                result_lookup=result_lookup, checker_kind=args.checker)
             report["checker_configuration"] = {"kind": args.checker, "max_attempts": 1 if args.checker == "semantic" else None,
                                                "model": settings.text_model() if args.checker == "semantic" else None}
             report["datasets"] = [{"path": str(path), "sha256": sha256(path.read_bytes()).hexdigest()} for path in paths]

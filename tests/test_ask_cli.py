@@ -654,7 +654,7 @@ def test_ask_cli_plan_only_prints_json_without_retrieving(
     assert "项目证据需求规划器" in model_calls[0]
     plan = json.loads(captured.out)
     assert plan["decision_source"] == "llm"
-    assert plan["schema_version"] == 2
+    assert plan["schema_version"] == 3
     assert [item["id"] for item in plan["requirements"]] == ["ER1", "ER2"]
     assert plan["requirements"][0]["target"] == "确认订单关闭的触发与入口实现"
     assert plan["requirements"][0]["source_requirement"] == "CODE"
