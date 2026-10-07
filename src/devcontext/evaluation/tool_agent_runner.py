@@ -18,7 +18,7 @@ ARMS = ("fixed", "auto_graph", "tool_agent")
 
 def load_tool_cases(path: Path):
     cases = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
-    cleaned = [{k: v for k, v in c.items() if k not in {"allowed_tool_sequences", "gold_paths", "answerable_today", "focus"}} for c in cases]
+    cleaned = [{k: v for k, v in c.items() if k not in {"allowed_tool_sequences", "gold_paths", "answerable_today", "focus", "relation_gold"}} for c in cases]
     validate_workflow_cases(cleaned)
     for case in cases:
         sequences = case.get("allowed_tool_sequences", [])
@@ -40,6 +40,8 @@ def _score(case, outcome, result_lookup=None):
     by_id = {r.id: r for r in result_lookup([r.chunk_id for r in workspace.all()])} if result_lookup and workspace else {}
     gold_total = gold_found = core_total = core_found = 0
     all_core = True
+    relation_total = relation_found = 0
+    all_relation_gold = True
     for requirement in case["requirements"]:
         refs = [ref for ref in workspace.for_requirement(requirement["id"]) if _temporal_eligible(ref, requirement["temporal_scope"])] if workspace else ()
         groups = requirement["relevant"]
@@ -50,7 +52,14 @@ def _score(case, outcome, result_lookup=None):
                     None, 0., annotations=[],
                     heading_path=list(ref.citation.heading_path)) for ref in refs]
         matched = sum(any(_matches_group(r, group) for r in results) for group in groups)
-        satisfied = requirement["expected_satisfied"] and matched == len(groups)
+        required_relations = case.get('relation_gold', {}).get(requirement['id'], [])
+        actual_relations = {(r.source, r.edge_type, r.target) for r in workspace.relations_for(requirement['id'])} if workspace is not None else set()
+        relation_hits = sum(tuple(r) in actual_relations for r in required_relations)
+        relation_total += len(required_relations)
+        relation_found += relation_hits
+        relation_complete = relation_hits == len(required_relations)
+        all_relation_gold &= relation_complete
+        satisfied = requirement["expected_satisfied"] and matched == len(groups) and relation_complete
         if requirement["expected_satisfied"]:
             gold_total += len(groups)
             gold_found += matched
@@ -77,7 +86,8 @@ def _score(case, outcome, result_lookup=None):
     return {"retrieval_state": outcome.package.retrieval_state,
             "core_total": core_total, "core_satisfied": core_found,
             "gold_total": gold_total, "gold_found": gold_found,
-            "full_case_success": gold_found == gold_total and (bool(gold_total) or outcome.package.retrieval_state == case["expected_retrieval_state"]),
+            "relation_gold_total": relation_total, "relation_gold_found": relation_found,
+            "full_case_success": gold_found == gold_total and all_relation_gold and (bool(gold_total) or outcome.package.retrieval_state == case["expected_retrieval_state"]),
             "false_ready": outcome.package.retrieval_state == "READY" and not all_core,
             "tool_selection_correct": selection,
             "tool_calls": len(calls), "steps": len(trace.get("steps", [])),
@@ -89,7 +99,9 @@ def _score(case, outcome, result_lookup=None):
             "no_progress_detected": trace.get("stop_reason") == "NO_PROGRESS",
             "stop_reason": trace.get("stop_reason"), "agent_trace": outcome.agent_trace,
             "package": outcome.package.to_dict(),
-            "workspace": workspace.metadata_view() if workspace else []}
+            "workspace": workspace.metadata_view() if workspace else [],
+            "structural_evidence": workspace.structural_metadata() if workspace is not None else {},
+            "policy_violations": len(trace.get("policy_violations", []))}
 
 
 def _subsequence(expected, actual):
@@ -98,7 +110,7 @@ def _subsequence(expected, actual):
 
 
 def run_paired_evaluation(cases, controller_factory, coverage_factory, *, runs=3, top_k=12,
-                         plan_factory=None, progress=None, corpus_fingerprint=None, checkpoint=None, result_lookup=None):
+                         plan_factory=None, progress=None, corpus_fingerprint=None, checkpoint=None, result_lookup=None, checker_kind="semantic"):
     if not 1 <= runs <= 5 or not cases:
         raise ValueError("Expected cases and 1–5 runs")
     records = []
@@ -139,10 +151,10 @@ def run_paired_evaluation(cases, controller_factory, coverage_factory, *, runs=3
                     checkpoint({"status": "running", "records": records})
             if corpus_fingerprint is not None and corpus_fingerprint() != initial_corpus:
                 raise ValueError("Corpus changed during paired evaluation; comparisons are invalid")
-    return build_paired_report(records, cases, runs=runs, top_k=top_k, corpus_sha256=initial_corpus)
+    return build_paired_report(records, cases, runs=runs, top_k=top_k, corpus_sha256=initial_corpus, checker_kind=checker_kind)
 
 
-def build_paired_report(records, cases, *, runs=3, top_k=12, corpus_sha256=None):
+def build_paired_report(records, cases, *, runs=3, top_k=12, corpus_sha256=None, checker_kind="semantic"):
     summary = {arm: summarize([r for r in records if r["arm"] == arm]) for arm in ARMS}
     a, b, c = (summary[arm] for arm in ARMS)
     graph_rescue = []
@@ -158,17 +170,22 @@ def build_paired_report(records, cases, *, runs=3, top_k=12, corpus_sha256=None)
     gates = {"no_execution_errors": complete,
              "core_non_regression": complete and c["core_coverage"] >= b["core_coverage"],
              "false_ready_non_regression": complete and c["false_ready"] <= b["false_ready"],
-             "graph_sensitive_gain_at_least_10pp": graph_delta is not None and graph_delta >= .1 - 1e-9,
+             "full_case_non_regression": complete and c["full_case_success"] >= b["full_case_success"],
+             "absolute_core_coverage": c["core_coverage"] >= .95 if checker_kind == 'oracle' else c["core_coverage"] > .90,
+             "absolute_full_case_success": True if checker_kind == 'oracle' else c["full_case_success"] > .85,
+             "absolute_false_ready": c["false_ready"] <= 5,
+             "complete_acceptance_suite": len(cases) == (24 if checker_kind == 'oracle' else 16) and runs == (1 if checker_kind == 'oracle' else 3),
              "invalid_call_rate_below_5_percent": c["invalid_call_rate"] is not None and c["invalid_call_rate"] < .05,
              "mean_calls_at_most_4": c["mean_tool_calls"] <= 4,
              "p95_steps_at_most_3": c["p95_steps"] <= 3}
     stopping_cases = [r for r in records if r["arm"] == "tool_agent" and "no-progress" in r.get("tags", [])]
     if stopping_cases:
         gates["no_progress_cases_stop"] = all(not r["error"] and r["stop_reason"] in {"NO_PROGRESS", "NO_USEFUL_TOOL"} for r in stopping_cases)
-    return {"schema_version": 1, "status": "complete", "runs": runs, "top_k": top_k,
+    return {"schema_version": 3, "scoring_version": 3, "checker_kind": checker_kind, "status": "complete", "runs": runs, "top_k": top_k,
             "corpus_sha256": corpus_sha256,
             "planning": "same immutable frozen EvidencePlan for every arm of each paired run",
-            "coverage": "same supplied CoverageChecker factory/configuration across A/B/C",
+            "coverage": "same CombinedCoverage/source/structural rules and semantic factory across A/B/C",
+            "arms": {"fixed": "Fixed+structural metadata", "auto_graph": "AutoGraph+structural metadata", "tool_agent": "ToolAgent+structural metadata"},
             "records": records, "summary": summary, "graph_rescue_over_auto": graph_rescue,
             "graph_sensitive_full_case_delta": graph_delta,
             "acceptance": gates, "quality_passed": all(gates.values()), "default_enabled": False,
@@ -203,6 +220,8 @@ def summarize(records):
             "retrieval_p95_ms": percentile([r["latency_ms"] for r in records]),
             "planner_llm_calls": sum(c["stage"] == "agent_planning" for r in valid for c in r.get("llm_calls", [])),
             "coverage_llm_calls": sum(c["stage"] == "coverage_check" for r in valid for c in r.get("llm_calls", [])),
+            "policy_violations": sum(r.get('policy_violations', 0) for r in valid),
+            "relation_recall": sum(r.get('relation_gold_found', 0) for r in valid) / sum(r.get('relation_gold_total', 0) for r in valid) if sum(r.get('relation_gold_total', 0) for r in valid) else None,
             "input_tokens": _tokens(valid, "input_tokens"), "output_tokens": _tokens(valid, "output_tokens")}
 
 

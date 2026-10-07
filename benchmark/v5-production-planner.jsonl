@@ -1,0 +1,14 @@
+{"id":"locate","question":"OrderService 类型在哪里定义？","need_type":"CODE","positive":true}
+{"id":"document","question":"请仅根据设计文档解释订单支付回调的幂等设计。","need_type":"DOCUMENT","positive":true}
+{"id":"explain","question":"解释当前购票事务边界的设计原理。","need_type":"CODE","positive":true}
+{"id":"caller","question":"谁调用 OrderDelayCloseProducer.doSend 方法？","need_type":"RELATION","edge_type":"CALLS","direction":"INCOMING","anchor_requirement":"NEED_METHOD","positive":true}
+{"id":"callee","question":"OrderServiceImpl.closeTimeoutOrder 调用哪些下游方法？","need_type":"RELATION","edge_type":"CALLS","direction":"OUTGOING","anchor_requirement":"NEED_METHOD","positive":true}
+{"id":"type-implementation","question":"PayChannelHandler 接口类型由哪些类实现？","need_type":"RELATION","edge_type":"IMPLEMENTS","direction":"INCOMING","anchor_requirement":"NEED_CLASS","positive":true}
+{"id":"method-implementation","question":"OrderService.createTicketOrder 接口方法由哪个方法实现？","need_type":"RELATION","edge_type":"OVERRIDES","direction":"INCOMING","anchor_requirement":"NEED_METHOD","positive":true}
+{"id":"hierarchy","question":"支付模块 PayDO 类型继承哪个父类？","need_type":"RELATION","edge_type":"EXTENDS","direction":"OUTGOING","anchor_requirement":"NEED_CLASS","positive":true}
+{"id":"construction","question":"OrderServiceImpl.closePayOrder 方法显式构造了哪个异常对象？","need_type":"RELATION","edge_type":"CONSTRUCTS","direction":"OUTGOING","anchor_requirement":"NEED_METHOD","positive":true}
+{"id":"path","question":"请证明 TicketOrderController.createTicketOrder 到 OrderService.createTicketOrder 再到其实现方法的两段调用路径。","need_type":"PATH","segments":[{"edge_type":"CALLS","direction":"OUTGOING"},{"edge_type":"OVERRIDES","direction":"INCOMING"}],"anchor_requirement":"NEED_METHOD","positive":true}
+{"id":"negative-flow","question":"解释设计文档中的业务流程规划，不要求代码调用链。","positive":false}
+{"id":"negative-design","question":"设计文档为何采用缓存预热？仅讨论设计依据。","positive":false}
+{"id":"negative-hint","question":"以假设名称 FutureService 说明一般事务概念，不查项目实现。","positive":false}
+{"id":"negative-ambiguity","question":"请定位订单模块 BaseDO 的类型声明，注意仓库内存在同名类。","positive":false}
