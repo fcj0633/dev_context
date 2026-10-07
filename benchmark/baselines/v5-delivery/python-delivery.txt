@@ -1,0 +1,24 @@
+........................................................................ [  9%]
+..............................................sss....................... [ 18%]
+........................................................................ [ 28%]
+........................................................................ [ 37%]
+........................................................................ [ 47%]
+........................................................................ [ 56%]
+........................................................................ [ 66%]
+........................................................s............... [ 75%]
+........................................................................ [ 85%]
+........................................ssssss.......................... [ 94%]
+............s.........................                                   [100%]
+=========================== short test summary info ===========================
+SKIPPED [1] tests\test_code_graph_integration.py:52: requires PostgreSQL
+SKIPPED [1] tests\test_code_graph_integration.py:70: requires PostgreSQL
+SKIPPED [1] tests\test_code_graph_integration.py:101: requires PostgreSQL
+SKIPPED [1] tests\test_storage_integration.py:21: set DEVCONTEXT_RUN_INTEGRATION=1 with the PostgreSQL container running
+SKIPPED [1] tests\test_tool_agent_integration.py:17: requires PostgreSQL
+SKIPPED [1] tests\test_tool_agent_integration.py:34: requires PostgreSQL
+SKIPPED [1] tests\test_tool_agent_integration.py:49: requires PostgreSQL
+SKIPPED [1] tests\test_tool_agent_integration.py:57: requires PostgreSQL
+SKIPPED [1] tests\test_tool_agent_integration.py:74: requires PostgreSQL
+SKIPPED [1] tests\test_tool_agent_integration.py:93: requires PostgreSQL
+SKIPPED [1] tests\test_v5_postgres.py:9: requires PostgreSQL
+747 passed, 11 skipped in 10.90s

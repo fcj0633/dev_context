@@ -1,0 +1,65 @@
+{
+  "schema_version": 3,
+  "status": "complete",
+  "gates": {
+    "semantic_complete": false,
+    "semantic_full_suite": false,
+    "semantic_relative_core": false,
+    "semantic_relative_full": false,
+    "semantic_relative_false_ready": false,
+    "semantic_absolute_core": false,
+    "semantic_execution_constraints": false,
+    "semantic_absolute_full": false,
+    "semantic_absolute_false_ready": false,
+    "oracle_complete": false,
+    "oracle_full_suite": false,
+    "oracle_relative_core": false,
+    "oracle_relative_full": false,
+    "oracle_relative_false_ready": false,
+    "oracle_absolute_core": false,
+    "oracle_execution_constraints": false,
+    "same_corpus": false,
+    "same_model_configuration": false,
+    "production_planners": true,
+    "fast_full_answers": false,
+    "required_tests": false
+  },
+  "default_enable_allowed": false,
+  "default_enabled": false,
+  "policy": "V5 absolute thresholds AND strict non-regression versus AutoGraph B",
+  "git_commit": "cfd02c4b897ceaf118bffd4400ba2f02ac489a2d",
+  "configuration_sha256": "d1841ca19c6ec866343b01b1e5ea410e2e952e43d51eef9d446cb470eba5ec6c",
+  "validation": {
+    "python_passed": 747,
+    "python_skipped": 11,
+    "java_passed": 6,
+    "production_planner_passed": 28,
+    "production_planner_total": 28
+  },
+  "external_blocker": "PostgreSQL localhost:5432 ConnectionTimeout; Docker Desktop Secrets Engine socket unavailable",
+  "incomplete": [
+    "PostgreSQL integration",
+    "semantic paired 144 retrievals",
+    "Oracle paired 72 retrievals",
+    "Fast/Full 12 answers"
+  ],
+  "raw_production_reports": [
+    {
+      "path": "benchmark\\baselines\\v5-delivery\\production-planners-01.json",
+      "sha256": "8c12be4e2d77a76893c024064aac3f005819d6111407206c9f9bdddb5aa7bdac"
+    },
+    {
+      "path": "benchmark\\baselines\\v5-delivery\\production-planners-02.json",
+      "sha256": "3bfeb72adbf878de14afb8ff8fc982d20ff9e831347efc5cf7e1c32f6c3904c9"
+    },
+    {
+      "path": "benchmark\\baselines\\v5-delivery\\production-planners-03.json",
+      "sha256": "2fffa567800c91af66117b8d5bdf326949c3d4678d90a383e2af4619587bf988"
+    }
+  ],
+  "datasets": {
+    "retrieval-workflow-v5.jsonl": "88a4250dbfd686e68adff119d18d0b352bf8b2508720ab56511efdac643c502d",
+    "tool-agent-v5.jsonl": "8c1bd5c586297ed6cff749a0553228fee960476742c038ff1205928c65a53593",
+    "v5-production-planner.jsonl": "eb1f2a7f5ee0c0e1a5e5e10746af395dbb60f137abbeeabb36246a0fa69def76"
+  }
+}

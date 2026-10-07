@@ -378,7 +378,7 @@ uv run devcontext ask "谁调用 OrderDelayCloseProducer.doSend？" --profile fa
 uv run devcontext ask "OrderService.createTicketOrder 由哪个方法实现？" --profile full --debug
 ```
 
-Graph 工具只允许使用当前 Observation 中已 CONFIRMED 的 Symbol。歧义候选须通过限定名称定位或上下文搜索确认。Agent 模式不执行自动扩图，`SYMBOL_GRAPH_ENABLED` 不控制显式 Graph 工具。`TOOL_AGENT_PLANNER_TIMEOUT_SECONDS=60` 为 Planner 调用超时；Graph 继续用现有 2 秒查询超时，100ms 是 P95 目标。
+Graph 工具只允许使用当前 Observation 中属于本 Requirement、已 CONFIRMED 的 Symbol。歧义候选须通过限定名称定位或上下文搜索确认。Agent 模式不执行自动扩图，`SYMBOL_GRAPH_ENABLED` 不控制显式 Graph 工具。`TOOL_AGENT_PLANNER_TIMEOUT_SECONDS=60` 为 Planner 调用超时；Graph 继续用现有 2 秒查询超时，100ms 是 P95 目标。
 
 ```powershell
 uv run devcontext evaluate-tool-agent --cases benchmark/tool-agent-v1.jsonl --runs 3 --output artifacts/tool-agent-live-abc.json
@@ -388,3 +388,30 @@ uv run devcontext evaluate-tool-agent --cases benchmark/l1.5-retrieval.jsonl --c
 三组分别为固定检索、固定检索加自动 Graph、Tool Agent；每个 paired run 共享同一不可变 EvidencePlan 和完全相同的 CoverageChecker 配置。semantic 模式三组都用标准 Checker、max_attempts=1；oracle 模式三组都用同一 Ground Truth，固定组同时冻结搜索 Query，Agent 的选工具仍由真实 LLM 决定。结果包括 Workspace 证据召回、False READY、工具选择、调用预算、延迟和实际 token usage；缺失 usage 为 null。
 
 实现、六项约束和验收结果见 [Tool Agent V1 实现与验收](docs/V4-graph等功能规划/05-tool-agent-v1实现与验收.md)。首版保持关闭，评测不达门槛时不会扩大循环预算或自动启用。
+
+## V5 Evidence Loop
+
+V5 将检索需求和运行时证据分开：不可变 schema v3 计划包含 CODE、DOCUMENT、RELATION 或 PATH need；已确认 Symbol、真实物理 Relation、需求归属与查询 Probe 保存在 Workspace。旧 v2 只在规划入口归一化，运行模块只接受 v3。CALL_CHAIN 只描述路径，物理边仍为原有五类。
+
+所有检索模式按“来源检查 → 结构检查 → 语义检查”判断 Coverage。只有来源与结构通过的需求才调用语义 Checker；只有全部 CORE SATISFIED 才能 READY。关系需求需要真实关系和端点正文，方法实现需要 METHOD 正文。缺边表示当前证据未证明关系；验证超时、索引不可用与尚未验证会保留 UNVERIFIED。Fast/Full 的 Chunk EvidencePackage 和引用格式保持兼容。
+
+`SYMBOL_GRAPH_ENABLED` **只控制自动扩图**。即使为 false，Fixed、AutoGraph 和 ToolAgent 也按需求批量读取已取得 Symbol 之间的结构元数据。该读取不会发现邻居正文。Fixed 最多两轮；Agent 最多三步、八次调用，每步最多三次，保持原预算。
+
+Agent 决策先通过确定性候选策略与 DecisionPolicyValidator，再通过 ToolExecutor。Graph 权限限定为当前需求在本步观察中已经确认的 key；本步新 key 下一步才能使用。策略拒绝单独记录，不计实际 ToolCall 或 Executor invalid-call；第一次进入确定性 fallback，再失败停止。
+
+当前默认 `TOOL_AGENT_ENABLED=false`、`SYMBOL_GRAPH_ENABLED=false`，使用 **Fixed＋structural metadata**。可显式设置 Agent 开关进行验证；已有 `.env` 或进程环境配置优先。回退设置 `TOOL_AGENT_ENABLED=false`，结构校验继续生效。
+
+```powershell
+# 显式使用工具 Agent
+$env:TOOL_AGENT_ENABLED='true'
+uv run devcontext ask "谁调用 OrderDelayCloseProducer.doSend？" --profile fast --debug
+uv run devcontext ask "OrderService.createTicketOrder 由哪个方法实现？" --profile full --debug
+
+# V5 新基线；每次使用新的报告目录，禁止覆盖历史样本
+uv run python scripts/run_v5_validation.py --output artifacts/v5/live-next --checks artifacts/v5/checks.json
+# 单独运行三组 semantic 或 Oracle 对照
+uv run devcontext evaluate-tool-agent --cases benchmark/tool-agent-v5.jsonl --checker semantic --runs 3 --output artifacts/v5/semantic-next.json
+uv run devcontext evaluate-tool-agent --cases benchmark/retrieval-workflow-v5.jsonl --checker oracle --runs 1 --output artifacts/v5/oracle-next.json
+```
+
+新基线 A=Fixed＋structural metadata，B=AutoGraph＋structural metadata，C=ToolAgent＋structural metadata。默认开启必须同时通过绝对门槛、C 相对 B 严格不退化、真实生产规划正负例、数据库集成和 Fast/Full 回归。受控测试和历史 V1 百分比不能代替新基线。当前实现、测试结果、实际模型验证及未完成的外部验收见 [V5 实现与验收](docs/V4-graph等功能规划/07-V5-agent执行流优化实现与验收.md)。
