@@ -47,7 +47,7 @@ def test_evidence_planner_produces_requirements_without_queries_or_answer_plan()
     plan = EvidencePlanner(lambda: client).plan("当前注册入口在哪里？")
 
     assert plan.decision_source == "llm"
-    assert plan.schema_version == 2
+    assert plan.schema_version == 3
     assert plan.requirements[0].id == "ER1"
     assert plan.requirements[0].source_requirement == "CODE"
     serialized = plan.to_dict()

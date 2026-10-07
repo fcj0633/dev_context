@@ -127,3 +127,15 @@ RELATION 使用 relation_spec={edge_type,direction,anchor_requirement,anchor_hin
 PATH 使用 path_spec={mode:"CALL_CHAIN",segments:[{edge_type,direction}],anchor_requirement,anchor_hint,target_hint}，禁止 relation_spec。路径1–2段，较长任务拆需求。
 物理 edge_type 仅 CALLS/CONSTRUCTS/IMPLEMENTS/EXTENDS/OVERRIDES。direction=INCOMING/OUTGOING/BOTH；anchor_requirement=NEED_SYMBOL/NEED_METHOD/NEED_CLASS。
 hint 只复用用户标识符，不虚构实体，不写 confirmed key。CODE/DOCUMENT 不带关系字段。'''
+
+NEED_PROMPT += '''
+以下是必须遵守的分类契约，优先于一般 HOW/Full 教学提示：
+1. “某方法调用哪些下游方法”是单关系 RELATION/CALLS/OUTGOING，不是单段 PATH，也不能只输出 CODE。
+2. “某方法显式构造哪个异常对象”必须包含 RELATION/CONSTRUCTS/OUTGOING；CODE 正文可以作为额外 need，不能代替关系 need。
+3. 用户明确要求两段连续路径，例如 Controller 方法→接口方法→实现方法，必须用一条 PATH need，segments=[CALLS/OUTGOING,OVERRIDES/INCOMING]。不要拆成两条独立 RELATION；只有超过两段才拆需求。
+4. anchor_hint/target_hint 只能填用户已提供的 Java 标识符/限定名称/签名。未提供具体目标则 target_hint=""，不能填“下游方法”“实现类”等普通词。
+5. 对独立的方法实现问题用 RELATION/OVERRIDES/INCOMING，对独立的类实现接口问题用 RELATION/IMPLEMENTS/INCOMING。
+例如下游：{"need_type":"RELATION","relation_spec":{"edge_type":"CALLS","direction":"OUTGOING","anchor_requirement":"NEED_METHOD","anchor_hint":"OrderServiceImpl.closeTimeoutOrder","target_hint":""}}。
+例如构造：{"need_type":"RELATION","relation_spec":{"edge_type":"CONSTRUCTS","direction":"OUTGOING","anchor_requirement":"NEED_METHOD","anchor_hint":"OrderServiceImpl.closePayOrder","target_hint":""}}。
+例如两段路径：{"need_type":"PATH","path_spec":{"mode":"CALL_CHAIN","segments":[{"edge_type":"CALLS","direction":"OUTGOING"},{"edge_type":"OVERRIDES","direction":"INCOMING"}],"anchor_requirement":"NEED_METHOD","anchor_hint":"TicketOrderController.createTicketOrder","target_hint":""}}。
+'''
