@@ -100,7 +100,7 @@ def legacy_needs(target, criteria, source):
     if source != 'DOCUMENT':
         if any(x in lower for x in ('谁调用', '哪里调用', '被谁调用', '调用者', '调用方', 'caller', 'called by')):
             edge, direction = 'CALLS', 'INCOMING'
-        elif any(x in lower for x in ('由谁实现', '由哪个方法实现', '实现类', '接口实现', 'implementations', '谁实现')):
+        elif any(x in lower for x in ('由谁实现', '由哪个方法实现', '接口实现', 'implementations', '谁实现')):
             edge, direction, anchor = ('OVERRIDES' if method or '接口方法' in text else 'IMPLEMENTS'), 'INCOMING', ('NEED_METHOD' if method or '接口方法' in text else 'NEED_CLASS')
         elif any(x in lower for x in ('继承', '父类', '子类', 'extends')):
             edge, anchor = 'EXTENDS', 'NEED_CLASS'

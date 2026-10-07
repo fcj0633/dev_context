@@ -76,3 +76,7 @@ def test_mutable_nested_plan_data_is_rejected():
         PathSpec([PathSegment('CALLS')])
     with pytest.raises(ValueError):
         EvidenceRequirement('ER1', 'q', 'q', 'CORE', 'CURRENT', 'CODE', [RetrievalNeed('CODE')])
+def test_legacy_implementation_location_does_not_invent_interface_relation():
+    from devcontext.planning.retrieval_need import legacy_needs
+    needs = legacy_needs('确定令牌桶的实现类及其使用的 Redis 键与数据结构', '找到令牌桶实现类与 Hash field 和 TTL 具体实现', 'CODE')
+    assert [n.need_type for n in needs] == ['CODE']
