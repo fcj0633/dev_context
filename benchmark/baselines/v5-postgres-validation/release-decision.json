@@ -1,0 +1,36 @@
+{
+  "schema_version": 3,
+  "status": "complete",
+  "gates": {
+    "semantic_complete": true,
+    "semantic_full_suite": false,
+    "semantic_relative_core": true,
+    "semantic_relative_full": true,
+    "semantic_relative_false_ready": true,
+    "semantic_absolute_core": true,
+    "semantic_execution_constraints": false,
+    "semantic_absolute_full": true,
+    "semantic_absolute_false_ready": true,
+    "oracle_complete": true,
+    "oracle_full_suite": false,
+    "oracle_relative_core": true,
+    "oracle_relative_full": true,
+    "oracle_relative_false_ready": true,
+    "oracle_absolute_core": true,
+    "oracle_execution_constraints": false,
+    "same_corpus": true,
+    "same_model_configuration": true,
+    "production_planners": true,
+    "fast_full_answers": false,
+    "required_tests": true
+  },
+  "default_enable_allowed": false,
+  "default_enabled": false,
+  "policy": "V5 absolute thresholds AND strict non-regression versus AutoGraph B",
+  "git_commit": "f05846ef995ff407c158cc56c8a22ddf397a20aa",
+  "datasets": {
+    "retrieval-workflow-v5.jsonl": "88a4250dbfd686e68adff119d18d0b352bf8b2508720ab56511efdac643c502d",
+    "tool-agent-v5.jsonl": "8c1bd5c586297ed6cff749a0553228fee960476742c038ff1205928c65a53593",
+    "v5-production-planner.jsonl": "eb1f2a7f5ee0c0e1a5e5e10746af395dbb60f137abbeeabb36246a0fa69def76"
+  }
+}

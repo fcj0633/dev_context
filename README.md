@@ -415,3 +415,5 @@ uv run devcontext evaluate-tool-agent --cases benchmark/retrieval-workflow-v5.js
 ```
 
 新基线 A=Fixed＋structural metadata，B=AutoGraph＋structural metadata，C=ToolAgent＋structural metadata。默认开启必须同时通过绝对门槛、C 相对 B 严格不退化、真实生产规划正负例、数据库集成和 Fast/Full 回归。受控测试和历史 V1 百分比不能代替新基线。当前实现、测试结果、实际模型验证及未完成的外部验收见 [V5 实现与验收](docs/V4-graph等功能规划/07-V5-agent执行流优化实现与验收.md)。
+
+Docker 恢复后，V5 全量 Python（含 PostgreSQL 集成）767 项及 Java parser 6 项均通过，真实生产规划正负例 28/28 通过。最新完整模型验收尝试遭遇 DeepSeek HTTP402（余额不足），semantic/Oracle 和 Fast/Full 的零错误及完整验收门槛尚未通过，Agent 默认继续关闭。实际原始报告及逐轮有效性说明保存在 `benchmark/baselines/v5-postgres-validation/`；恢复服务后需在同一配置下重新执行完整新基线。
