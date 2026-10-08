@@ -399,10 +399,10 @@ V5 将检索需求和运行时证据分开：不可变 schema v3 计划包含 CO
 
 Agent 决策先通过确定性候选策略与 DecisionPolicyValidator，再通过 ToolExecutor。Graph 权限限定为当前需求在本步观察中已经确认的 key；本步新 key 下一步才能使用。策略拒绝单独记录，不计实际 ToolCall 或 Executor invalid-call；第一次进入确定性 fallback，再失败停止。
 
-当前默认 `TOOL_AGENT_ENABLED=false`、`SYMBOL_GRAPH_ENABLED=false`，使用 **Fixed＋structural metadata**。可显式设置 Agent 开关进行验证；已有 `.env` 或进程环境配置优先。回退设置 `TOOL_AGENT_ENABLED=false`，结构校验继续生效。
+当前默认 `TOOL_AGENT_ENABLED=true`、`SYMBOL_GRAPH_ENABLED=false`，使用 **ToolAgent＋Graph tools＋structural metadata**。Agent 可主动调用 Graph 工具，自动扩图开关不限制这些工具。已有 `.env` 或进程环境配置优先；已有 `TOOL_AGENT_ENABLED=false` 的用户需显式改为 true 才会切换。回退设置 `TOOL_AGENT_ENABLED=false` 且 `SYMBOL_GRAPH_ENABLED=false`，回到 Fixed＋structural metadata，结构校验继续生效。
 
 ```powershell
-# 显式使用工具 Agent
+# 工具 Agent 已默认启用；此设置也可覆盖旧 .env 中的 false
 $env:TOOL_AGENT_ENABLED='true'
 uv run devcontext ask "谁调用 OrderDelayCloseProducer.doSend？" --profile fast --debug
 uv run devcontext ask "OrderService.createTicketOrder 由哪个方法实现？" --profile full --debug
@@ -416,4 +416,4 @@ uv run devcontext evaluate-tool-agent --cases benchmark/retrieval-workflow-v5.js
 
 新基线 A=Fixed＋structural metadata，B=AutoGraph＋structural metadata，C=ToolAgent＋structural metadata。默认开启必须同时通过绝对门槛、C 相对 B 严格不退化、真实生产规划正负例、数据库集成和 Fast/Full 回归。受控测试和历史 V1 百分比不能代替新基线。当前实现、测试结果、实际模型验证及未完成的外部验收见 [V5 实现与验收](docs/V4-graph等功能规划/07-V5-agent执行流优化实现与验收.md)。
 
-Docker 恢复后，V5 全量 Python（含 PostgreSQL 集成）767 项及 Java parser 6 项均通过，真实生产规划正负例 28/28 通过。最新完整模型验收尝试遭遇 DeepSeek HTTP402（余额不足），semantic/Oracle 和 Fast/Full 的零错误及完整验收门槛尚未通过，Agent 默认继续关闭。实际原始报告及逐轮有效性说明保存在 `benchmark/baselines/v5-postgres-validation/`；恢复服务后需在同一配置下重新执行完整新基线。
+Docker 恢复后，V5 全量 Python（含 PostgreSQL 集成）767 项及 Java parser 6 项均通过，真实生产规划正负例 28/28 通过。最新完整模型验收尝试遭遇 DeepSeek HTTP402（余额不足），semantic/Oracle 和 Fast/Full 的零错误及完整验收门槛尚未通过，2026-10-08 按用户显式要求合并 main 并默认启用 Agent，此启用决定不代表质量门槛已通过。实际原始报告及逐轮有效性说明保存在 `benchmark/baselines/v5-postgres-validation/`；恢复服务后需在同一配置下重新执行完整新基线。

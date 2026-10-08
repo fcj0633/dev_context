@@ -1,0 +1,24 @@
+{
+  "schema_version": 3,
+  "date": "2026-10-08",
+  "branch": "main",
+  "enablement_basis": "explicit_user_instruction",
+  "tool_agent_default": true,
+  "symbol_graph_expansion_default": false,
+  "default_graph_access": "Agent Graph tools and structural metadata",
+  "python": {
+    "passed": 769,
+    "skipped": 0,
+    "postgresql_integration_enabled": true
+  },
+  "java": {
+    "tests": 6,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "default_and_rollback_smoke": "Fast/Full default Agent and explicit false rollback verified by tests",
+  "live_quality_acceptance_passed": false,
+  "live_quality_blocker": "Previous DeepSeek HTTP402 / Insufficient Balance; full paired acceptance pending",
+  "historical_reports_unchanged": true
+}

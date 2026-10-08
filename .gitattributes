@@ -1,0 +1,2 @@
+# Frozen corpus hashes must stay identical across Windows/Linux checkouts.
+/benchmark/cases.jsonl text eol=lf

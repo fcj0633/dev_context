@@ -1,6 +1,6 @@
 # V5 Agent 执行流优化：实现与验收
 
-日期：2026-10-08。开发分支：`codex/v5-evidence-loop`。
+日期：2026-10-08。开发分支：`codex/v5-evidence-loop`；已合并至 `main`。
 
 依据 `06-agent执行流优化计划.md` 及 26 条补充约束实现。交付采用一个分支、按依赖分拆逻辑 commits；不按天分阶段，不扩展现有预算。
 
@@ -8,9 +8,9 @@
 
 已实现不可变 v3 取证计划、共享结构证据、限定端点的批量 metadata hydration、统一 CombinedCoverage、决策候选与双层校验、需求级 Graph 权限、关系进展和失败状态，以及 V5 三组基线和默认启用门槛。
 
-当前 **不允许默认开启 Agent**。`Settings.tool_agent_enabled` 和 `.env.example` 仍为 false；`symbol_graph_enabled` 仍为 false。现有用户显式环境配置继续优先。回退 `TOOL_AGENT_ENABLED=false` 后走 Fixed＋structural metadata，结构校验继续生效。
+2026-10-08 根据用户最新显式要求，将图检索与工具 Agent 合并至 main，并将 `Settings.tool_agent_enabled` 和 `.env.example` 的 `TOOL_AGENT_ENABLED` 默认设为 true。`SYMBOL_GRAPH_ENABLED` 保持 false：默认由 Agent 主动调用 Graph 工具并读取结构元数据，不叠加 Fixed 自动扩图。此启用属于用户显式发布决定，**不代表完整质量门槛已经通过**；历史评测及禁止自动启用的判定保持原样。现有 `.env` 或环境变量显式值继续优先。回退须设置 `TOOL_AGENT_ENABLED=false`、`SYMBOL_GRAPH_ENABLED=false`，回到 Fixed＋structural metadata。
 
-Docker 恢复后，数据库集成及全量 Python 测试已完成：**767 passed、0 skipped**；Java parser 重新执行为 **6 passed、0 failures/errors**。最新真实生产规划 **28/28 通过**。实际执行了新 A/B/C，但最终 `live-06` 遇到 DeepSeek **HTTP 402 / Insufficient Balance**：semantic 的 144 条记录中有 1 条服务失败，Oracle 的 24 次 Agent 请求中有 23 条服务失败，Fast/Full 的 12 场景均受服务失败阻断。当前未满足完整验收及零执行错误门槛，不能默认启用；剔除失败记录后计算的百分比不能作为通过证据。
+Docker 恢复后，数据库集成及全量 Python 测试已完成：**767 passed、0 skipped**；Java parser 重新执行为 **6 passed、0 failures/errors**。最新真实生产规划 **28/28 通过**。实际执行了新 A/B/C，但最终 `live-06` 遇到 DeepSeek **HTTP 402 / Insufficient Balance**：semantic 的 144 条记录中有 1 条服务失败，Oracle 的 24 次 Agent 请求中有 23 条服务失败，Fast/Full 的 12 场景均受服务失败阻断。当前未满足完整验收及零执行错误门槛，本次显式默认启用不改变这一结论；剔除失败记录后计算的百分比不能作为通过证据。
 
 ## 2. 执行链与代码位置
 
@@ -131,4 +131,10 @@ mvn -q -f java-parser/pom.xml test
 .venv/Scripts/python.exe scripts/run_v5_validation.py --output artifacts/v5/live-07 --checks artifacts/v5/checks-postgres.json
 ```
 
-`checks-postgres.json` 保存已执行的 python/postgresql/java/structure/policy 通过结果。早期 `checks.json` 的 postgresql=false 仅属于 Docker 恢复前的历史结论，不应拿它替代最新数据库测试。最新 release-decision 仍禁止启用，因为真实检索存在服务错误且回答未通过。脚本不自动修改默认值；所有门槛通过后才可另作逻辑 commit 修改 Settings 和 `.env.example`，再进行启用冒烟。模型配置变化后重新运行整个配对评测，不扩大预算、不降低结构要求、不删除失败案例。
+`checks-postgres.json` 保存已执行的 python/postgresql/java/structure/policy 通过结果。早期 `checks.json` 的 postgresql=false 仅属于 Docker 恢复前的历史结论，不应拿它替代最新数据库测试。最新 release-decision 仍禁止启用，因为真实检索存在服务错误且回答未通过。脚本仍不自动修改默认值。此次用户显式要求优先于先前默认关闭的交付安排，已单独提交默认启用配置；真实模型质量门槛继续按原协议补验，不修改历史判定。模型配置变化后重新运行整个配对评测，不扩大预算、不降低结构要求、不删除失败案例。
+
+## 7. main 默认启用与合并后验证
+
+用户于 2026-10-08 显式要求合并图检索和工具 Agent 至主分支并默认使用，已用 merge commit 保留 V5 逻辑提交历史。默认 `TOOL_AGENT_ENABLED=true`、`SYMBOL_GRAPH_ENABLED=false`，图关系取证由 Agent 的 Graph 工具及共享 metadata hydration 完成。旧 `.env` 或环境变量中的 false 不被覆盖。
+
+合并后重新执行全量 Python（开启 PostgreSQL 集成）：**769 passed、0 skipped**；Java parser：**6 tests、0 failures/errors/skipped**。新增 Fast/Full 默认构造 Agent 与显式 false 回退冒烟；两项 Fixed legacy 测试明确固定检索模式。冻结语料换行固定为 LF，语料正文及 Gold 哈希保持不变。验证记录见 `benchmark/baselines/v5-main-enablement/`。真实模型完整验收仍待恢复服务后补验，本次用户显式启用不替代质量门槛。

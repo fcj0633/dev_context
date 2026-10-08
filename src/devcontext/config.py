@@ -104,7 +104,9 @@ class Settings(BaseSettings):
     source_policy_path: Path | None = None
     repository_name: str = "my12306"
     symbol_graph_enabled: bool = False
-    tool_agent_enabled: bool = False
+    # 默认通过工具 Agent 选择搜索和 Graph 取证；显式环境配置仍可回退。
+    # 自动 Graph expansion 是独立的 Fixed 模式开关，不叠加到 Agent 流程。
+    tool_agent_enabled: bool = True
     tool_agent_planner_timeout_seconds: float = Field(default=60, gt=0)
     symbol_graph_query_timeout_seconds: float = Field(default=2.0, gt=0, le=30)
     # Effective ceilings for this pipeline, not the model's advertised limits.

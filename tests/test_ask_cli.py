@@ -571,6 +571,8 @@ def test_ask_cli_debug_prints_per_requirement_status(monkeypatch, capsys) -> Non
 def test_ask_cli_legacy_generation_prompt_excludes_the_plan(
     monkeypatch, capsys
 ) -> None:
+    # 本例验证 Fixed 的 legacy 提示，不能依赖产品默认检索模式。
+    monkeypatch.setenv("TOOL_AGENT_ENABLED", "false")
     prompts: list[str] = []
 
     class FakeRetrievalService:
@@ -738,6 +740,8 @@ def test_ask_cli_explain_mode_runs_answer_plan_and_review(
 def test_ask_cli_planning_failure_falls_back_to_legacy_single_query(
     monkeypatch, capsys
 ) -> None:
+    # 固定检索的计划 fallback 保持原有 hybrid 语义；Agent 另有恢复测试。
+    monkeypatch.setenv("TOOL_AGENT_ENABLED", "false")
     retrieval_calls: list[tuple[str, str]] = []
 
     class FakeRetrievalService:

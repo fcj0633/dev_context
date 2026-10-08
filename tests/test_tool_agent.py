@@ -293,6 +293,22 @@ def test_factory_agent_does_not_use_automatic_expansion(profile, monkeypatch):
     assert controller.runtime.coverage_checker.semantic.max_attempts == 1
 
 
+@pytest.mark.parametrize("profile", ["fast", "full"])
+def test_default_settings_select_agent_and_allow_explicit_rollback(profile, monkeypatch):
+    from devcontext.config import Settings
+    import devcontext.cli as cli
+    monkeypatch.delenv("TOOL_AGENT_ENABLED", raising=False)
+    monkeypatch.delenv("SYMBOL_GRAPH_ENABLED", raising=False)
+    settings = Settings(_env_file=None, answer_engine_enabled=True, answer_profile=profile)
+    assert settings.tool_agent_enabled is True
+    assert settings.symbol_graph_enabled is False
+    assert isinstance(cli._retrieval_controller(settings), ToolDrivenRetrievalController)
+    monkeypatch.setenv("TOOL_AGENT_ENABLED", "false")
+    rollback = Settings(_env_file=None)
+    assert rollback.tool_agent_enabled is False
+    assert not isinstance(cli._retrieval_controller(rollback), ToolDrivenRetrievalController)
+
+
 def test_both_requirement_needs_document_and_code_before_ready():
     from devcontext.agentic.coverage import CoverageChecker
     class Client:
