@@ -81,7 +81,7 @@ def answer_check(settings, output):
         ('docs','设计文档中订单支付回调如何保证幂等？请以文档为依据。'),
         ('both','结合代码和设计文档解释订单支付回调的幂等保护。'),
         ('implementation','OrderService.createTicketOrder 由哪个实现方法完成？'),
-        ('calls','OrderServiceImpl.closeTimeoutOrder 调用哪些下游方法？'),
+        ('calls','解释 TicketOrderController.createTicketOrder → OrderService.createTicketOrder → 实现方法的两段连续调用路径，请给出各方法正文依据。'),
         ('partial','当前代码中的限流令牌桶是否已经完整实现动态配置刷新？有哪些证据缺口？'),
     )
     records=[]
@@ -120,6 +120,7 @@ def main():
         raise ValueError('Use a new output directory; existing live samples cannot be overwritten')
     args.output.mkdir(parents=True,exist_ok=True)
     settings=Settings()
+    run_commit=subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip()
     production=production_check(settings,args.output/'production-planners.json')
     if args.production_only:
         return 0 if production['passed'] else 1
@@ -144,7 +145,7 @@ def main():
             'semantic_completed':semantic is not None,'oracle_completed':oracle is not None,'answers_completed':answers is not None})
     checks=json.loads(args.checks.read_text(encoding='utf-8')) if args.checks else {}
     decision=release_decision(semantic,oracle,production,answers,checks)
-    decision['git_commit']=subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip()
+    decision['git_commit']=run_commit
     decision['datasets']={p.name:sha256(p.read_bytes()).hexdigest() for p in (ROOT/'benchmark').glob('*v5*.jsonl')}
     write(args.output/'release-decision.json',decision)
     return 0 if decision['default_enable_allowed'] else 1

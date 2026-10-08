@@ -1,5 +1,5 @@
 """Deterministic structural proof, followed by one semantic batch."""
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 import re
 from devcontext.agentic.coverage import _missing_sources
 from devcontext.agentic.evidence_models import RequirementCoverage
@@ -35,13 +35,14 @@ class StructuralCoverage:
 
 
 class StructuralCoverageChecker:
-    def check(self, requirement, workspace, round_index=None):
+    def check(self, requirement, workspace, round_index=None, allowed_chunk_ids=None):
         needs = [(i, n) for i, n in enumerate(requirement.retrieval_needs) if n.need_type in {'RELATION', 'PATH'}]
         if not needs:
             return StructuralCoverage(requirement.id, 'NOT_REQUIRED')
         if workspace is None:
             return StructuralCoverage(requirement.id, 'UNVERIFIED', ('结构验证工作区不可用',))
-        symbols = {s.symbol_key: s for s in workspace.symbols_for(requirement.id, round_index)}
+        symbols = {s.symbol_key: s for s in workspace.symbols_for(requirement.id, round_index)
+                   if allowed_chunk_ids is None or s.chunk_id in allowed_chunk_ids}
         relations = workspace.relations_for(requirement.id, round_index)
         probes = workspace.probes_for(requirement.id, round_index)
         missing, matched, states = [], [], []
@@ -165,8 +166,16 @@ class CombinedCoverage:
             self.last_client = getattr(self.semantic, 'last_client', None)
             self.last_error = getattr(self.semantic, 'last_error', None)
             for coverage in checked:
-                results[coverage.requirement_id] = coverage
                 self.last_diagnostics[coverage.requirement_id]['semantic'] = coverage.state
+                requirement = next(r for r in eligible if r.id == coverage.requirement_id)
+                if coverage.satisfied and any(n.segments for n in requirement.retrieval_needs):
+                    aligned = self.structural.check(requirement, workspace, round_index, set(coverage.evidence_ids))
+                    self.last_diagnostics[coverage.requirement_id]['semantic_endpoint_alignment'] = asdict(aligned)
+                    if aligned.state != 'SATISFIED':
+                        coverage = replace(coverage, state='PARTIAL',
+                            missing_criteria=('语义采信的证据尚未包含同一可靠关系/连续路径的全部端点正文；需要补齐目标及中间方法正文',),
+                            reason='语义判定与实际结构端点未对齐：' + coverage.reason)
+                results[coverage.requirement_id] = coverage
         return tuple(results[r.id] for r in requirements)
 
 

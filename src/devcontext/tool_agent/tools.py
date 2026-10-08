@@ -1,4 +1,5 @@
 from functools import partial
+import json
 
 import psycopg
 
@@ -53,7 +54,10 @@ class RepositoryTools:
                 error = ToolError("TOOL_UNAVAILABLE", "Search succeeded; symbol metadata is temporarily unavailable", True)
         return ToolResult(call, "PARTIAL" if error else ("SUCCESS" if execution.results else "EMPTY"),
                           tuple(execution.results), ToolObservation(discovered_symbols=confirmed,
-                          file_paths=tuple(dict.fromkeys(r.file_path for r in execution.results)), strategy=execution.strategy or strategy), error=error)
+                          file_paths=tuple(dict.fromkeys(r.file_path for r in execution.results)), strategy=execution.strategy or strategy,
+                          summary=json.dumps([{'chunk_id':r.id, 'source_type':r.source_type, 'file_path':r.file_path,
+                              'class_name':r.class_name, 'symbol_name':r.symbol_name, 'heading_path':r.heading_path}
+                              for r in execution.results], ensure_ascii=False)), error=error)
 
     def find_symbol(self, call, requirement, workspace, step):
         if self.graph_store is None:

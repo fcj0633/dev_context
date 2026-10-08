@@ -15,6 +15,8 @@ from devcontext.planning import EvidenceRequirement
 COVERAGE_SYSTEM_PROMPT = """你是 DevContext-Java 的证据覆盖审查器。
 你只判断每条 EvidenceRequirement 名下的证据是否满足 target 与 success_criteria，不回答用户问题、不评价设计好坏、不总结最终答案。
 不得使用模型记忆、常识或其他 Requirement 的证据补足项目事实。相关但不充分的证据只能判为 PARTIAL。
+RELATION/PATH 需求必须同时取得符合问题语义的真实 indexed_relations 和每个端点的方法/类型正文；入口中出现调用语句不能代替目标方法正文，无关的同类边不能代替问题要求的关系。
+SATISFIED 的 evidence_ids 必须包含用于证明需求的全部端点 Chunk；PATH 包含中间节点正文。只引用入口或类型摘要时不能放行方法实现/调用链。hint 只用于检索，不是证明。
 state 只能是 SATISFIED、PARTIAL 或 MISSING。reason 必须简短；missing_criteria 最多三条，每条只描述尚缺的证据内容。
 statuses 必须与输入 requirements 数量和顺序完全一致。
 只输出严格 JSON：{"statuses": [{"requirement_id": "ER1", "state": "PARTIAL", "evidence_ids": [1], "missing_criteria": ["尚缺内容"], "reason": "简短理由"}]}。"""
@@ -88,7 +90,7 @@ class CoverageChecker:
                 }
             else:
                 semantic = self._semantic_check(
-                    eligible, evidence_by_id, getattr(view, "round_index", None)
+                    eligible, evidence_by_id, getattr(view, "round_index", None), getattr(view, "workspace", None)
                 )
         return tuple(
             deterministic.get(item.id) or semantic[item.id]
@@ -100,6 +102,7 @@ class CoverageChecker:
         requirements: Sequence[EvidenceRequirement],
         evidence_by_id: dict[str, list[ContextItem]],
         round_index: int | None = None,
+        workspace=None,
     ) -> dict[str, RequirementCoverage]:
         payload = {
             "requirements": [
@@ -107,6 +110,13 @@ class CoverageChecker:
                     "requirement_id": requirement.id,
                     "target": requirement.target,
                     "success_criteria": requirement.success_criteria,
+                    "retrieval_needs": [n.to_dict() for n in requirement.retrieval_needs],
+                    "indexed_relations": [
+                        {"source": r.source, "target": r.target, "edge_type": r.edge_type,
+                         "source_chunk_id": r.source_chunk_id, "target_chunk_id": r.target_chunk_id}
+                        for r in (workspace.relations_for(requirement.id, round_index) if workspace is not None
+                                  and any(n.segments for n in requirement.retrieval_needs) else ())
+                    ],
                     "evidence": [
                         {
                             "chunk_id": item.chunk_id,
