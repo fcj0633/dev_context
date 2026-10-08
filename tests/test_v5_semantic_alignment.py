@@ -1,5 +1,6 @@
 """Regression from live TA07: an unrelated edge cannot corroborate a claim."""
 import json
+import pytest
 from devcontext.agentic.coverage import CoverageChecker
 from devcontext.agentic.structural_coverage import CombinedCoverage
 from devcontext.agentic.evidence_models import RequirementCoverage
@@ -81,3 +82,41 @@ def test_later_searches_do_not_evict_confirmed_requirement_anchor():
     assert A in view.keys_for('ER1')
     assert len(view.keys_for('ER1')) == 8
     assert view.payload['requirements'][0]['coverage_reason'] == 'query required'
+
+
+@pytest.mark.parametrize('query,expected', [('占座 本地事务','vector'), ('TicketServiceImpl.loadTicket','keyword')])
+def test_code_query_routing_does_not_implicitly_use_new_workspace_symbols(query, expected):
+    from devcontext.models import SearchExecution, SearchTimings
+    from devcontext.tool_agent.models import ToolCall
+    from devcontext.tool_agent.tools import RepositoryTools
+    strategies = []
+    class Policy:
+        def search_scope_with_trace(self, query, scope, top_k, code_strategy=None):
+            strategies.append(code_strategy)
+            return SearchExecution([], SearchTimings(), strategy=code_strategy or 'semantic')
+    tools = RepositoryTools(Policy(),None)
+    tools.search_code(ToolCall('T1','ER1','search_code',{'query':query}),req(),workspace(),0)
+    assert strategies == [expected]
+
+
+def test_missing_progress_boolean_remains_rejected_and_preserves_raw_diagnostic():
+    from devcontext.planning import EvidencePlan
+    from devcontext.tool_agent.models import AgentMemory
+    from devcontext.tool_agent.observation import build_observation
+    from devcontext.tool_agent.registry import ToolRegistry
+    from devcontext.tool_agent.tools import RepositoryTools
+    from devcontext.tool_agent.planner import AgentPlanner, PlannerFailed
+    response = json.dumps({'actions':[{'requirement_id':'ER1','tool':'find_symbol','arguments':{'name':'demo.Api.run'},'reason':'locate'}]})
+    class Client:
+        def generate(self, messages):
+            return response
+    plan = EvidencePlan('q',(req(),))
+    memory = AgentMemory(coverage=(RequirementCoverage('ER1','MISSING',(),('missing',),'no evidence','rules'),))
+    view = build_observation('q',plan,memory,ToolRegistry(RepositoryTools(None,None)))
+    planner = AgentPlanner(Client)
+    decision = planner.plan(view,plan,memory,0)
+    assert decision.decision_source == 'fallback' and memory.planner_failures == 1
+    assert memory.planner_diagnostics[0]['response'] == response
+    with pytest.raises(PlannerFailed):
+        planner.plan(view,plan,memory,1)
+    assert memory.planner_failures == 2 and not memory.tool_history

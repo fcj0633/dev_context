@@ -32,7 +32,10 @@ class RepositoryTools:
         return self._search(call, requirement, workspace, step, "DOCUMENT")
 
     def _search(self, call, requirement, workspace, step, scope):
-        strategy, symbols = code_strategy_for(call.arguments["query"], workspace, requirement.id) if scope == "CODE" else (None, ())
+        # Agent actions are already complete queries from the step snapshot.
+        # A previous action's newly discovered symbol must not silently reroute
+        # a later business query to keyword search in the same batch.
+        strategy, symbols = code_strategy_for(call.arguments["query"], None, requirement.id) if scope == "CODE" else (None, ())
         top_k = 5 if requirement.priority == "CORE" else 3
         action = SearchAction(call.call_id, requirement.id, step, call.arguments["query"], scope, call.reason)
         execution = self.retrieval_policy.search_scope_with_trace(action.query, scope, top_k, code_strategy=strategy)

@@ -27,6 +27,7 @@ class RuntimeOutcome:
                 "tool_calls": [r.to_dict() for r in self.memory.tool_history],
                 "planner_calls": sum(s.stage == "agent_planning" for s in self.stages),
                 "planner_failures": self.memory.planner_failures,
+                "planner_diagnostics": getattr(self.memory, 'planner_diagnostics', []),
                 "policy_violations": self.memory.policy_violations, "policy_fallbacks": self.memory.policy_fallbacks,
                 "coverage_calls": sum(s.stage == "coverage_check" for s in self.stages),
                 "stop_reason": self.memory.stop_reason, "recovery_used": self.memory.recovery_used,

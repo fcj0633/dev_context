@@ -144,6 +144,7 @@ class AgentMemory:
     evidence_ids: dict[str, set[int]] = field(default_factory=dict)
     errors: list[ToolError] = field(default_factory=list)
     planner_failures: int = 0
+    planner_diagnostics: list[dict] = field(default_factory=list)
     recovery_used: bool = False
     stop_reason: StopReason | None = None
     policy_violations: list[dict] = field(default_factory=list)
