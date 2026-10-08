@@ -65,6 +65,10 @@ class AgentPlanner:
             return self._failure(exc, view, plan, memory, step)
 
     def _failure(self, exc, view, plan, memory, step):
+        # 保留原始响应，区分 JSON 契约失败和检索/执行失败。例如缺少
+        # cannot_progress 必须拒绝，不能默认为 false 来掩盖生产规划问题。
+        # 整个请求只允许一次 deterministic fallback；这里不重试模型、
+        # 不增加实际 ToolCall budget，也不替代 Executor 的参数校验。
         self.last_error = type(exc).__name__ + ": " + str(exc)[:200]
         memory.planner_diagnostics.append({'step':step + 1, 'error':self.last_error, 'response':self.last_response})
         memory.planner_failures += 1

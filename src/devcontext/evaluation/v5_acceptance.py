@@ -2,6 +2,12 @@
 
 
 def release_decision(semantic, oracle, production, answers, checks):
+    """全部硬门槛通过才允许启用，不使用剔除错误后的高百分比补足验收。
+
+    summary 中的质量指标可能只基于有效记录；full_suite 必须另外确认完整
+    样本数和三组零错误。HTTP402 等外部失败仍阻止启用；不同轮次/模型配置
+    的有利结果不可拼接。status=complete 仅表示判定完成，不表示门槛通过。
+    """
     gates = {}
     for name, report, expected_runs in (('semantic', semantic, 48), ('oracle', oracle, 24)):
         valid = bool(report and report.get('status') == 'complete' and report.get('schema_version') == 3

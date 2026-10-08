@@ -36,6 +36,12 @@ class StructuralCoverage:
 
 class StructuralCoverageChecker:
     def check(self, requirement, workspace, round_index=None, allowed_chunk_ids=None):
+        """只验证当前需求、当前轮次可见的可靠结构证据。
+
+        allowed_chunk_ids 用于语义结果的端点对齐：语义采信的 Chunk 必须
+        自身包含所需关系/路径的全部端点，不能借 Workspace 中未采信的正文
+        补齐证明。此过滤不扩图、不生成正文，也不改变 Relation 的物理方向。
+        """
         needs = [(i, n) for i, n in enumerate(requirement.retrieval_needs) if n.need_type in {'RELATION', 'PATH'}]
         if not needs:
             return StructuralCoverage(requirement.id, 'NOT_REQUIRED')
@@ -114,6 +120,11 @@ class StructuralCoverageChecker:
 
 
 class CombinedCoverage:
+    """统一按来源、结构、语义顺序验证，前层缺口阻止后层模型放行。
+
+    semantic_checker 可以是生产 CoverageChecker 或评测 OracleChecker，
+    两者均经过相同的确定性约束；每批仅对前两层通过的需求调用一次 checker。
+    """
     def __init__(self, semantic_checker, hydrator=None):
         self.semantic = semantic_checker
         self.hydrator = hydrator
@@ -169,6 +180,9 @@ class CombinedCoverage:
                 self.last_diagnostics[coverage.requirement_id]['semantic'] = coverage.state
                 requirement = next(r for r in eligible if r.id == coverage.requirement_id)
                 if coverage.satisfied and any(n.segments for n in requirement.retrieval_needs):
+                    # TA07 曾只引用入口正文，却借无关 CALLS 边被判满足。
+                    # 在实际采信的 Chunk 中再次核对结构，避免两套证明各自
+                    # 成立却没有证明同一个目标；这里只做确定性检查，不加模型调用。
                     aligned = self.structural.check(requirement, workspace, round_index, set(coverage.evidence_ids))
                     self.last_diagnostics[coverage.requirement_id]['semantic_endpoint_alignment'] = asdict(aligned)
                     if aligned.state != 'SATISFIED':

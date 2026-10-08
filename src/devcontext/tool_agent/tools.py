@@ -32,9 +32,10 @@ class RepositoryTools:
         return self._search(call, requirement, workspace, step, "DOCUMENT")
 
     def _search(self, call, requirement, workspace, step, scope):
-        # Agent actions are already complete queries from the step snapshot.
-        # A previous action's newly discovered symbol must not silently reroute
-        # a later business query to keyword search in the same batch.
+        # query 在本步规划时已确定。传入 None 表示仅按 query 的原有规则路由：
+        # 业务描述走 vector，明确的符号名走 keyword；不读取执行中变化的 Workspace。
+        # 否则前一个动作新发现的 Symbol 会把后续业务查询错误切成 keyword。
+        # 新确认 key 的 Graph 使用权限仍由下一步快照及双层校验决定。
         strategy, symbols = code_strategy_for(call.arguments["query"], None, requirement.id) if scope == "CODE" else (None, ())
         top_k = 5 if requirement.priority == "CORE" else 3
         action = SearchAction(call.call_id, requirement.id, step, call.arguments["query"], scope, call.reason)

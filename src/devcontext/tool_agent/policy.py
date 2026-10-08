@@ -70,6 +70,12 @@ def relation_tool(edge, direction):
 
 
 class DecisionPolicyValidator:
+    """在整步执行前检查规划策略，仅使用本步的需求级确认快照。
+
+    候选外工具、跨需求 key、本步尚未确认的 key 或重复动作均提前拒绝；
+    被拒绝批次不执行、不消耗实际调用预算，单独统计 policy violation。
+    通过本层后仍须执行 ToolExecutor 的工具、参数、来源和 Symbol 硬校验。
+    """
     def validate(self, decision, view, memory):
         from devcontext.tool_agent.planner import call_fingerprint
         if decision.cannot_progress and not decision.calls:

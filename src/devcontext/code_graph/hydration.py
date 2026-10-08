@@ -12,6 +12,12 @@ def relation_from_row(row, repository):
 
 
 class GraphMetadataHydrator:
+    """读取已取证端点之间的元数据，不承担自动 Graph 扩图。
+
+    每个 Requirement 合并全部 need 的物理边类型后批量查询；只能映射已归属
+    该需求的 CODE Chunk，不取新邻居正文。SYMBOL_GRAPH_ENABLED=false 仍可
+    调用本类。查询失败保留 Probe 状态，不能把超时/索引不可用当成正常查空。
+    """
     def __init__(self, store, source="fixed_search"):
         self.store = store
         self.source = source
