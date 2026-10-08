@@ -23,12 +23,13 @@ def result(identifier):
 
 
 def node(identifier, edge_type="CALLS"):
-    return {"id": identifier, "chunk_id": identifier, "symbol_key": f"M:demo.Service{identifier}#run()",
+    return {"id": identifier, "chunk_id": identifier, "symbol_kind": "METHOD", "symbol_key": f"M:demo.Service{identifier}#run()",
             "edge_type": edge_type, "direction": "outgoing", "source_line": 1, "source_column": 1,
             "resolution_kind": "SYMBOL_SOLVER_EXACT"}
 
 
 class MemoryStore:
+    repository = "fixture"
     def __init__(self, links=None, exact=None, error=False):
         self.links = links or {}; self.exact = exact or []; self.error = error; self.calls = []
 

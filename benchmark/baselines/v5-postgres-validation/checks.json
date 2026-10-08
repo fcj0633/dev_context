@@ -1,0 +1,7 @@
+{
+  "python": true,
+  "postgresql": true,
+  "java": true,
+  "structure": true,
+  "policy": true
+}

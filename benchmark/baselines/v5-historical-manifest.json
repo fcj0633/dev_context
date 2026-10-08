@@ -1,0 +1,30 @@
+{
+  "git_commit": "987466a84bacfdf36daa5a970362c96f40a20785",
+  "historical_only": true,
+  "files": [
+    {
+      "path": "artifacts/tool-agent-live-abc.json",
+      "sha256": "9c8f92267924bf49bcf7146a56a760f6e3b199f13e4ed0b66d60e21ab58b0242"
+    },
+    {
+      "path": "artifacts/tool-agent-regression-abc.json",
+      "sha256": "63908f2226b34a37e7cdb9591ce12410f82925821441ae67fdc0f81a2b452eb7"
+    },
+    {
+      "path": "artifacts/symbol-graph-v1-report.json",
+      "sha256": "4a98e494161337e8f9ec33d63e1f3bd39cf79116409f308dc36bd334a0f86188"
+    },
+    {
+      "path": "artifacts/symbol-graph-real-workflow-ab.json",
+      "sha256": "025ce6b2dc57e757a41e3e8a6cb44a4ee22197af45bb55a5a313afa522190c00"
+    },
+    {
+      "path": "artifacts/tool-agent-answer-regression.json",
+      "sha256": "65589b13cade7b07abc158348837299e822bb80ee845995cd913e1f52dd3fdf2"
+    },
+    {
+      "path": "artifacts/tool-agent-full-after-fix.json",
+      "sha256": "6e8e6b0055102df671b92572751115afe891b4c7e109770406f3be5ac90d1cfb"
+    }
+  ]
+}

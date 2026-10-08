@@ -1,0 +1,126 @@
+{
+  "schema_version": 3,
+  "archive": "raw-results.zip",
+  "files": [
+    {
+      "path": "artifacts/v5/answer-diagnostic.json",
+      "bytes": 127151,
+      "sha256": "454a3cce27ebda1cd2a2c1525200d9dac2030ad9cb74af2e47dfc7518956093f"
+    },
+    {
+      "path": "artifacts/v5/checks-postgres.json",
+      "bytes": 103,
+      "sha256": "99c9bf6d85a382d7d152a870dffd53b884e657c1171b27d0397ab4d3dea4dc64"
+    },
+    {
+      "path": "artifacts/v5/live-04/gold-index-audit.json",
+      "bytes": 4846,
+      "sha256": "1d903ed6b00748784d56ed59c0d5ed6405c7582a826ea4b642d5ce9d0bc07fb6"
+    },
+    {
+      "path": "artifacts/v5/live-04/oracle.json",
+      "bytes": 5170948,
+      "sha256": "d2910c5b0eedd420c498d92ae3c347855481799728c5c1f477bb4ad5762e289c"
+    },
+    {
+      "path": "artifacts/v5/live-04/production-planners.json",
+      "bytes": 65966,
+      "sha256": "b33dc6ffa9883a8b018a615a66e6e2602229254b1aac80deae1fa7b51eca5344"
+    },
+    {
+      "path": "artifacts/v5/live-04/semantic.json",
+      "bytes": 8619057,
+      "sha256": "a4c1b35027663cbd5858233d94353bf22bc197bb0da41c1566382b636c75d479"
+    },
+    {
+      "path": "artifacts/v5/live-04/TA07-agent-run2.json",
+      "bytes": 60482,
+      "sha256": "5839f4644f2fb2c6dd96d506a45b47e6be4631685c8f76100231f0ce4579ac14"
+    },
+    {
+      "path": "artifacts/v5/live-05/answers.json",
+      "bytes": 1577,
+      "sha256": "48ea8aac7f46aaa260197067c4b7458e75d2f6d2918c28b13747093b9c254305"
+    },
+    {
+      "path": "artifacts/v5/live-05/oracle.json",
+      "bytes": 7098705,
+      "sha256": "a171e319a10b10e2eb4298e9d0fb0975f45ebcc20b87f8e353b988c5418af555"
+    },
+    {
+      "path": "artifacts/v5/live-05/production-planners.json",
+      "bytes": 66000,
+      "sha256": "c38c512fd78cf1608d3ba9c7dbea1a9f9707af6e108f78aef7a86b608b471bd7"
+    },
+    {
+      "path": "artifacts/v5/live-05/release-decision.json",
+      "bytes": 1373,
+      "sha256": "24310640598073732e8fe53bd1888aec281181ade890d337780f55dbdc98d07b"
+    },
+    {
+      "path": "artifacts/v5/live-05/semantic.json",
+      "bytes": 8733093,
+      "sha256": "600262fd5225991342abd557bfbf7c6c72eab175b28e7c94959ded3cea5c24ad"
+    },
+    {
+      "path": "artifacts/v5/live-06/answers.json",
+      "bytes": 1589,
+      "sha256": "a89b1f6e966cd550b2a8ce5eac62ed494e40425655c269885a9c8fb12ab4f08d"
+    },
+    {
+      "path": "artifacts/v5/live-06/oracle.json",
+      "bytes": 4304618,
+      "sha256": "1e3be265a5bd1a30bfd208b27653f134c39282766b6db4a854cde5efca05c1c5"
+    },
+    {
+      "path": "artifacts/v5/live-06/production-planners.json",
+      "bytes": 60700,
+      "sha256": "d92a60409a17f5df2fe695cea8d162e1f10b3bb9024f897db21b7738b359680a"
+    },
+    {
+      "path": "artifacts/v5/live-06/release-decision.json",
+      "bytes": 1371,
+      "sha256": "b66ae4521045bde806d567c84374aebe5692a5320416e0034c55581dc1ee1d04"
+    },
+    {
+      "path": "artifacts/v5/live-06/semantic.json",
+      "bytes": 8563437,
+      "sha256": "eaff41f803058da2db54eb45959fe6dd4500f32f51d2692bcf5e51547dad5f78"
+    },
+    {
+      "path": "artifacts/v5/python-routing-final-postgres.txt",
+      "bytes": 913,
+      "sha256": "9611103a76ff5c3c18840f794dc1d172214a7e5dafc28c8a224a8054a5f8c391"
+    },
+    {
+      "path": "artifacts/v5/semantic-alignment-after-fix.txt",
+      "bytes": 101,
+      "sha256": "481b897307db43cb64eb0c994524c4bf2a3ae4493497bd2dc5575b5d282ec525"
+    },
+    {
+      "path": "artifacts/v5/semantic-alignment-before-fix.txt",
+      "bytes": 3968,
+      "sha256": "9020bdde2efc5a0dd7ec14b8c1a737cabac18f2dd087f8ea7770bfea67bd6b7b"
+    },
+    {
+      "path": "artifacts/v5/TA08-diagnostic-report.json",
+      "bytes": 624953,
+      "sha256": "2d742bf84d0920ebece65e55210cbda11c203aa24f1ca60b23d1621485cca4d4"
+    },
+    {
+      "path": "artifacts/v5/WHY01-diagnostic-report.json",
+      "bytes": 1646256,
+      "sha256": "31c05b0f3fe8777d4d76c78c04ba4316fdb33bf5bd89d84008ee6918ab8438da"
+    },
+    {
+      "path": "java-parser/target/surefire-reports/TEST-io.devcontext.parser.JavaSourceParserTest.xml",
+      "bytes": 11288,
+      "sha256": "9b75ee37be3988ff8838537d0e806a231bf55b3b6b8428b3c07ea9f1023fd1ca"
+    },
+    {
+      "path": "java-parser/target/surefire-reports/TEST-io.devcontext.parser.RepositoryJavaAnalyzerTest.xml",
+      "bytes": 11909,
+      "sha256": "bda86ad1090647a1e8d894ad9aa043482d7b35e443054fc4200147053172045b"
+    }
+  ]
+}

@@ -183,7 +183,7 @@ class BulkPolicy:
         return SearchExecution(
             [
                 SearchResult(
-                    1_000 + self.calls * 10 + index, "CODE", "METHOD", "Service.java",
+                    1_000 + self.calls * 10 + index, scope, "METHOD", "Service.java",
                     "x" * 4_000, 1, 2, "Service", f"seed{self.calls}-{index}",
                     None, None, 1.0,
                 )

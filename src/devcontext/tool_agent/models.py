@@ -116,6 +116,9 @@ class ActionStep:
     coverage_after: tuple[RequirementCoverage, ...]
     progress: bool
     latency_ms: float
+    new_relation_count: int = 0
+    new_relation_ownership_count: int = 0
+    coverage_diagnostics: dict = field(default_factory=dict)
 
     def to_dict(self):
         return {"step_number": self.step_number,
@@ -125,7 +128,9 @@ class ActionStep:
                 "new_evidence_ids": list(self.new_evidence_ids), "new_symbols": list(self.new_symbols),
                 "new_ownerships": list(self.new_ownerships),
                 "coverage_after": [c.to_dict() for c in self.coverage_after],
-                "progress": self.progress, "latency_ms": self.latency_ms}
+                "progress": self.progress, "latency_ms": self.latency_ms,
+                "new_relation": self.new_relation_count, "new_relation_ownership": self.new_relation_ownership_count,
+                "coverage_diagnostics": self.coverage_diagnostics}
 
 
 @dataclass(slots=True)
@@ -139,8 +144,12 @@ class AgentMemory:
     evidence_ids: dict[str, set[int]] = field(default_factory=dict)
     errors: list[ToolError] = field(default_factory=list)
     planner_failures: int = 0
+    planner_diagnostics: list[dict] = field(default_factory=list)
     recovery_used: bool = False
     stop_reason: StopReason | None = None
+    policy_violations: list[dict] = field(default_factory=list)
+    policy_fallbacks: int = 0
+    structural_metadata: dict = field(default_factory=dict)
 
     def observe(self, result: ToolResult):
         # Only independently resolved handles enter the graph capability set.
@@ -167,3 +176,7 @@ class AgentMemory:
 class AgentObservationView:
     payload: dict[str, Any]
     confirmed_keys: frozenset[str]
+
+    def keys_for(self, requirement_id):
+        return frozenset(s['symbol_key'] for r in self.payload.get('requirements', []) if r['id'] == requirement_id
+                         for s in r.get('known_symbols', []) if s['state'] == 'CONFIRMED')

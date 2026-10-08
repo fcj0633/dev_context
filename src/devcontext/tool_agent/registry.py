@@ -17,6 +17,7 @@ class ToolSpec:
 
 class ToolRegistry:
     def __init__(self, tools):
+        self.tools = tools
         code = frozenset({"CODE", "BOTH", "ANY"})
         docs = frozenset({"DOCUMENT", "BOTH", "ANY"})
         self.specs = {s.name: s for s in (

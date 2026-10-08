@@ -1,0 +1,8 @@
+{
+  "schema_version": 3,
+  "status": "blocked",
+  "error": "ConnectionTimeout",
+  "semantic_completed": false,
+  "oracle_completed": false,
+  "answers_completed": false
+}

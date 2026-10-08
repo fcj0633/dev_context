@@ -13,6 +13,7 @@ class RetrievalOutcome:
     package: EvidencePackage
     stage_usage: tuple[StageUsage, ...]
     agent_trace: dict[str, Any] | None = None
+    structural_trace: dict[str, Any] | None = None
 
 
 class RetrievalEngine(Protocol):

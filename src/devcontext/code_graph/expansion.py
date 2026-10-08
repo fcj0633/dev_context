@@ -4,6 +4,7 @@ import time
 
 from devcontext.code_graph.intent import DIRECTIONS, classify_intent, symbol_hints
 from devcontext.code_graph.models import GraphExpansion, GraphExpansionTrace
+from devcontext.context.relations import EvidenceSymbol, EvidenceRelation
 from devcontext.deadline import RequestDeadlineExceeded, remaining_seconds
 
 MAX_ANCHORS = 3
@@ -22,6 +23,7 @@ class CodeGraphExpander:
         intent = classify_intent(action.query, requirement)
         trace = GraphExpansionTrace(action.action_id, requirement.id, round_index, intent, execution.strategy)
         additions = []
+        structural_symbols, structural_relations = {}, {}
         if action.source_scope == "DOCUMENT":
             trace.skip_reason = "document_scope"
             self._record(trace, started)
@@ -48,6 +50,8 @@ class CodeGraphExpander:
                     if len(anchors) == MAX_ANCHORS:
                         break
                 trace.anchors = [row["symbol_key"] for row in anchors]
+                for row in exact + mapped:
+                    structural_symbols[row['symbol_key']] = EvidenceSymbol(row['symbol_key'], row['symbol_kind'], row['chunk_id'])
                 seen_chunks = {result.id for result in execution.results}
                 for result in session.chunks_for_symbols(exact):
                     if result.id not in seen_chunks:
@@ -70,6 +74,11 @@ class CodeGraphExpander:
                             rows = neighbors.get(parent["id"], [])
                             trace.truncated |= len(rows) > MAX_NEIGHBORS
                             for target in rows[:MAX_NEIGHBORS]:
+                                structural_symbols[target['symbol_key']] = EvidenceSymbol(target['symbol_key'], target['symbol_kind'], target['chunk_id'])
+                                source, destination = (parent, target) if target['direction'] == 'outgoing' else (target, parent)
+                                relation = EvidenceRelation(self.store.repository, source['symbol_key'], destination['symbol_key'], target['edge_type'],
+                                    target['resolution_kind'], target['source_line'], target['source_column'], source['chunk_id'], destination['chunk_id'])
+                                structural_relations[relation.identity] = relation
                                 step = {"from": parent["symbol_key"], "to": target["symbol_key"], "edge_type": target["edge_type"],
                                         "direction": target["direction"], "resolution_kind": target["resolution_kind"],
                                         "source_line": target["source_line"], "source_column": target["source_column"]}
@@ -109,7 +118,11 @@ class CodeGraphExpander:
             trace.exact_added_chunks.clear(); trace.graph_added_chunks.clear(); trace.paths.clear()
         finally:
             self._record(trace, started)
-        return GraphExpansion(additions, trace)
+        accepted_ids = {r.id for r in execution.results + additions}
+        symbols = tuple(s for s in structural_symbols.values() if s.chunk_id in accepted_ids)
+        keys = {s.symbol_key for s in symbols}
+        relations = tuple(r for r in structural_relations.values() if r.source in keys and r.target in keys) if not trace.error and trace.skip_reason != 'request_deadline' else ()
+        return GraphExpansion(additions, trace, symbols, relations)
 
     @staticmethod
     def _record(trace, started):

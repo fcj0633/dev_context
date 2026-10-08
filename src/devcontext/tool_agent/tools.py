@@ -1,4 +1,5 @@
 from functools import partial
+import json
 
 import psycopg
 
@@ -31,7 +32,11 @@ class RepositoryTools:
         return self._search(call, requirement, workspace, step, "DOCUMENT")
 
     def _search(self, call, requirement, workspace, step, scope):
-        strategy, symbols = code_strategy_for(call.arguments["query"], workspace, requirement.id) if scope == "CODE" else (None, ())
+        # query 在本步规划时已确定。传入 None 表示仅按 query 的原有规则路由：
+        # 业务描述走 vector，明确的符号名走 keyword；不读取执行中变化的 Workspace。
+        # 否则前一个动作新发现的 Symbol 会把后续业务查询错误切成 keyword。
+        # 新确认 key 的 Graph 使用权限仍由下一步快照及双层校验决定。
+        strategy, symbols = code_strategy_for(call.arguments["query"], None, requirement.id) if scope == "CODE" else (None, ())
         top_k = 5 if requirement.priority == "CORE" else 3
         action = SearchAction(call.call_id, requirement.id, step, call.arguments["query"], scope, call.reason)
         execution = self.retrieval_policy.search_scope_with_trace(action.query, scope, top_k, code_strategy=strategy)
@@ -53,7 +58,10 @@ class RepositoryTools:
                 error = ToolError("TOOL_UNAVAILABLE", "Search succeeded; symbol metadata is temporarily unavailable", True)
         return ToolResult(call, "PARTIAL" if error else ("SUCCESS" if execution.results else "EMPTY"),
                           tuple(execution.results), ToolObservation(discovered_symbols=confirmed,
-                          file_paths=tuple(dict.fromkeys(r.file_path for r in execution.results)), strategy=execution.strategy or strategy), error=error)
+                          file_paths=tuple(dict.fromkeys(r.file_path for r in execution.results)), strategy=execution.strategy or strategy,
+                          summary=json.dumps([{'chunk_id':r.id, 'source_type':r.source_type, 'file_path':r.file_path,
+                              'class_name':r.class_name, 'symbol_name':r.symbol_name, 'heading_path':r.heading_path}
+                              for r in execution.results], ensure_ascii=False)), error=error)
 
     def find_symbol(self, call, requirement, workspace, step):
         if self.graph_store is None:

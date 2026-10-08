@@ -1,0 +1,1087 @@
+{
+  "schema_version": 3,
+  "status": "complete",
+  "records": [
+    {
+      "profile": "fast",
+      "case_id": "locate",
+      "positive": true,
+      "passed": true,
+      "plan": {
+        "schema_version": 3,
+        "original_query": "OrderService 类型在哪里定义？",
+        "requirements": [
+          {
+            "id": "ER1",
+            "target": "OrderService 类型定义的位置",
+            "success_criteria": "包含 OrderService 类型定义所在的文件、模块或代码位置",
+            "priority": "CORE",
+            "temporal_scope": "CURRENT",
+            "source_requirement": "CODE",
+            "retrieval_needs": [
+              {
+                "need_type": "CODE",
+                "relation_spec": null,
+                "path_spec": null
+              }
+            ]
+          }
+        ],
+        "decision_source": "llm"
+      },
+      "native_v3": true,
+      "response": "{\"schema_version\":3,\"primary_intent\":\"LOCATE\",\"subjects\":[\"OrderService\"],\"requirements\":[{\"target\":\"OrderService 类型定义的位置\",\"success_criteria\":\"包含 OrderService 类型定义所在的文件、模块或代码位置\",\"priority\":\"CORE\",\"temporal_scope\":\"CURRENT\",\"source_requirement\":\"CODE\",\"query\":\"OrderService 类型在哪里定义\",\"reason\":\"定位 OrderService 类型的定义位置\",\"retrieval_needs\":[{\"need_type\":\"CODE\"}]}]}",
+      "rejection": null
+    },
+    {
+      "profile": "fast",
+      "case_id": "document",
+      "positive": true,
+      "passed": true,
+      "plan": {
+        "schema_version": 3,
+        "original_query": "请仅根据设计文档解释订单支付回调的幂等设计。",
+        "requirements": [
+          {
+            "id": "ER1",
+            "target": "订单支付回调的幂等设计",
+            "success_criteria": "包含设计文档中关于订单支付回调幂等的实现方案、关键机制、约束或流程说明",
+            "priority": "CORE",
+            "temporal_scope": "CURRENT",
+            "source_requirement": "DOCUMENT",
+            "retrieval_needs": [
+              {
+                "need_type": "DOCUMENT",
+                "relation_spec": null,
+                "path_spec": null
+              }
+            ]
+          }
+        ],
+        "decision_source": "llm"
+      },
+      "native_v3": true,
+      "response": "{\"schema_version\":3,\"primary_intent\":\"HOW\",\"subjects\":[\"订单支付回调\",\"幂等设计\"],\"requirements\":[{\"target\":\"订单支付回调的幂等设计\",\"success_criteria\":\"包含设计文档中关于订单支付回调幂等的实现方案、关键机制、约束或流程说明\",\"priority\":\"CORE\",\"temporal_scope\":\"CURRENT\",\"source_requirement\":\"DOCUMENT\",\"query\":\"订单支付回调 幂等设计\",\"reason\":\"用户要求仅根据设计文档解释订单支付回调的幂等设计\",\"retrieval_needs\":[{\"need_type\":\"DOCUMENT\"}]}]}",
+      "rejection": null
+    },
+    {
+      "profile": "fast",
+      "case_id": "explain",
+      "positive": true,
+      "passed": true,
+      "plan": {
+        "schema_version": 3,
+        "original_query": "解释当前购票事务边界的设计原理。",
+        "requirements": [
+          {
+            "id": "ER1",
+            "target": "购票事务边界的设计原理",
+            "success_criteria": "需要包含事务边界的定义位置、边界范围、事务传播行为以及这样设计的原因",
+            "priority": "CORE",
+            "temporal_scope": "CURRENT",
+            "source_requirement": "BOTH",
+            "retrieval_needs": [
+              {
+                "need_type": "CODE",
+                "relation_spec": null,
+                "path_spec": null
+              },
+              {
+                "need_type": "DOCUMENT",
+                "relation_spec": null,
+                "path_spec": null
+              }
+            ]
+          }
+        ],
+        "decision_source": "llm"
+      },
+      "native_v3": true,
+      "response": "{\"schema_version\":3,\"primary_intent\":\"WHY\",\"subjects\":[\"购票事务边界\"],\"requirements\":[{\"target\":\"购票事务边界的设计原理\",\"success_criteria\":\"需要包含事务边界的定义位置、边界范围、事务传播行为以及这样设计的原因\",\"priority\":\"CORE\",\"temporal_scope\":\"CURRENT\",\"source_requirement\":\"BOTH\",\"query\":\"购票事务边界 设计原理\",\"reason\":\"查找代码与文档中关于购票事务边界的实现和设计说明，以解释设计原理\",\"retrieval_needs\":[{\"need_type\":\"CODE\"},{\"need_type\":\"DOCUMENT\"}]}]}",
+      "rejection": null
+    },
+    {
+      "profile": "fast",
+      "case_id": "caller",
+      "positive": true,
+      "passed": true,
+      "plan": {
+        "schema_version": 3,
+        "original_query": "谁调用 OrderDelayCloseProducer.doSend 方法？",
+        "requirements": [
+          {
+            "id": "ER1",
+            "target": "OrderDelayCloseProducer.doSend 方法的调用方",
+            "success_criteria": "列出调用 OrderDelayCloseProducer.doSend 的调用方方法或类，并包含调用位置信息",
+            "priority": "CORE",
+            "temporal_scope": "CURRENT",
+            "source_requirement": "CODE",
+            "retrieval_needs": [
+              {
+                "need_type": "RELATION",
+                "relation_spec": {
+                  "edge_type": "CALLS",
+                  "direction": "INCOMING",
+                  "anchor_requirement": "NEED_METHOD",
+                  "anchor_hint": "OrderDelayCloseProducer.doSend",
+                  "target_hint": ""
+                },
+                "path_spec": null
+              }
+            ]
+          }
+        ],
+        "decision_source": "llm"
+      },
+      "native_v3": true,
+      "response": "{\"schema_version\":3,\"primary_intent\":\"LOCATE\",\"subjects\":[\"OrderDelayCloseProducer.doSend\"],\"requirements\":[{\"target\":\"OrderDelayCloseProducer.doSend 方法的调用方\",\"success_criteria\":\"列出调用 OrderDelayCloseProducer.doSend 的调用方方法或类，并包含调用位置信息\",\"priority\":\"CORE\",\"temporal_scope\":\"CURRENT\",\"source_requirement\":\"CODE\",\"query\":\"OrderDelayCloseProducer.doSend 调用方\",\"reason\":\"定位哪些代码调用了指定方法\",\"retrieval_needs\":[{\"need_type\":\"RELATION\",\"relation_spec\":{\"edge_type\":\"CALLS\",\"direction\":\"INCOMING\",\"anchor_requirement\":\"NEED_METHOD\",\"anchor_hint\":\"OrderDelayCloseProducer.doSend\",\"target_hint\":\"\"}}]}]}",
+      "rejection": null
+    },
+    {
+      "profile": "fast",
+      "case_id": "callee",
+      "positive": true,
+      "passed": true,
+      "plan": {
+        "schema_version": 3,
+        "original_query": "OrderServiceImpl.closeTimeoutOrder 调用哪些下游方法？",
+        "requirements": [
+          {
+            "id": "ER1",
+            "target": "OrderServiceImpl.closeTimeoutOrder 调用的下游方法",
+            "success_criteria": "包含 closeTimeoutOrder 直接调用的下游方法及调用关系",
+            "priority": "CORE",
+            "temporal_scope": "CURRENT",
+            "source_requirement": "CODE",
+            "retrieval_needs": [
+              {
+                "need_type": "RELATION",
+                "relation_spec": {
+                  "edge_type": "CALLS",
+                  "direction": "OUTGOING",
+                  "anchor_requirement": "NEED_METHOD",
+                  "anchor_hint": "OrderServiceImpl.closeTimeoutOrder",
+                  "target_hint": ""
+                },
+                "path_spec": null
+              }
+            ]
+          }
+        ],
+        "decision_source": "llm"
+      },
+      "native_v3": true,
+      "response": "{\"schema_version\":3,\"primary_intent\":\"LOCATE\",\"subjects\":[\"OrderServiceImpl.closeTimeoutOrder\"],\"requirements\":[{\"target\":\"OrderServiceImpl.closeTimeoutOrder 调用的下游方法\",\"success_criteria\":\"包含 closeTimeoutOrder 直接调用的下游方法及调用关系\",\"priority\":\"CORE\",\"temporal_scope\":\"CURRENT\",\"source_requirement\":\"CODE\",\"query\":\"OrderServiceImpl.closeTimeoutOrder 调用哪些下游方法\",\"reason\":\"定位 closeTimeoutOrder 的下游调用关系\",\"retrieval_needs\":[{\"need_type\":\"RELATION\",\"relation_spec\":{\"edge_type\":\"CALLS\",\"direction\":\"OUTGOING\",\"anchor_requirement\":\"NEED_METHOD\",\"anchor_hint\":\"OrderServiceImpl.closeTimeoutOrder\",\"target_hint\":\"\"}}]}]}",
+      "rejection": null
+    },
+    {
+      "profile": "fast",
+      "case_id": "type-implementation",
+      "positive": true,
+      "passed": true,
+      "plan": {
+        "schema_version": 3,
+        "original_query": "PayChannelHandler 接口类型由哪些类实现？",
+        "requirements": [
+          {
+            "id": "ER1",
+            "target": "PayChannelHandler 接口的实现类列表",
+            "success_criteria": "列出实现 PayChannelHandler 接口的类名称",
+            "priority": "CORE",
+            "temporal_scope": "CURRENT",
+            "source_requirement": "CODE",
+            "retrieval_needs": [
+              {
+                "need_type": "RELATION",
+                "relation_spec": {
+                  "edge_type": "IMPLEMENTS",
+                  "direction": "INCOMING",
+                  "anchor_requirement": "NEED_CLASS",
+                  "anchor_hint": "PayChannelHandler",
+                  "target_hint": ""
+                },
+                "path_spec": null
+              }
+            ]
+          }
+        ],
+        "decision_source": "llm"
+      },
+      "native_v3": true,
+      "response": "{\"schema_version\":3,\"primary_intent\":\"LOCATE\",\"subjects\":[\"PayChannelHandler\"],\"requirements\":[{\"target\":\"PayChannelHandler 接口的实现类列表\",\"success_criteria\":\"列出实现 PayChannelHandler 接口的类名称\",\"priority\":\"CORE\",\"temporal_scope\":\"CURRENT\",\"source_requirement\":\"CODE\",\"query\":\"PayChannelHandler 实现类\",\"reason\":\"定位实现该接口的类\",\"retrieval_needs\":[{\"need_type\":\"RELATION\",\"relation_spec\":{\"edge_type\":\"IMPLEMENTS\",\"direction\":\"INCOMING\",\"anchor_requirement\":\"NEED_CLASS\",\"anchor_hint\":\"PayChannelHandler\",\"target_hint\":\"\"}}]}]}",
+      "rejection": null
+    },
+    {
+      "profile": "fast",
+      "case_id": "method-implementation",
+      "positive": true,
+      "passed": true,
+      "plan": {
+        "schema_version": 3,
+        "original_query": "OrderService.createTicketOrder 接口方法由哪个方法实现？",
+        "requirements": [
+          {
+            "id": "ER1",
+            "target": "需要确认 OrderService.createTicketOrder 接口方法由哪个方法实现",
+            "success_criteria": "需要包含实现该接口方法的实现类及实现方法标识",
+            "priority": "CORE",
+            "temporal_scope": "CURRENT",
+            "source_requirement": "CODE",
+            "retrieval_needs": [
+              {
+                "need_type": "RELATION",
+                "relation_spec": {
+                  "edge_type": "OVERRIDES",
+                  "direction": "INCOMING",
+                  "anchor_requirement": "NEED_METHOD",
+                  "anchor_hint": "OrderService.createTicketOrder",
+                  "target_hint": ""
+                },
+                "path_spec": null
+              }
+            ]
+          }
+        ],
+        "decision_source": "llm"
+      },
+      "native_v3": true,
+      "response": "{\"schema_version\":3,\"primary_intent\":\"LOCATE\",\"subjects\":[\"OrderService\",\"createTicketOrder\"],\"requirements\":[{\"target\":\"需要确认 OrderService.createTicketOrder 接口方法由哪个方法实现\",\"success_criteria\":\"需要包含实现该接口方法的实现类及实现方法标识\",\"priority\":\"CORE\",\"temporal_scope\":\"CURRENT\",\"source_requirement\":\"CODE\",\"query\":\"OrderService.createTicketOrder 实现方法\",\"reason\":\"查找该接口方法的实现方法\",\"retrieval_needs\":[{\"need_type\":\"RELATION\",\"relation_spec\":{\"edge_type\":\"OVERRIDES\",\"direction\":\"INCOMING\",\"anchor_requirement\":\"NEED_METHOD\",\"anchor_hint\":\"OrderService.createTicketOrder\",\"target_hint\":\"\"}}]}]}",
+      "rejection": null
+    },
+    {
+      "profile": "fast",
+      "case_id": "hierarchy",
+      "positive": true,
+      "passed": true,
+      "plan": {
+        "schema_version": 3,
+        "original_query": "支付模块 PayDO 类型继承哪个父类？",
+        "requirements": [
+          {
+            "id": "ER1",
+            "target": "PayDO 类型继承的父类",
+            "success_criteria": "需要包含 PayDO 的父类名称及继承关系",
+            "priority": "CORE",
+            "temporal_scope": "CURRENT",
+            "source_requirement": "CODE",
+            "retrieval_needs": [
+              {
+                "need_type": "RELATION",
+                "relation_spec": {
+                  "edge_type": "EXTENDS",
+                  "direction": "OUTGOING",
+                  "anchor_requirement": "NEED_CLASS",
+                  "anchor_hint": "PayDO",
+                  "target_hint": ""
+                },
+                "path_spec": null
+              }
+            ]
+          }
+        ],
+        "decision_source": "llm"
+      },
+      "native_v3": true,
+      "response": "{\"schema_version\":3,\"primary_intent\":\"WHAT\",\"subjects\":[\"支付模块\",\"PayDO\"],\"requirements\":[{\"target\":\"PayDO 类型继承的父类\",\"success_criteria\":\"需要包含 PayDO 的父类名称及继承关系\",\"priority\":\"CORE\",\"temporal_scope\":\"CURRENT\",\"source_requirement\":\"CODE\",\"query\":\"支付模块 PayDO 继承 哪个父类\",\"reason\":\"确认 PayDO 类型的父类继承关系\",\"retrieval_needs\":[{\"need_type\":\"RELATION\",\"relation_spec\":{\"edge_type\":\"EXTENDS\",\"direction\":\"OUTGOING\",\"anchor_requirement\":\"NEED_CLASS\",\"anchor_hint\":\"PayDO\",\"target_hint\":\"\"}}]}]}",
+      "rejection": null
+    },
+    {
+      "profile": "fast",
+      "case_id": "construction",
+      "positive": true,
+      "passed": true,
+      "plan": {
+        "schema_version": 3,
+        "original_query": "OrderServiceImpl.closePayOrder 方法显式构造了哪个异常对象？",
+        "requirements": [
+          {
+            "id": "ER1",
+            "target": "OrderServiceImpl.closePayOrder 方法显式构造的异常对象",
+            "success_criteria": "包含该方法内被显式构造的异常类型/类名或构造表达式",
+            "priority": "CORE",
+            "temporal_scope": "CURRENT",
+            "source_requirement": "CODE",
+            "retrieval_needs": [
+              {
+                "need_type": "RELATION",
+                "relation_spec": {
+                  "edge_type": "CONSTRUCTS",
+                  "direction": "OUTGOING",
+                  "anchor_requirement": "NEED_METHOD",
+                  "anchor_hint": "OrderServiceImpl.closePayOrder",
+                  "target_hint": ""
+                },
+                "path_spec": null
+              },
+              {
+                "need_type": "CODE",
+                "relation_spec": null,
+                "path_spec": null
+              }
+            ]
+          }
+        ],
+        "decision_source": "llm"
+      },
+      "native_v3": true,
+      "response": "{\"schema_version\":3,\"primary_intent\":\"WHAT\",\"subjects\":[\"OrderServiceImpl.closePayOrder\",\"异常对象\"],\"requirements\":[{\"target\":\"OrderServiceImpl.closePayOrder 方法显式构造的异常对象\",\"success_criteria\":\"包含该方法内被显式构造的异常类型/类名或构造表达式\",\"priority\":\"CORE\",\"temporal_scope\":\"CURRENT\",\"source_requirement\":\"CODE\",\"query\":\"OrderServiceImpl.closePayOrder 显式构造 异常对象\",\"reason\":\"定位 closePayOrder 方法中显式构造的异常对象\",\"retrieval_needs\":[{\"need_type\":\"RELATION\",\"relation_spec\":{\"edge_type\":\"CONSTRUCTS\",\"direction\":\"OUTGOING\",\"anchor_requirement\":\"NEED_METHOD\",\"anchor_hint\":\"OrderServiceImpl.closePayOrder\",\"target_hint\":\"\"}},{\"need_type\":\"CODE\"}]}]}",
+      "rejection": null
+    },
+    {
+      "profile": "fast",
+      "case_id": "path",
+      "positive": true,
+      "passed": true,
+      "plan": {
+        "schema_version": 3,
+        "original_query": "请证明 TicketOrderController.createTicketOrder 到 OrderService.createTicketOrder 再到其实现方法的两段调用路径。",
+        "requirements": [
+          {
+            "id": "ER1",
+            "target": "确认 TicketOrderController.createTicketOrder 到 OrderService.createTicketOrder 再到其实现方法的两段调用路径",
+            "success_criteria": "给出从 TicketOrderController.createTicketOrder 经由 CALLS 到 OrderService.createTicketOrder，再经由 OVERRIDES 到实现方法的完整路径",
+            "priority": "CORE",
+            "temporal_scope": "CURRENT",
+            "source_requirement": "CODE",
+            "retrieval_needs": [
+              {
+                "need_type": "PATH",
+                "relation_spec": null,
+                "path_spec": {
+                  "segments": [
+                    {
+                      "edge_type": "CALLS",
+                      "direction": "OUTGOING"
+                    },
+                    {
+                      "edge_type": "OVERRIDES",
+                      "direction": "INCOMING"
+                    }
+                  ],
+                  "anchor_requirement": "NEED_METHOD",
+                  "anchor_hint": "TicketOrderController.createTicketOrder",
+                  "target_hint": "",
+                  "mode": "CALL_CHAIN"
+                }
+              }
+            ]
+          }
+        ],
+        "decision_source": "llm"
+      },
+      "native_v3": true,
+      "response": "{\"schema_version\":3,\"primary_intent\":\"LOCATE\",\"subjects\":[\"TicketOrderController.createTicketOrder\",\"OrderService.createTicketOrder\"],\"requirements\":[{\"target\":\"确认 TicketOrderController.createTicketOrder 到 OrderService.createTicketOrder 再到其实现方法的两段调用路径\",\"success_criteria\":\"给出从 TicketOrderController.createTicketOrder 经由 CALLS 到 OrderService.createTicketOrder，再经由 OVERRIDES 到实现方法的完整路径\",\"priority\":\"CORE\",\"temporal_scope\":\"CURRENT\",\"source_requirement\":\"CODE\",\"query\":\"TicketOrderController.createTicketOrder OrderService.createTicketOrder 实现方法 调用路径\",\"reason\":\"定位并验证两段调用链\",\"retrieval_needs\":[{\"need_type\":\"PATH\",\"path_spec\":{\"mode\":\"CALL_CHAIN\",\"segments\":[{\"edge_type\":\"CALLS\",\"direction\":\"OUTGOING\"},{\"edge_type\":\"OVERRIDES\",\"direction\":\"INCOMING\"}],\"anchor_requirement\":\"NEED_METHOD\",\"anchor_hint\":\"TicketOrderController.createTicketOrder\",\"target_hint\":\"\"}}]}]}",
+      "rejection": null
+    },
+    {
+      "profile": "fast",
+      "case_id": "negative-flow",
+      "positive": false,
+      "passed": true,
+      "plan": {
+        "schema_version": 3,
+        "original_query": "解释设计文档中的业务流程规划，不要求代码调用链。",
+        "requirements": [
+          {
+            "id": "ER1",
+            "target": "设计文档中业务流程规划的内容",
+            "success_criteria": "包含设计文档中关于业务流程规划的说明内容",
+            "priority": "CORE",
+            "temporal_scope": "CURRENT",
+            "source_requirement": "DOCUMENT",
+            "retrieval_needs": [
+              {
+                "need_type": "DOCUMENT",
+                "relation_spec": null,
+                "path_spec": null
+              }
+            ]
+          }
+        ],
+        "decision_source": "llm"
+      },
+      "native_v3": true,
+      "response": "{\"schema_version\":3,\"primary_intent\":\"WHAT\",\"subjects\":[\"设计文档\",\"业务流程规划\"],\"requirements\":[{\"target\":\"设计文档中业务流程规划的内容\",\"success_criteria\":\"包含设计文档中关于业务流程规划的说明内容\",\"priority\":\"CORE\",\"temporal_scope\":\"CURRENT\",\"source_requirement\":\"DOCUMENT\",\"query\":\"设计文档 业务流程规划\",\"reason\":\"用户需要解释设计文档中的业务流程规划，且不要求代码调用链，因此检索设计文档中的相关规划内容。\",\"retrieval_needs\":[{\"need_type\":\"DOCUMENT\"}]}]}",
+      "rejection": null
+    },
+    {
+      "profile": "fast",
+      "case_id": "negative-design",
+      "positive": false,
+      "passed": true,
+      "plan": {
+        "schema_version": 3,
+        "original_query": "设计文档为何采用缓存预热？仅讨论设计依据。",
+        "requirements": [
+          {
+            "id": "ER1",
+            "target": "采用缓存预热的设计依据",
+            "success_criteria": "需要包含设计文档中说明采用缓存预热的原因或依据",
+            "priority": "CORE",
+            "temporal_scope": "CURRENT",
+            "source_requirement": "DOCUMENT",
+            "retrieval_needs": [
+              {
+                "need_type": "DOCUMENT",
+                "relation_spec": null,
+                "path_spec": null
+              }
+            ]
+          }
+        ],
+        "decision_source": "llm"
+      },
+      "native_v3": true,
+      "response": "{\"schema_version\":3,\"primary_intent\":\"WHY\",\"subjects\":[\"缓存预热\"],\"requirements\":[{\"target\":\"采用缓存预热的设计依据\",\"success_criteria\":\"需要包含设计文档中说明采用缓存预热的原因或依据\",\"priority\":\"CORE\",\"temporal_scope\":\"CURRENT\",\"source_requirement\":\"DOCUMENT\",\"query\":\"设计文档 缓存预热 设计依据\",\"reason\":\"定位设计文档中关于采用缓存预热的依据说明\",\"retrieval_needs\":[{\"need_type\":\"DOCUMENT\"}]}]}",
+      "rejection": null
+    },
+    {
+      "profile": "fast",
+      "case_id": "negative-hint",
+      "positive": false,
+      "passed": true,
+      "plan": {
+        "schema_version": 3,
+        "original_query": "以假设名称 FutureService 说明一般事务概念，不查项目实现。",
+        "requirements": [
+          {
+            "id": "ER1",
+            "target": "一般事务概念，以假设名称 FutureService 进行说明，不查项目实现",
+            "success_criteria": "包含事务的基本定义、核心特性（如原子性、一致性、隔离性、持久性）以及结合 FutureService 的通用示例说明，不依赖具体项目代码",
+            "priority": "CORE",
+            "temporal_scope": "ANY",
+            "source_requirement": "DOCUMENT",
+            "retrieval_needs": [
+              {
+                "need_type": "DOCUMENT",
+                "relation_spec": null,
+                "path_spec": null
+              }
+            ]
+          }
+        ],
+        "decision_source": "llm"
+      },
+      "native_v3": true,
+      "response": "{\"schema_version\":3,\"primary_intent\":\"WHAT\",\"subjects\":[\"FutureService\",\"事务\"],\"requirements\":[{\"target\":\"一般事务概念，以假设名称 FutureService 进行说明，不查项目实现\",\"success_criteria\":\"包含事务的基本定义、核心特性（如原子性、一致性、隔离性、持久性）以及结合 FutureService 的通用示例说明，不依赖具体项目代码\",\"priority\":\"CORE\",\"temporal_scope\":\"ANY\",\"source_requirement\":\"DOCUMENT\",\"query\":\"FutureService 事务 一般事务概念 说明\",\"reason\":\"用户需要不依赖项目实现的通用事务概念解释，并用假设名称 FutureService 作为示例载体\",\"retrieval_needs\":[{\"need_type\":\"DOCUMENT\"}]}]}",
+      "rejection": null
+    },
+    {
+      "profile": "fast",
+      "case_id": "negative-ambiguity",
+      "positive": false,
+      "passed": true,
+      "plan": {
+        "schema_version": 3,
+        "original_query": "请定位订单模块 BaseDO 的类型声明，注意仓库内存在同名类。",
+        "requirements": [
+          {
+            "id": "ER1",
+            "target": "订单模块中 BaseDO 的类型声明位置与类名",
+            "success_criteria": "包含订单模块内 BaseDO 的声明文件、类声明及相关模块上下文，能区分仓库内其他同名类",
+            "priority": "CORE",
+            "temporal_scope": "CURRENT",
+            "source_requirement": "CODE",
+            "retrieval_needs": [
+              {
+                "need_type": "CODE",
+                "relation_spec": null,
+                "path_spec": null
+              }
+            ]
+          }
+        ],
+        "decision_source": "llm"
+      },
+      "native_v3": true,
+      "response": "{\"schema_version\":3,\"primary_intent\":\"LOCATE\",\"subjects\":[\"订单模块\",\"BaseDO\"],\"requirements\":[{\"target\":\"订单模块中 BaseDO 的类型声明位置与类名\",\"success_criteria\":\"包含订单模块内 BaseDO 的声明文件、类声明及相关模块上下文，能区分仓库内其他同名类\",\"priority\":\"CORE\",\"temporal_scope\":\"CURRENT\",\"source_requirement\":\"CODE\",\"query\":\"订单模块 BaseDO 类型声明 类声明\",\"reason\":\"定位订单模块中 BaseDO 的具体类型声明，并利用订单模块上下文排除同名干扰\",\"retrieval_needs\":[{\"need_type\":\"CODE\"}]}]}",
+      "rejection": null
+    },
+    {
+      "profile": "full",
+      "case_id": "locate",
+      "positive": true,
+      "passed": true,
+      "plan": {
+        "schema_version": 3,
+        "original_query": "OrderService 类型在哪里定义？",
+        "requirements": [
+          {
+            "id": "ER1",
+            "target": "OrderService 类型的定义位置，包括所在源文件、包名以及声明为接口或类的代码位置",
+            "success_criteria": "证据必须包含 OrderService 的声明所在源文件路径、包名以及声明为接口或类的代码片段",
+            "priority": "CORE",
+            "temporal_scope": "CURRENT",
+            "source_requirement": "CODE",
+            "retrieval_needs": [
+              {
+                "need_type": "CODE",
+                "relation_spec": null,
+                "path_spec": null
+              }
+            ]
+          }
+        ],
+        "decision_source": "llm"
+      },
+      "native_v3": true,
+      "response": "{\"schema_version\":3,\"requirements\":[{\"target\":\"OrderService 类型的定义位置，包括所在源文件、包名以及声明为接口或类的代码位置\",\"success_criteria\":\"证据必须包含 OrderService 的声明所在源文件路径、包名以及声明为接口或类的代码片段\",\"priority\":\"CORE\",\"temporal_scope\":\"CURRENT\",\"source_requirement\":\"CODE\",\"retrieval_needs\":[{\"need_type\":\"CODE\"}]}]}",
+      "rejection": null
+    },
+    {
+      "profile": "full",
+      "case_id": "document",
+      "positive": true,
+      "passed": true,
+      "plan": {
+        "schema_version": 3,
+        "original_query": "请仅根据设计文档解释订单支付回调的幂等设计。",
+        "requirements": [
+          {
+            "id": "ER1",
+            "target": "设计文档中对订单支付回调幂等设计所声明的核心机制与判定依据",
+            "success_criteria": "证据必须来自设计文档，并包含对订单支付回调幂等设计的目标、幂等键或唯一标识选取、去重判定条件或状态判断规则的明确说明",
+            "priority": "CORE",
+            "temporal_scope": "CURRENT",
+            "source_requirement": "DOCUMENT",
+            "retrieval_needs": [
+              {
+                "need_type": "DOCUMENT",
+                "relation_spec": null,
+                "path_spec": null
+              }
+            ]
+          },
+          {
+            "id": "ER2",
+            "target": "设计文档中对订单支付回调重复到达时处理流程与并发场景下幂等保证的说明",
+            "success_criteria": "证据必须来自设计文档，并包含重复回调的处理步骤、并发重复回调时的互斥或序列化手段、以及幂等结果返回策略的明确描述",
+            "priority": "CORE",
+            "temporal_scope": "CURRENT",
+            "source_requirement": "DOCUMENT",
+            "retrieval_needs": [
+              {
+                "need_type": "DOCUMENT",
+                "relation_spec": null,
+                "path_spec": null
+              }
+            ]
+          },
+          {
+            "id": "ER3",
+            "target": "设计文档中对订单支付回调幂等失败或异常情况的处理与补偿约束",
+            "success_criteria": "证据必须来自设计文档，并包含幂等校验失败、存储冲突、处理异常等场景下的处理方式或补偿约束的明确说明",
+            "priority": "SUPPORTING",
+            "temporal_scope": "CURRENT",
+            "source_requirement": "DOCUMENT",
+            "retrieval_needs": [
+              {
+                "need_type": "DOCUMENT",
+                "relation_spec": null,
+                "path_spec": null
+              }
+            ]
+          }
+        ],
+        "decision_source": "llm"
+      },
+      "native_v3": true,
+      "response": "{\"schema_version\": 3, \"requirements\": [{\"target\": \"设计文档中对订单支付回调幂等设计所声明的核心机制与判定依据\", \"success_criteria\": \"证据必须来自设计文档，并包含对订单支付回调幂等设计的目标、幂等键或唯一标识选取、去重判定条件或状态判断规则的明确说明\", \"priority\": \"CORE\", \"temporal_scope\": \"CURRENT\", \"source_requirement\": \"DOCUMENT\", \"retrieval_needs\": [{\"need_type\": \"DOCUMENT\"}]}, {\"target\": \"设计文档中对订单支付回调重复到达时处理流程与并发场景下幂等保证的说明\", \"success_criteria\": \"证据必须来自设计文档，并包含重复回调的处理步骤、并发重复回调时的互斥或序列化手段、以及幂等结果返回策略的明确描述\", \"priority\": \"CORE\", \"temporal_scope\": \"CURRENT\", \"source_requirement\": \"DOCUMENT\", \"retrieval_needs\": [{\"need_type\": \"DOCUMENT\"}]}, {\"target\": \"设计文档中对订单支付回调幂等失败或异常情况的处理与补偿约束\", \"success_criteria\": \"证据必须来自设计文档，并包含幂等校验失败、存储冲突、处理异常等场景下的处理方式或补偿约束的明确说明\", \"priority\": \"SUPPORTING\", \"temporal_scope\": \"CURRENT\", \"source_requirement\": \"DOCUMENT\", \"retrieval_needs\": [{\"need_type\": \"DOCUMENT\"}]}]}",
+      "rejection": null
+    },
+    {
+      "profile": "full",
+      "case_id": "explain",
+      "positive": true,
+      "passed": true,
+      "plan": {
+        "schema_version": 3,
+        "original_query": "解释当前购票事务边界的设计原理。",
+        "requirements": [
+          {
+            "id": "ER1",
+            "target": "当前购票事务边界在代码中的声明位置与事务属性配置",
+            "success_criteria": "证据包含标识购票相关事务边界的具体代码元素（如类、方法或配置），以及事务传播行为、隔离级别、超时设置、回滚规则等属性；不依赖类名或注释命中推断边界。",
+            "priority": "CORE",
+            "temporal_scope": "CURRENT",
+            "source_requirement": "CODE",
+            "retrieval_needs": [
+              {
+                "need_type": "CODE",
+                "relation_spec": null,
+                "path_spec": null
+              }
+            ]
+          },
+          {
+            "id": "ER2",
+            "target": "购票事务边界内包含的购票业务操作及其执行顺序",
+            "success_criteria": "证据展示购票请求处理入口到事务提交或回滚之间依次调用的业务操作，能判断哪些操作被纳入同一事务以及边界起止位置。",
+            "priority": "CORE",
+            "temporal_scope": "CURRENT",
+            "source_requirement": "CODE",
+            "retrieval_needs": [
+              {
+                "need_type": "CODE",
+                "relation_spec": null,
+                "path_spec": null
+              }
+            ]
+          },
+          {
+            "id": "ER3",
+            "target": "项目文档或代码注释中关于购票事务边界设计原理的说明",
+            "success_criteria": "证据包含对购票事务边界划分动机的文字说明，例如一致性、并发控制、性能、失败恢复或业务原子性等设计考量。",
+            "priority": "CORE",
+            "temporal_scope": "CURRENT",
+            "source_requirement": "DOCUMENT",
+            "retrieval_needs": [
+              {
+                "need_type": "DOCUMENT",
+                "relation_spec": null,
+                "path_spec": null
+              }
+            ]
+          }
+        ],
+        "decision_source": "llm"
+      },
+      "native_v3": true,
+      "response": "{\"schema_version\":3,\"requirements\":[{\"target\":\"当前购票事务边界在代码中的声明位置与事务属性配置\",\"success_criteria\":\"证据包含标识购票相关事务边界的具体代码元素（如类、方法或配置），以及事务传播行为、隔离级别、超时设置、回滚规则等属性；不依赖类名或注释命中推断边界。\",\"priority\":\"CORE\",\"temporal_scope\":\"CURRENT\",\"source_requirement\":\"CODE\",\"retrieval_needs\":[{\"need_type\":\"CODE\"}]},{\"target\":\"购票事务边界内包含的购票业务操作及其执行顺序\",\"success_criteria\":\"证据展示购票请求处理入口到事务提交或回滚之间依次调用的业务操作，能判断哪些操作被纳入同一事务以及边界起止位置。\",\"priority\":\"CORE\",\"temporal_scope\":\"CURRENT\",\"source_requirement\":\"CODE\",\"retrieval_needs\":[{\"need_type\":\"CODE\"}]},{\"target\":\"项目文档或代码注释中关于购票事务边界设计原理的说明\",\"success_criteria\":\"证据包含对购票事务边界划分动机的文字说明，例如一致性、并发控制、性能、失败恢复或业务原子性等设计考量。\",\"priority\":\"CORE\",\"temporal_scope\":\"CURRENT\",\"source_requirement\":\"DOCUMENT\",\"retrieval_needs\":[{\"need_type\":\"DOCUMENT\"}]}]}",
+      "rejection": null
+    },
+    {
+      "profile": "full",
+      "case_id": "caller",
+      "positive": true,
+      "passed": true,
+      "plan": {
+        "schema_version": 3,
+        "original_query": "谁调用 OrderDelayCloseProducer.doSend 方法？",
+        "requirements": [
+          {
+            "id": "ER1",
+            "target": "OrderDelayCloseProducer.doSend 方法的调用方及其调用位置",
+            "success_criteria": "证据必须包含指向 OrderDelayCloseProducer.doSend 的 CALLS 关系或直接调用点，标明调用方类/方法及所在代码位置；若存在多个调用方，需覆盖全部直接调用方。",
+            "priority": "CORE",
+            "temporal_scope": "CURRENT",
+            "source_requirement": "CODE",
+            "retrieval_needs": [
+              {
+                "need_type": "RELATION",
+                "relation_spec": {
+                  "edge_type": "CALLS",
+                  "direction": "INCOMING",
+                  "anchor_requirement": "NEED_METHOD",
+                  "anchor_hint": "OrderDelayCloseProducer.doSend",
+                  "target_hint": ""
+                },
+                "path_spec": null
+              }
+            ]
+          }
+        ],
+        "decision_source": "llm"
+      },
+      "native_v3": true,
+      "response": "{\"schema_version\":3,\"requirements\":[{\"target\":\"OrderDelayCloseProducer.doSend 方法的调用方及其调用位置\",\"success_criteria\":\"证据必须包含指向 OrderDelayCloseProducer.doSend 的 CALLS 关系或直接调用点，标明调用方类/方法及所在代码位置；若存在多个调用方，需覆盖全部直接调用方。\",\"priority\":\"CORE\",\"temporal_scope\":\"CURRENT\",\"source_requirement\":\"CODE\",\"retrieval_needs\":[{\"need_type\":\"RELATION\",\"relation_spec\":{\"edge_type\":\"CALLS\",\"direction\":\"INCOMING\",\"anchor_requirement\":\"NEED_METHOD\",\"anchor_hint\":\"OrderDelayCloseProducer.doSend\",\"target_hint\":\"\"}}]}]}",
+      "rejection": null
+    },
+    {
+      "profile": "full",
+      "case_id": "callee",
+      "positive": true,
+      "passed": true,
+      "plan": {
+        "schema_version": 3,
+        "original_query": "OrderServiceImpl.closeTimeoutOrder 调用哪些下游方法？",
+        "requirements": [
+          {
+            "id": "ER1",
+            "target": "OrderServiceImpl.closeTimeoutOrder 实际调用的下游方法集合",
+            "success_criteria": "证据必须包含 OrderServiceImpl.closeTimeoutOrder 执行体中通过 CALLS 关系可达的被调用方法或调用点，不能仅以方法名、注释或声明命中代替调用关系证据",
+            "priority": "CORE",
+            "temporal_scope": "CURRENT",
+            "source_requirement": "CODE",
+            "retrieval_needs": [
+              {
+                "need_type": "RELATION",
+                "relation_spec": {
+                  "edge_type": "CALLS",
+                  "direction": "OUTGOING",
+                  "anchor_requirement": "NEED_METHOD",
+                  "anchor_hint": "OrderServiceImpl.closeTimeoutOrder",
+                  "target_hint": ""
+                },
+                "path_spec": null
+              }
+            ]
+          }
+        ],
+        "decision_source": "llm"
+      },
+      "native_v3": true,
+      "response": "{\"schema_version\":3,\"requirements\":[{\"target\":\"OrderServiceImpl.closeTimeoutOrder 实际调用的下游方法集合\",\"success_criteria\":\"证据必须包含 OrderServiceImpl.closeTimeoutOrder 执行体中通过 CALLS 关系可达的被调用方法或调用点，不能仅以方法名、注释或声明命中代替调用关系证据\",\"priority\":\"CORE\",\"temporal_scope\":\"CURRENT\",\"source_requirement\":\"CODE\",\"retrieval_needs\":[{\"need_type\":\"RELATION\",\"relation_spec\":{\"edge_type\":\"CALLS\",\"direction\":\"OUTGOING\",\"anchor_requirement\":\"NEED_METHOD\",\"anchor_hint\":\"OrderServiceImpl.closeTimeoutOrder\",\"target_hint\":\"\"}}]}]}",
+      "rejection": null
+    },
+    {
+      "profile": "full",
+      "case_id": "type-implementation",
+      "positive": true,
+      "passed": true,
+      "plan": {
+        "schema_version": 3,
+        "original_query": "PayChannelHandler 接口类型由哪些类实现？",
+        "requirements": [
+          {
+            "id": "ER1",
+            "target": "PayChannelHandler 接口类型在项目中被哪些类实现",
+            "success_criteria": "证据必须包含实现 PayChannelHandler 接口的类声明或类型实现关系，能列出实现该接口的具体类",
+            "priority": "CORE",
+            "temporal_scope": "CURRENT",
+            "source_requirement": "CODE",
+            "retrieval_needs": [
+              {
+                "need_type": "RELATION",
+                "relation_spec": {
+                  "edge_type": "IMPLEMENTS",
+                  "direction": "INCOMING",
+                  "anchor_requirement": "NEED_CLASS",
+                  "anchor_hint": "PayChannelHandler",
+                  "target_hint": ""
+                },
+                "path_spec": null
+              }
+            ]
+          }
+        ],
+        "decision_source": "llm"
+      },
+      "native_v3": true,
+      "response": "{\"schema_version\": 3, \"requirements\": [{\"target\": \"PayChannelHandler 接口类型在项目中被哪些类实现\", \"success_criteria\": \"证据必须包含实现 PayChannelHandler 接口的类声明或类型实现关系，能列出实现该接口的具体类\", \"priority\": \"CORE\", \"temporal_scope\": \"CURRENT\", \"source_requirement\": \"CODE\", \"retrieval_needs\": [{\"need_type\": \"RELATION\", \"relation_spec\": {\"edge_type\": \"IMPLEMENTS\", \"direction\": \"INCOMING\", \"anchor_requirement\": \"NEED_CLASS\", \"anchor_hint\": \"PayChannelHandler\", \"target_hint\": \"\"}}]}]}",
+      "rejection": null
+    },
+    {
+      "profile": "full",
+      "case_id": "method-implementation",
+      "positive": true,
+      "passed": true,
+      "plan": {
+        "schema_version": 3,
+        "original_query": "OrderService.createTicketOrder 接口方法由哪个方法实现？",
+        "requirements": [
+          {
+            "id": "ER1",
+            "target": "确认 OrderService.createTicketOrder 接口方法对应的实现方法",
+            "success_criteria": "证据必须包含实现 OrderService.createTicketOrder 的实现类型、方法签名以及实现体，能够明确该方法由哪个类中的哪个方法实现。",
+            "priority": "CORE",
+            "temporal_scope": "CURRENT",
+            "source_requirement": "CODE",
+            "retrieval_needs": [
+              {
+                "need_type": "RELATION",
+                "relation_spec": {
+                  "edge_type": "OVERRIDES",
+                  "direction": "INCOMING",
+                  "anchor_requirement": "NEED_METHOD",
+                  "anchor_hint": "OrderService.createTicketOrder",
+                  "target_hint": ""
+                },
+                "path_spec": null
+              }
+            ]
+          }
+        ],
+        "decision_source": "llm"
+      },
+      "native_v3": true,
+      "response": "{\"schema_version\":3,\"requirements\":[{\"target\":\"确认 OrderService.createTicketOrder 接口方法对应的实现方法\",\"success_criteria\":\"证据必须包含实现 OrderService.createTicketOrder 的实现类型、方法签名以及实现体，能够明确该方法由哪个类中的哪个方法实现。\",\"priority\":\"CORE\",\"temporal_scope\":\"CURRENT\",\"source_requirement\":\"CODE\",\"retrieval_needs\":[{\"need_type\":\"RELATION\",\"relation_spec\":{\"edge_type\":\"OVERRIDES\",\"direction\":\"INCOMING\",\"anchor_requirement\":\"NEED_METHOD\",\"anchor_hint\":\"OrderService.createTicketOrder\",\"target_hint\":\"\"}}]}]}",
+      "rejection": null
+    },
+    {
+      "profile": "full",
+      "case_id": "hierarchy",
+      "positive": true,
+      "passed": true,
+      "plan": {
+        "schema_version": 3,
+        "original_query": "支付模块 PayDO 类型继承哪个父类？",
+        "requirements": [
+          {
+            "id": "ER1",
+            "target": "支付模块中 PayDO 类型所继承的父类",
+            "success_criteria": "证据必须展示 PayDO 类声明中的 extends 子句，并明确其直接父类名称；不能仅凭类名或注释推断继承关系",
+            "priority": "CORE",
+            "temporal_scope": "CURRENT",
+            "source_requirement": "CODE",
+            "retrieval_needs": [
+              {
+                "need_type": "RELATION",
+                "relation_spec": {
+                  "edge_type": "EXTENDS",
+                  "direction": "OUTGOING",
+                  "anchor_requirement": "NEED_CLASS",
+                  "anchor_hint": "PayDO",
+                  "target_hint": ""
+                },
+                "path_spec": null
+              }
+            ]
+          }
+        ],
+        "decision_source": "llm"
+      },
+      "native_v3": true,
+      "response": "{\"schema_version\":3,\"requirements\":[{\"target\":\"支付模块中 PayDO 类型所继承的父类\",\"success_criteria\":\"证据必须展示 PayDO 类声明中的 extends 子句，并明确其直接父类名称；不能仅凭类名或注释推断继承关系\",\"priority\":\"CORE\",\"temporal_scope\":\"CURRENT\",\"source_requirement\":\"CODE\",\"retrieval_needs\":[{\"need_type\":\"RELATION\",\"relation_spec\":{\"edge_type\":\"EXTENDS\",\"direction\":\"OUTGOING\",\"anchor_requirement\":\"NEED_CLASS\",\"anchor_hint\":\"PayDO\",\"target_hint\":\"\"}}]}]}",
+      "rejection": null
+    },
+    {
+      "profile": "full",
+      "case_id": "construction",
+      "positive": true,
+      "passed": true,
+      "plan": {
+        "schema_version": 3,
+        "original_query": "OrderServiceImpl.closePayOrder 方法显式构造了哪个异常对象？",
+        "requirements": [
+          {
+            "id": "ER1",
+            "target": "OrderServiceImpl.closePayOrder 方法内显式构造的异常对象类型及其构造位置",
+            "success_criteria": "证据必须包含 OrderServiceImpl.closePayOrder 方法执行体中 new 异常对象的语句，并能确认被构造异常的具体类型；仅有方法签名、注释或异常声明不能作为构造证据",
+            "priority": "CORE",
+            "temporal_scope": "CURRENT",
+            "source_requirement": "CODE",
+            "retrieval_needs": [
+              {
+                "need_type": "RELATION",
+                "relation_spec": {
+                  "edge_type": "CONSTRUCTS",
+                  "direction": "OUTGOING",
+                  "anchor_requirement": "NEED_METHOD",
+                  "anchor_hint": "OrderServiceImpl.closePayOrder",
+                  "target_hint": ""
+                },
+                "path_spec": null
+              }
+            ]
+          }
+        ],
+        "decision_source": "llm"
+      },
+      "native_v3": true,
+      "response": "{\"schema_version\": 3, \"requirements\": [{\"target\": \"OrderServiceImpl.closePayOrder 方法内显式构造的异常对象类型及其构造位置\", \"success_criteria\": \"证据必须包含 OrderServiceImpl.closePayOrder 方法执行体中 new 异常对象的语句，并能确认被构造异常的具体类型；仅有方法签名、注释或异常声明不能作为构造证据\", \"priority\": \"CORE\", \"temporal_scope\": \"CURRENT\", \"source_requirement\": \"CODE\", \"retrieval_needs\": [{\"need_type\": \"RELATION\", \"relation_spec\": {\"edge_type\": \"CONSTRUCTS\", \"direction\": \"OUTGOING\", \"anchor_requirement\": \"NEED_METHOD\", \"anchor_hint\": \"OrderServiceImpl.closePayOrder\", \"target_hint\": \"\"}}]}]}",
+      "rejection": null
+    },
+    {
+      "profile": "full",
+      "case_id": "path",
+      "positive": true,
+      "passed": true,
+      "plan": {
+        "schema_version": 3,
+        "original_query": "请证明 TicketOrderController.createTicketOrder 到 OrderService.createTicketOrder 再到其实现方法的两段调用路径。",
+        "requirements": [
+          {
+            "id": "ER1",
+            "target": "TicketOrderController.createTicketOrder 调用 OrderService.createTicketOrder，且该接口方法由具体实现类重写实现，形成两段连续调用路径",
+            "success_criteria": "证据需展示 TicketOrderController.createTicketOrder 方法体内对 OrderService.createTicketOrder 的调用点，并沿该接口方法找到其 Override 实现方法体，两段由同一接口方法串联",
+            "priority": "CORE",
+            "temporal_scope": "CURRENT",
+            "source_requirement": "CODE",
+            "retrieval_needs": [
+              {
+                "need_type": "PATH",
+                "relation_spec": null,
+                "path_spec": {
+                  "segments": [
+                    {
+                      "edge_type": "CALLS",
+                      "direction": "OUTGOING"
+                    },
+                    {
+                      "edge_type": "OVERRIDES",
+                      "direction": "INCOMING"
+                    }
+                  ],
+                  "anchor_requirement": "NEED_METHOD",
+                  "anchor_hint": "TicketOrderController.createTicketOrder",
+                  "target_hint": "OrderService.createTicketOrder",
+                  "mode": "CALL_CHAIN"
+                }
+              }
+            ]
+          },
+          {
+            "id": "ER2",
+            "target": "OrderService.createTicketOrder 的方法声明及其实现类归属",
+            "success_criteria": "证据需包含 OrderService 中 createTicketOrder 的方法签名声明，以及标注为 @Override 实现该方法的实现类与方法体所在位置",
+            "priority": "CORE",
+            "temporal_scope": "CURRENT",
+            "source_requirement": "CODE",
+            "retrieval_needs": [
+              {
+                "need_type": "RELATION",
+                "relation_spec": {
+                  "edge_type": "OVERRIDES",
+                  "direction": "INCOMING",
+                  "anchor_requirement": "NEED_METHOD",
+                  "anchor_hint": "OrderService.createTicketOrder",
+                  "target_hint": ""
+                },
+                "path_spec": null
+              }
+            ]
+          }
+        ],
+        "decision_source": "llm"
+      },
+      "native_v3": true,
+      "response": "{\"schema_version\": 3, \"requirements\": [{\"target\": \"TicketOrderController.createTicketOrder 调用 OrderService.createTicketOrder，且该接口方法由具体实现类重写实现，形成两段连续调用路径\", \"success_criteria\": \"证据需展示 TicketOrderController.createTicketOrder 方法体内对 OrderService.createTicketOrder 的调用点，并沿该接口方法找到其 Override 实现方法体，两段由同一接口方法串联\", \"priority\": \"CORE\", \"temporal_scope\": \"CURRENT\", \"source_requirement\": \"CODE\", \"retrieval_needs\": [{\"need_type\": \"PATH\", \"path_spec\": {\"mode\": \"CALL_CHAIN\", \"segments\": [{\"edge_type\": \"CALLS\", \"direction\": \"OUTGOING\"}, {\"edge_type\": \"OVERRIDES\", \"direction\": \"INCOMING\"}], \"anchor_requirement\": \"NEED_METHOD\", \"anchor_hint\": \"TicketOrderController.createTicketOrder\", \"target_hint\": \"OrderService.createTicketOrder\"}}]}, {\"target\": \"OrderService.createTicketOrder 的方法声明及其实现类归属\", \"success_criteria\": \"证据需包含 OrderService 中 createTicketOrder 的方法签名声明，以及标注为 @Override 实现该方法的实现类与方法体所在位置\", \"priority\": \"CORE\", \"temporal_scope\": \"CURRENT\", \"source_requirement\": \"CODE\", \"retrieval_needs\": [{\"need_type\": \"RELATION\", \"relation_spec\": {\"edge_type\": \"OVERRIDES\", \"direction\": \"INCOMING\", \"anchor_requirement\": \"NEED_METHOD\", \"anchor_hint\": \"OrderService.createTicketOrder\", \"target_hint\": \"\"}}]}]}",
+      "rejection": null
+    },
+    {
+      "profile": "full",
+      "case_id": "negative-flow",
+      "positive": false,
+      "passed": true,
+      "plan": {
+        "schema_version": 3,
+        "original_query": "解释设计文档中的业务流程规划，不要求代码调用链。",
+        "requirements": [
+          {
+            "id": "ER1",
+            "target": "设计文档中关于业务流程规划的内容",
+            "success_criteria": "证据必须来自设计文档，并包含对业务流程规划的说明，至少覆盖流程目标、阶段或步骤、参与角色或系统、输入输出、关键分支或异常处理中的若干方面；不得以代码调用链作为替代。",
+            "priority": "CORE",
+            "temporal_scope": "CURRENT",
+            "source_requirement": "DOCUMENT",
+            "retrieval_needs": [
+              {
+                "need_type": "DOCUMENT",
+                "relation_spec": null,
+                "path_spec": null
+              }
+            ]
+          }
+        ],
+        "decision_source": "llm"
+      },
+      "native_v3": true,
+      "response": "{\"schema_version\":3,\"requirements\":[{\"target\":\"设计文档中关于业务流程规划的内容\",\"success_criteria\":\"证据必须来自设计文档，并包含对业务流程规划的说明，至少覆盖流程目标、阶段或步骤、参与角色或系统、输入输出、关键分支或异常处理中的若干方面；不得以代码调用链作为替代。\",\"priority\":\"CORE\",\"temporal_scope\":\"CURRENT\",\"source_requirement\":\"DOCUMENT\",\"retrieval_needs\":[{\"need_type\":\"DOCUMENT\"}]}]}",
+      "rejection": null
+    },
+    {
+      "profile": "full",
+      "case_id": "negative-design",
+      "positive": false,
+      "passed": true,
+      "plan": {
+        "schema_version": 3,
+        "original_query": "设计文档为何采用缓存预热？仅讨论设计依据。",
+        "requirements": [
+          {
+            "id": "ER1",
+            "target": "项目设计文档中关于采用缓存预热的决策依据",
+            "success_criteria": "证据必须包含设计文档原文中明确说明采用缓存预热的原因、目的或权衡依据，而不是仅描述缓存预热的实现步骤或代码细节。",
+            "priority": "CORE",
+            "temporal_scope": "CURRENT",
+            "source_requirement": "DOCUMENT",
+            "retrieval_needs": [
+              {
+                "need_type": "DOCUMENT",
+                "relation_spec": null,
+                "path_spec": null
+              }
+            ]
+          }
+        ],
+        "decision_source": "llm"
+      },
+      "native_v3": true,
+      "response": "{\"schema_version\":3,\"requirements\":[{\"target\":\"项目设计文档中关于采用缓存预热的决策依据\",\"success_criteria\":\"证据必须包含设计文档原文中明确说明采用缓存预热的原因、目的或权衡依据，而不是仅描述缓存预热的实现步骤或代码细节。\",\"priority\":\"CORE\",\"temporal_scope\":\"CURRENT\",\"source_requirement\":\"DOCUMENT\",\"retrieval_needs\":[{\"need_type\":\"DOCUMENT\"}]}]}",
+      "rejection": null
+    },
+    {
+      "profile": "full",
+      "case_id": "negative-hint",
+      "positive": false,
+      "passed": true,
+      "plan": {
+        "schema_version": 3,
+        "original_query": "以假设名称 FutureService 说明一般事务概念，不查项目实现。",
+        "requirements": [
+          {
+            "id": "ER1",
+            "target": "事务的通用定义与核心特性（原子性、一致性、隔离性、持久性的含义），属于一般概念性说明，不涉及本项目实现",
+            "success_criteria": "证据须给出事务的通用定义，并逐条说明原子性、一致性、隔离性、持久性的含义；可包含事务边界（开始、提交、回滚）与隔离级别的通用说明。作为假设名称 FutureService 仅用作叙述占位，证据中不得断言项目内存在该类",
+            "priority": "CORE",
+            "temporal_scope": "ANY",
+            "source_requirement": "DOCUMENT",
+            "retrieval_needs": [
+              {
+                "need_type": "DOCUMENT",
+                "relation_spec": null,
+                "path_spec": null
+              }
+            ]
+          }
+        ],
+        "decision_source": "llm"
+      },
+      "native_v3": true,
+      "response": "{\"schema_version\": 3, \"requirements\": [{\"target\": \"事务的通用定义与核心特性（原子性、一致性、隔离性、持久性的含义），属于一般概念性说明，不涉及本项目实现\", \"success_criteria\": \"证据须给出事务的通用定义，并逐条说明原子性、一致性、隔离性、持久性的含义；可包含事务边界（开始、提交、回滚）与隔离级别的通用说明。作为假设名称 FutureService 仅用作叙述占位，证据中不得断言项目内存在该类\", \"priority\": \"CORE\", \"temporal_scope\": \"ANY\", \"source_requirement\": \"DOCUMENT\", \"retrieval_needs\": [{\"need_type\": \"DOCUMENT\"}]}]}",
+      "rejection": null
+    },
+    {
+      "profile": "full",
+      "case_id": "negative-ambiguity",
+      "positive": false,
+      "passed": true,
+      "plan": {
+        "schema_version": 3,
+        "original_query": "请定位订单模块 BaseDO 的类型声明，注意仓库内存在同名类。",
+        "requirements": [
+          {
+            "id": "ER1",
+            "target": "订单模块中 BaseDO 的类型声明及其所属包名与源文件位置",
+            "success_criteria": "证据必须包含订单模块对应源码中的 BaseDO 声明，并至少标明其类型种类（如 class、interface、abstract class）、所属包名和源文件路径，足以与仓库内其他同名 BaseDO 区分。",
+            "priority": "CORE",
+            "temporal_scope": "CURRENT",
+            "source_requirement": "CODE",
+            "retrieval_needs": [
+              {
+                "need_type": "CODE",
+                "relation_spec": null,
+                "path_spec": null
+              }
+            ]
+          },
+          {
+            "id": "ER2",
+            "target": "仓库内其他同名 BaseDO 类型声明及其所属模块或包，用于确认同名类分布",
+            "success_criteria": "证据必须列出仓库内订单模块之外的其他 BaseDO 类型声明，并标明各自所属模块或包名及源文件路径，以便排除同名类。",
+            "priority": "CORE",
+            "temporal_scope": "CURRENT",
+            "source_requirement": "CODE",
+            "retrieval_needs": [
+              {
+                "need_type": "CODE",
+                "relation_spec": null,
+                "path_spec": null
+              }
+            ]
+          }
+        ],
+        "decision_source": "llm"
+      },
+      "native_v3": true,
+      "response": "{\"schema_version\":3,\"requirements\":[{\"target\":\"订单模块中 BaseDO 的类型声明及其所属包名与源文件位置\",\"success_criteria\":\"证据必须包含订单模块对应源码中的 BaseDO 声明，并至少标明其类型种类（如 class、interface、abstract class）、所属包名和源文件路径，足以与仓库内其他同名 BaseDO 区分。\",\"priority\":\"CORE\",\"temporal_scope\":\"CURRENT\",\"source_requirement\":\"CODE\",\"retrieval_needs\":[{\"need_type\":\"CODE\"}]},{\"target\":\"仓库内其他同名 BaseDO 类型声明及其所属模块或包，用于确认同名类分布\",\"success_criteria\":\"证据必须列出仓库内订单模块之外的其他 BaseDO 类型声明，并标明各自所属模块或包名及源文件路径，以便排除同名类。\",\"priority\":\"CORE\",\"temporal_scope\":\"CURRENT\",\"source_requirement\":\"CODE\",\"retrieval_needs\":[{\"need_type\":\"CODE\"}]}]}",
+      "rejection": null
+    }
+  ],
+  "positive_count": 20,
+  "negative_count": 8,
+  "passed": true,
+  "model": "deepseek-flash",
+  "provider": "deepseek"
+}

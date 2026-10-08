@@ -12,6 +12,17 @@ DIRECTIONS = {
 
 
 def classify_intent(query: str, requirement) -> str:
+    needs = getattr(requirement, 'retrieval_needs', ())
+    structural = [n for n in needs if n.need_type in {'RELATION', 'PATH'}]
+    if structural:
+        if any(n.need_type == 'PATH' for n in structural):
+            return 'CALL_CHAIN'
+        spec = structural[0].relation_spec
+        if spec.edge_type == 'CALLS':
+            return 'CALLERS' if spec.direction == 'INCOMING' else 'CALL_CHAIN'
+        return 'CALL_CHAIN' if spec.edge_type == 'CONSTRUCTS' else 'TYPE_HIERARCHY'
+    if needs:
+        return 'LOCATION' if any(w in query for w in ('定位', '定义', '哪里')) else 'NONE'
     text = " ".join((query, requirement.target, requirement.success_criteria)).lower()
     for intent, words in (
         ("CALLERS", ("谁调用", "哪里调用", "被谁调用", "调用方", "调用者", "上游入口", "callers", "called by")),

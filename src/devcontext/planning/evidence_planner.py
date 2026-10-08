@@ -14,6 +14,7 @@ from devcontext.planning.evidence_models import (
     EvidenceRequirement,
 )
 from devcontext.planning.models import QuestionPlan
+from devcontext.planning.retrieval_need import NEED_PROMPT, read_need
 
 
 EVIDENCE_PLANNER_SYSTEM_PROMPT = """你是 DevContext-Java 的项目证据需求规划器。
@@ -32,7 +33,9 @@ EVIDENCE_PLANNER_SYSTEM_PROMPT = """你是 DevContext-Java 的项目证据需求
 10. 禁止输出 query、retrieval_query、answer_goal、answer_depth、explanation_strategy、sections、direct_answer 或 id。
 
 只输出严格 JSON，不要 Markdown、代码围栏、解释或思考过程：
-{"schema_version": 2, "requirements": [{"target": "要确认的项目事实", "success_criteria": "证据必须包含的内容", "priority": "CORE", "temporal_scope": "CURRENT", "source_requirement": "CODE"}]}"""
+{"schema_version": 3, "requirements": [{"target": "要确认的项目事实", "success_criteria": "证据必须包含的内容", "priority": "CORE", "temporal_scope": "CURRENT", "source_requirement": "CODE", "retrieval_needs": [{"need_type":"CODE"}]}]}"""
+
+EVIDENCE_PLANNER_SYSTEM_PROMPT += "\n" + NEED_PROMPT
 
 MAX_EVIDENCE_REQUIREMENTS = 6
 MAX_CORE_REQUIREMENTS = 4
@@ -114,7 +117,7 @@ class EvidencePlanner:
             raise EvidencePlanError("evidence plan is not valid JSON") from exception
         if not isinstance(value, dict) or set(value) != _ROOT_FIELDS:
             raise EvidencePlanError("evidence plan has invalid fields")
-        if value["schema_version"] != EVIDENCE_PLAN_SCHEMA_VERSION:
+        if value["schema_version"] not in {2, EVIDENCE_PLAN_SCHEMA_VERSION}:
             raise EvidencePlanError("evidence plan schema version is invalid")
         raw_requirements = value["requirements"]
         if not isinstance(raw_requirements, list):
@@ -126,7 +129,7 @@ class EvidencePlanner:
         seen: set[str] = set()
         core_count = 0
         for index, raw in enumerate(raw_requirements, start=1):
-            if not isinstance(raw, dict) or set(raw) != _REQUIREMENT_FIELDS:
+            if not isinstance(raw, dict) or set(raw) != (_REQUIREMENT_FIELDS | {"retrieval_needs"} if value["schema_version"] == 3 else _REQUIREMENT_FIELDS):
                 raise EvidencePlanError("evidence requirement has invalid fields")
             target = _single_line(raw["target"], "target", MAX_TARGET_CHARS)
             criteria = _single_line(
@@ -141,6 +144,8 @@ class EvidencePlanner:
                 raise EvidencePlanError("temporal_scope is invalid")
             if source_requirement not in SOURCE_REQUIREMENTS:
                 raise EvidencePlanError("source_requirement is invalid")
+            if value["schema_version"] == 3 and (not isinstance(raw["retrieval_needs"], list) or not raw["retrieval_needs"]):
+                raise EvidencePlanError("v3 requirements need retrieval_needs")
             normalized = " ".join(target.split()).casefold()
             if normalized in seen:
                 raise EvidencePlanError("evidence requirements must not repeat")
@@ -155,6 +160,7 @@ class EvidencePlanner:
                     priority,
                     temporal_scope,
                     source_requirement,
+                    tuple(read_need(n) for n in raw["retrieval_needs"]) if value["schema_version"] == 3 else (),
                 )
             )
 

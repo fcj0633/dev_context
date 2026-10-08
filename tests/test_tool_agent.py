@@ -12,8 +12,9 @@ from devcontext.context import ContextBuilder, EvidenceWorkspace
 from devcontext.evidence import EvidencePool, SourcePolicy
 from devcontext.models import SearchResult, SearchExecution, SearchTimings
 from devcontext.planning import EvidencePlan, EvidenceRequirement
+from devcontext.planning.retrieval_need import RetrievalNeed, RelationSpec, PathSpec, PathSegment
 from devcontext.request import UserRequest, AnswerOptions
-from devcontext.tool_agent.models import AgentDecision, AgentMemory, ToolCall, ToolResult, ToolError, ToolObservation, SymbolObservation
+from devcontext.tool_agent.models import AgentDecision, AgentMemory, ToolCall, ToolResult, ToolError, ToolObservation, SymbolObservation, RelationObservation
 from devcontext.tool_agent.executor import ToolExecutor
 from devcontext.tool_agent.registry import ToolRegistry
 from devcontext.tool_agent.tools import RepositoryTools
@@ -27,7 +28,7 @@ def chunk(i, source="CODE"):
 
 
 def requirement(i="ER1", source="CODE"):
-    return EvidenceRequirement(i, "业务流程", "完整下游调用", "CORE", "CURRENT", source)
+    return EvidenceRequirement(i, "业务流程", "完整下游调用", "CORE", "CURRENT", source, (RetrievalNeed("DOCUMENT" if source == "DOCUMENT" else "CODE"),))
 
 
 def call(tool="search_code", value="query", rid="ER1", identifier="TA1-1"):
@@ -131,14 +132,15 @@ def test_one_recovery_allows_different_tool_and_second_failure_stops():
 def test_ambiguous_candidates_cannot_be_used_as_graph_handles():
     key = "M:demo.Service#f1()"
     def handler(c, *a):
-        assert c.tool_name == "find_symbol"
+        if c.tool_name == "search_code":
+            return ToolResult(c, "EMPTY")
         return ToolResult(c, "AMBIGUOUS", observation=ToolObservation(candidates=(
             SymbolObservation(key, "METHOD", 1, "S.java", "CANDIDATE"),)),
             error=ToolError("AMBIGUOUS_SYMBOL", "ambiguous", True))
     outcome, _ = run(runtime([[call("find_symbol", "f1")], [call("find_callees", key)]], handler))
     assert not outcome.memory.available_symbols
-    assert outcome.memory.tool_history[-1].status == "INVALID_ARGUMENT"
-    assert "CONFIRMED" in outcome.memory.tool_history[-1].error.message
+    assert len(outcome.memory.policy_violations) == 1
+    assert all(r.status != "INVALID_ARGUMENT" for r in outcome.memory.tool_history)
 
 
 def test_confirmed_handle_not_in_current_observation_is_rejected():
@@ -155,7 +157,7 @@ def test_source_permissions(source, tool):
 
 
 def test_call_budget_is_eight_even_when_planner_requests_nine():
-    steps = [[call(value=f"q{i}", identifier=f"TA{s}-{i}") for i in range(s * 3, s * 3 + 3)] for s in range(3)]
+    steps = [[call(value=f"q{i}", identifier=f"TA{s}-{i}") for i in range(s * 3, min(s * 3 + 3, 8))] for s in range(3)]
     outcome, _ = run(runtime(steps, lambda c, *a: ToolResult(c, "SUCCESS", (chunk(int(c.arguments["query"][1:]) + 1),))))
     assert outcome.memory.stop_reason == "MAX_TOOL_CALLS"
     assert [len(s.results) for s in outcome.memory.steps] == [3, 3, 2]
@@ -221,10 +223,11 @@ def test_controller_graph_success_after_failed_search_does_not_report_failure():
 def test_same_step_cannot_depend_on_unobserved_confirmation():
     key = "M:demo#f()"
     def handler(c, *a):
-        assert c.tool_name == "find_symbol"
+        assert c.tool_name == "search_code"  # Entire invalid batch was intercepted.
         return ToolResult(c, "SUCCESS", (chunk(1),), ToolObservation(discovered_symbols=(SymbolObservation(key, "METHOD", 1, "S.java"),)))
     outcome, _ = run(runtime([[call("find_symbol", "f"), call("find_callees", key)]], handler, Checker(1)))
-    assert [r.status for r in outcome.memory.tool_history] == ["SUCCESS", "INVALID_ARGUMENT"]
+    assert [r.status for r in outcome.memory.tool_history] == ["SUCCESS"]
+    assert len(outcome.memory.policy_violations) == outcome.memory.policy_fallbacks == 1
     assert key in outcome.memory.available_symbols
 
 
@@ -253,17 +256,25 @@ def test_analysis_contract_and_configuration_failures_propagate():
 
 
 def test_three_step_symbol_graph_transition_uses_only_observed_handles():
-    first, second = "M:demo.Service#f1()", "M:demo.Api#f2()"
+    first, second, third = "M:demo.Service#f1()", "M:demo.Api#f2()", "M:demo.Impl#f3()"
     def handler(c, *a):
         if c.tool_name == "find_symbol":
             return ToolResult(c, "SUCCESS", (chunk(1),), ToolObservation(discovered_symbols=(SymbolObservation(first, "METHOD", 1, "S.java"),)))
         if c.tool_name == "find_callees":
-            return ToolResult(c, "SUCCESS", (chunk(2),), ToolObservation(discovered_symbols=(SymbolObservation(second, "METHOD", 2, "A.java"),)))
-        return ToolResult(c, "SUCCESS", (chunk(3),))
-    outcome, _ = run(runtime([[call("find_symbol", "f1")], [call("find_callees", first)],
-                              [call("find_implementations", second)]], handler, Checker(3)))
+            return ToolResult(c, "SUCCESS", (chunk(2),), ToolObservation(
+                discovered_symbols=(SymbolObservation(second, "METHOD", 2, "A.java"),),
+                graph_relations=(RelationObservation(first,second,"CALLS","outgoing",1,"SYMBOL_SOLVER_EXACT",1,1),)))
+        return ToolResult(c, "SUCCESS", (chunk(3),), ToolObservation(
+            discovered_symbols=(SymbolObservation(third,"METHOD",3,"I.java"),),
+            graph_relations=(RelationObservation(third,second,"OVERRIDES","incoming",1,"DERIVED_EXACT",1,1),)))
+    r = replace(requirement(), retrieval_needs=(RetrievalNeed('PATH', path_spec=PathSpec(
+        (PathSegment('CALLS'),PathSegment('OVERRIDES','INCOMING')),anchor_hint='demo.Service#f1()')),))
+    outcome, ws = run(runtime([[call("find_symbol", "f1")], [call("find_callees", first)],
+                              [call("find_implementations", second)]], handler, Checker(1)), [r])
     assert outcome.memory.stop_reason == "READY"
     assert len(outcome.memory.steps) == 3
+    assert outcome.memory.steps[1].new_relation_count == 1
+    assert len(ws.relations_for('ER1')) == 2
     assert all(r.status == "SUCCESS" for r in outcome.memory.tool_history)
 
 
@@ -278,8 +289,8 @@ def test_factory_agent_does_not_use_automatic_expansion(profile, monkeypatch):
     controller = cli._retrieval_controller(Settings(_env_file=None, tool_agent_enabled=True,
         symbol_graph_enabled=True, answer_engine_enabled=True, answer_profile=profile))
     assert isinstance(controller, ToolDrivenRetrievalController)
-    assert type(controller.runtime.coverage_checker) is CoverageChecker
-    assert controller.runtime.coverage_checker.max_attempts == 1
+    assert type(controller.runtime.coverage_checker.semantic) is CoverageChecker
+    assert controller.runtime.coverage_checker.semantic.max_attempts == 1
 
 
 def test_both_requirement_needs_document_and_code_before_ready():

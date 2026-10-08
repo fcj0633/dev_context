@@ -20,6 +20,7 @@ from devcontext.agentic import (
 from devcontext.context.views import CoverageView
 from devcontext.models import ContextBundle, ContextItem, SearchExecution, SearchResult
 from devcontext.planning import EvidencePlan, EvidenceRequirement
+from devcontext.planning.retrieval_need import read_need
 from devcontext.request import AnswerOptions, UserRequest
 from devcontext.evaluation.runner import _matches_group
 
@@ -238,7 +239,7 @@ def validate_workflow_cases(
 def _validate_requirement(
     requirement: Any, context: str, seen: set[str]
 ) -> None:
-    if not isinstance(requirement, dict) or set(requirement) != REQUIREMENT_FIELDS:
+    if not isinstance(requirement, dict) or set(requirement) - {"retrieval_needs"} != REQUIREMENT_FIELDS:
         raise ValueError(f"{context} has invalid fields")
     requirement_id = _text(requirement.get("id"), f"{context}.id")
     if requirement_id in seen:
@@ -937,6 +938,7 @@ def _requirement_model(spec: Mapping[str, Any]) -> EvidenceRequirement:
     return EvidenceRequirement(
         spec["id"], spec["target"], spec["success_criteria"],
         spec["priority"], spec["temporal_scope"], spec["source_requirement"],
+        tuple(read_need(n) for n in spec.get("retrieval_needs", ())),
     )
 
 

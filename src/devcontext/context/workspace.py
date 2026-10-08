@@ -11,6 +11,7 @@ from devcontext.context.registry import (
 )
 from devcontext.evidence import EvidenceCandidate
 from devcontext.models import Citation
+from devcontext.context.relations import EvidenceSymbol, EvidenceRelation, RelationOwnership, RelationProvenance, RelationProbe, ConfirmedPath, metadata
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,6 +76,76 @@ class EvidenceWorkspace:
     _order: list[int] = field(default_factory=list)
     _added_per_round: dict[int, int] = field(default_factory=dict)
     _frozen: bool = False
+    _symbols: dict[str, EvidenceSymbol] = field(default_factory=dict)
+    _symbol_ownership: dict[tuple[str, str], int] = field(default_factory=dict)
+    _relations: dict[tuple, EvidenceRelation] = field(default_factory=dict)
+    _relation_ownership: dict[tuple, RelationOwnership] = field(default_factory=dict)
+    _relation_provenance: set[RelationProvenance] = field(default_factory=set)
+    _probes: list[RelationProbe] = field(default_factory=list)
+    _paths: dict[tuple[str, int], ConfirmedPath] = field(default_factory=dict)
+    _chunk_ownership_round: dict[tuple[str, int], int] = field(default_factory=dict)
+
+    def _writable(self):
+        if self._frozen:
+            raise RuntimeError('EvidenceWorkspace is frozen')
+
+    def add_symbols(self, symbols, requirement_id, round_index):
+        self._writable()
+        for symbol in symbols:
+            if self.get(symbol.chunk_id) is None or requirement_id not in self.get(symbol.chunk_id).requirement_ids:
+                raise ValueError('Symbol endpoint is not owned by this requirement')
+            previous = self._symbols.get(symbol.symbol_key)
+            if previous is not None and previous != symbol:
+                raise ValueError('Conflicting indexed symbol identity')
+            self._symbols[symbol.symbol_key] = symbol
+            self._symbol_ownership.setdefault((requirement_id, symbol.symbol_key), round_index)
+
+    def symbols_for(self, requirement_id, round_index=None):
+        return tuple(s for key, s in self._symbols.items() if (requirement_id, key) in self._symbol_ownership
+                     and (round_index is None or self._symbol_ownership[requirement_id, key] <= round_index))
+
+    def add_relations(self, relations, requirement_id, round_index, source, observation_id=''):
+        self._writable()
+        new_relations = new_ownership = 0
+        for relation in relations:
+            keys = {s.symbol_key: s for s in self.symbols_for(requirement_id, round_index)}
+            if relation.source not in keys or relation.target not in keys:
+                raise ValueError('Relation endpoints must be confirmed and requirement-scoped')
+            if (keys[relation.source].chunk_id, keys[relation.target].chunk_id) != (relation.source_chunk_id, relation.target_chunk_id):
+                raise ValueError('Relation endpoint mapping is invalid')
+            identity = relation.identity
+            if identity not in self._relations:
+                self._relations[identity] = relation
+                new_relations += 1
+            ownership_key = (requirement_id, identity)
+            if ownership_key not in self._relation_ownership:
+                self._relation_ownership[ownership_key] = RelationOwnership(identity, requirement_id, round_index)
+                new_ownership += 1
+            self._relation_provenance.add(RelationProvenance(identity, source, observation_id, round_index))
+        return new_relations, new_ownership
+
+    def relations_for(self, requirement_id, round_index=None):
+        return tuple(self._relations[identity] for (rid, identity), owner in self._relation_ownership.items()
+                     if rid == requirement_id and (round_index is None or owner.first_seen_round <= round_index))
+
+    def add_probe(self, probe):
+        self._writable()
+        self._probes.append(probe)
+
+    def probes_for(self, requirement_id, round_index=None):
+        return tuple(p for p in self._probes if p.requirement_id == requirement_id and (round_index is None or p.round_index <= round_index))
+
+    def add_path(self, path):
+        self._writable()
+        self._paths[path.requirement_id, path.need_index] = path
+
+    def structural_metadata(self):
+        return {'symbols': [metadata(s) for s in self._symbols.values()],
+                'symbol_ownership': [{'requirement_id': r, 'symbol_key': k, 'round_index': v} for (r, k), v in self._symbol_ownership.items()],
+                'relations': [metadata(r) for r in self._relations.values()],
+                'ownership': [metadata(o) for o in self._relation_ownership.values()],
+                'provenance': [metadata(p) for p in sorted(self._relation_provenance, key=repr)],
+                'probes': [metadata(p) for p in self._probes], 'paths': [metadata(p) for p in self._paths.values()]}
 
     @property
     def frozen(self) -> bool:
@@ -95,6 +166,7 @@ class EvidenceWorkspace:
         added: list[int] = []
         for rank, candidate in enumerate(candidates, start=1):
             result = candidate.search_result
+            self._chunk_ownership_round.setdefault((candidate.sub_question_id, result.id), round_index)
             evidence_id = self.registry.register(result)
             existing = self._refs.get(result.id)
             if existing is not None:

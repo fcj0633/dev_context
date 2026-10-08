@@ -88,6 +88,23 @@ class CodeGraphSession:
         return self._execute("SELECT s.*, c.file_path, c.start_line, c.end_line FROM code_symbol s JOIN knowledge_chunk c ON c.id = s.chunk_id WHERE s.repository = %s AND s.symbol_key = ANY(%s) ORDER BY s.symbol_key",
                              (self.repository, keys)).fetchall()
 
+    def induced_relations(self, symbol_ids: list[int], edge_types: tuple[str, ...]) -> list[dict]:
+        """Only edges between already retrieved endpoints; never discover neighbors."""
+        if not symbol_ids or not edge_types:
+            return []
+        if not set(edge_types) <= EDGE_TYPES:
+            raise ValueError('Invalid physical edge filter')
+        return self._execute('''
+            SELECT e.*, s.symbol_key AS source, t.symbol_key AS target,
+                s.chunk_id AS source_chunk_id, t.chunk_id AS target_chunk_id
+            FROM code_symbol_edge e
+            JOIN code_symbol s ON s.id=e.source_symbol_id AND s.repository=e.repository
+            JOIN code_symbol t ON t.id=e.target_symbol_id AND t.repository=e.repository
+            WHERE e.repository=%s AND e.source_symbol_id=ANY(%s)
+                AND e.target_symbol_id=ANY(%s) AND e.edge_type=ANY(%s::text[])
+            ORDER BY s.symbol_key,t.symbol_key,e.edge_type,e.source_line,e.source_column
+        ''', (self.repository, symbol_ids, symbol_ids, list(edge_types))).fetchall()
+
     def neighbors(self, node_ids: list[int], outgoing: tuple[str, ...], incoming: tuple[str, ...], limit: int = 5) -> dict[int, list[dict]]:
         if not node_ids:
             return {}
