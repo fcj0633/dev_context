@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     openai_context_window: int = Field(default=131_072, gt=0)
     openai_max_output_tokens: int = Field(default=32_768, gt=0)
     answer_profile: Literal["fast", "full"] = "fast"
+    answer_synthesis_mode: Literal["planned", "continuous"] = "planned"
     answer_reasoning_effort: Literal["low", "medium", "high"] | None = None
     answer_hard_timeout_seconds: float | None = Field(default=None, gt=0)
     answer_fast_latency_target_seconds: float = Field(default=45, gt=0)

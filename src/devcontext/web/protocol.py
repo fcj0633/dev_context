@@ -80,6 +80,7 @@ def execution_summary(trace):
                          for c in trace.final_coverage],
             "evidence_state": trace.evidence_package_state, "stop_reason": trace.stop_reason,
             "retry_count": trace.retry_count, "generation_status": teaching.get("completion_status"),
+            "synthesis_mode": teaching.get("synthesis_mode", "planned"),
             "delivery_path": teaching.get("delivery_path"), "sections_emitted": teaching.get("sections_emitted", 0),
             "planner_retry_count": teaching.get("planner_retry_count", 0),
             "stream_retry_count": teaching.get("stream_retry_count", 0)}

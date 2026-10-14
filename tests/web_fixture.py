@@ -23,6 +23,8 @@ class FixtureWorkflow:
         self.settings = settings
 
     def run(self, query, top_k, on_section=None):
+        if query.startswith("continuous-"):
+            return self.run_continuous(query, on_section)
         if query == "fail":
             raise RuntimeError("fixture retrieval failure")
         from devcontext.execution import publish_evidence
@@ -61,6 +63,36 @@ class FixtureWorkflow:
         return SimpleNamespace(answer_result=SimpleNamespace(answer="\n\n".join(s.markdown for s in result)),
             context_bundle=bundle(),evidence_catalog=None,trace=SimpleNamespace(teaching=trace,
             agent_retrieval={},stage_usage=[],final_coverage=[],evidence_package_state="READY",stop_reason="ready",retry_count=0))
+
+    def run_continuous(self, query, on_section):
+        from devcontext.application.assembly import WorkflowFactory
+        from devcontext.answer_policy import resolve_policy
+        from devcontext.request import UserRequest, AnswerOptions
+        gate=gates.setdefault(query,Event())
+        next_gate=gates.setdefault(query+"-next",Event())
+        def wait(value):
+            end=time.monotonic()+25
+            while not value.wait(.05):
+                check_cancelled()
+                if time.monotonic()>end:raise RuntimeError("test gate was not released")
+        class Client:
+            max_tokens=1000;timeout_seconds=120;last_usage={}
+            def generate_stream(self,messages):
+                yield StreamEvent("content",text="直接回答已经可见🙂 [E1]。")
+                wait(gate)
+                yield StreamEvent("content",text="\n\n## 机制与条件\n第二段正在生成 [E404]。\n```java\n## 代码中的标题\nvoid order() {}\n```\n")
+                wait(next_gate)
+                yield StreamEvent("content",text="条件来自证据 [E1]。")
+                yield StreamEvent("finish",finish_reason="stop")
+        factory=WorkflowFactory(llm_client_factory=lambda *a,**k:Client())
+        settings=self.settings.model_copy(update={"answer_synthesis_mode":"continuous"})
+        req=UserRequest(query,AnswerOptions("teach"),policy=resolve_policy(query,settings,profile=settings.answer_profile))
+        package=SimpleNamespace(evidence_workspace=None,context_bundle=bundle(),retrieval_state="READY",
+            evidence_plan=SimpleNamespace(requirements=()),requirement_coverage=(),unresolved_requirements=())
+        result=factory.build_teaching_workflow(settings,request_policy=req.policy).run(req,package,on_section=on_section)
+        return SimpleNamespace(answer_result=result.answer,context_bundle=result.context_bundle,evidence_catalog=None,
+            trace=SimpleNamespace(teaching=result.stats["trace"],agent_retrieval={},stage_usage=list(result.stages),
+                final_coverage=[],evidence_package_state="READY",stop_reason="ready",retry_count=0))
 
 
 settings=Settings(_env_file=None)

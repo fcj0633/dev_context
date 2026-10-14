@@ -162,11 +162,12 @@ detailed 总正文约 3000～5000 中文字符；每节简洁，避免章节增�
 
 
 class SingleStreamingTeachingWriter:
-    def __init__(self, client_factory, *, permissive=False, citation_policy=None):
+    def __init__(self, client_factory, *, permissive=False, citation_policy=None, max_attempts=2):
         self.client_factory = client_factory
         self.permissive = permissive
         self.citation_policy = citation_policy
         self.last_client = None
+        self.max_attempts = max_attempts
 
     def write(self, question, plan, bundle, budget, *, request_started, on_section=None):
         offset = lambda: (time.perf_counter() - request_started) * 1000
@@ -196,7 +197,7 @@ class SingleStreamingTeachingWriter:
         totals = {"prompt_tokens": 0, "completion_tokens": 0, "reasoning_tokens": 0}
         missing_usage = set()
         stream_started = offset()
-        for attempt in range(2):
+        for attempt in range(self.max_attempts):
             from devcontext.delivery import Generation
             from devcontext.execution import answer_subscribed
             generation = Generation("single_stream")
@@ -283,7 +284,7 @@ class SingleStreamingTeachingWriter:
                                  "first_section_ready_ms": attempt_ready, "error": error,
                                  "usage": usage})
             generation.finish(status)
-            if status == "complete" or sections or attempt == 1 or not retryable:
+            if status == "complete" or sections or attempt+1 >= self.max_attempts or not retryable:
                 break
             mark_last_call_wasted("single stream attempt rejected", stage="teaching_draft")
         ended = offset()

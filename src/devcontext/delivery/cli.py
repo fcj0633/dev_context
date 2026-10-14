@@ -22,11 +22,15 @@ class EventPrinter:
         data = {**event.data, "generation_id": event.generation_id}
         if event.type == "answer.generation_started":
             self.redactors.clear()
-        if event.type == "answer.generation_finished":
-            for (generation_id, section_id), redactor in list(self.redactors.items()):
+        if event.type in {"answer.generation_finished", "answer.section_upsert"}:
+            for key, redactor in list(self.redactors.items()):
+                generation_id, section_id = key
                 if generation_id != event.generation_id:
                     continue
+                if event.type == "answer.section_upsert" and section_id != data["section_id"]:
+                    continue
                 tail = redactor.finish()
+                self.redactors.pop(key)
                 if tail:
                     self.emit("answer.text_delta", {"generation_id": generation_id,
                                                      "section_id": section_id,

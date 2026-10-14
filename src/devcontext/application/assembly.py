@@ -307,6 +307,11 @@ class WorkflowFactory:
         if self.teaching_workflow_factory is not None:
             return self.teaching_workflow_factory(settings)
         request_policy = request_policy or settings.answer_request_policy
+        if request_policy and settings.answer_synthesis_mode == "continuous":
+            from devcontext.context.estimator import HeuristicTokenEstimator
+            from devcontext.synthesis.workflow import ContinuousAnswerWorkflow
+            return ContinuousAnswerWorkflow(self.build_answer_synthesizer(settings),
+                settings.model_capabilities(), HeuristicTokenEstimator())
         # The teach path keeps its own client policy: its planner and its writer
         # do different work from the explain path's, so sharing budgets and
         # effort settings between them would just constrain both.
@@ -328,6 +333,10 @@ class WorkflowFactory:
                 self.profile_answer_factory(settings, planner=True) if request_policy else self.v3_client_factory(settings, self.explanation_planner_factory(settings)), teaching_workflow.capabilities, teaching_workflow.estimator)
             teaching_workflow.v3_writer = TeachingWriterV3(self.profile_answer_factory(settings) if request_policy else self.v3_client_factory(settings, self.teaching_writer_factory(settings)), permissive=request_policy is not None, citation_policy=INPUT_CITATIONS if request_policy else None)
         return teaching_workflow
+
+    def build_answer_synthesizer(self, settings, *, max_attempts=2):
+        from devcontext.synthesis import ContinuousAnswerSynthesizer
+        return ContinuousAnswerSynthesizer(self.profile_answer_factory(settings), max_attempts=max_attempts)
 
 
     def retrieval_controller(self,

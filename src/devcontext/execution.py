@@ -39,6 +39,8 @@ def publish_evidence(bundle):
 
 
 def publish_answer(event):
+    from devcontext.observability.diagnostics import record_answer_event
+    record_answer_event(event)
     callback = _answer.get()
     if callback is None:
         return
@@ -52,6 +54,10 @@ def publish_answer(event):
 
 def answer_subscribed():
     return _answer.get() is not None
+
+
+def current_cancellation():
+    return _token.get()
 
 
 @contextmanager

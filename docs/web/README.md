@@ -1,6 +1,8 @@
-# DevContext Web UI V1
+# DevContext Web UI
 
 本机 Vue 3 + TypeScript 问答界面，通过 FastAPI + SSE 复用原有 Ask 链路。知识索引继续使用 PostgreSQL/pgvector；SQLite 保存会话、消息、执行状态、验证章节、证据与事件。每次问题独立执行，历史仅用于展示。
+
+正文增量与恢复采用 [第 3 阶段协议](../refactor/03-stage3-stream-delivery.md)。第 4 阶段连续回答候选见 [回答引擎报告](../refactor/04-stage4-continuous-answer.md)：`ANSWER_SYNTHESIS_MODE=continuous` 让 Fast/Full 从证据包直接写作，`planned` 使用原教学规划。两者共用页面、SQLite v2 与 SSE；自然 Markdown 的二级标题由本地程序形成交付片段，模型无需输出协议标记。
 
 ## 本地启动
 
@@ -52,6 +54,7 @@ npm run dev
 | `DEVCONTEXT_WEB_PORT` | `8000` | HTTP 端口 |
 | `DEVCONTEXT_WEB_WORKERS` | `2` | Agent 线程与准入名额，范围 1–16 |
 | `DEVCONTEXT_WEB_DATABASE` | 仓库根目录 `data/web/devcontext.sqlite3` | 会话数据库 |
+| `DEVCONTEXT_WEB_STREAM_PREVIEW` | `true` | 是否实时显示生成中的正文；由 Settings 读取进程环境或 `.env` |
 
 `WORKERS` 指 Agent 线程。Uvicorn 始终一个进程；同一 SQLite 的第二实例拒绝启动。V1 默认本机单用户，无登录、访问隔离、动态知识库管理和多轮 Memory。Fast/Full 仅控制已有教学策略，Tool Agent、Graph、模型和预算继承现有配置。
 
@@ -86,12 +89,18 @@ npm run dev
 | `retrieval.context_built` | 材料数、轮次、截断标记 |
 | `evidence.updated` | `items` 真实证据快照，`replace` 指示替换 |
 | `answer.section_upsert` | `section_id,position,markdown,citations` |
+| `answer.generation_started` | `generation_id,path`，新尝试取代旧草稿 |
+| `answer.section_started` | `generation_id,section_id,position,revision` |
+| `answer.text_delta` | `generation_id,section_id,delta,revision` |
+| `answer.generation_finished` | `generation_id,status`，未提交正文标记中断 |
 | `run.summary` | 最终白名单执行摘要 |
 | `run.finished` | 终态、原因、安全错误、最终答案 |
 
 SSE 使用 `id: seq`、`event: type`、JSON `data`。恢复时 `Last-Event-ID` 优先于 `after`，无效游标返回 `400`；15 秒心跳，终态回放后关闭连接。数据库事务先保存，再通知订阅者。线程桥接只发送可合并唤醒信号，客户端按序从 SQLite 读取，慢订阅者不阻塞 Agent。
 
-章节只来自 Writer 既有验证回调，按 `(run_id,section_id)` 更新、按 seq 去重；同内容重复回调不追加。规划、Coverage 与 Graph 步骤在最终 Trace 摘要显示，运行中只显示真实 Observer 完成事件，不伪造进度。
+正式片段按 `(run_id,section_id)` 更新，活动正文按生成身份与修订号更新。重复事件忽略，发现序号缺口重新获取权威快照；章节完成后以清理引用后的全文替换草稿。草稿引用仅作为文字显示，正式引用仅在真实来源存在时可点击。规划、Coverage 与 Graph 步骤在最终 Trace 摘要显示，运行中只显示真实 Observer 完成事件，不伪造进度。
+
+SQLite v1 首次升级到 v2 前生成同目录 `*.v1-<uuid>.bak`。生成中的正文随事件事务保存，刷新、断线或服务重启可恢复；中断正文会被标记，复制时明确说明未完成。需要运行旧程序时停止当前服务并恢复升级前备份；同版本关闭预览无需回退数据库。
 
 证据绑定实际教学 `ContextItem`，最终与 `ContextBundle/EvidenceCatalog` 校对，保存 chunk ID、文件、行号、符号、内容与截断状态；无法解析的引用不推测来源，也不提供任意本地文件读取。Markdown 禁用 HTML 和危险链接。模型原始响应、私有推理、提示词、拒绝片段及敏感配置不进入公开摘要或 SQLite；配置密钥与数据库连接串在公开文本中脱敏。
 

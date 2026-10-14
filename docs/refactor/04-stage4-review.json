@@ -1,0 +1,45 @@
+{
+  "method": "实施者先阅读交换排列的 A/B 回答，再核对冻结原文；随后解开模式映射。不是独立人工盲评或模型裁判认证。",
+  "checklist": "benchmark/refactor-stage1.jsonl 的六题 must_explain/must_not_claim，以及第4阶段计划中的直接回应、解释关系、条件、例子、重复和事实支持。",
+  "core_coverage_scale": "每个必需解释项0=未覆盖、1=提及/缺关键材料而限定、2=有依据地展开；质量正确性另外检查，不因覆盖分数给事实背书。",
+  "records": [
+    {
+      "sample": "S1-01", "slot_A": "planned", "slot_B": "continuous", "preferred_slot": "A",
+      "planned_core": [2, 2, 2], "continuous_core": [2, 2, 2], "continuous_improved": false,
+      "findings": ["两侧均解释mark、order、接口和装配执行；E10/E14/E15支持容器机制。", "连续侧区分历史过滤器清单与当前代码更谨慎，但增加整节事务、并发、缓存解释，偏离定义与使用问题。", "旧侧首尾和最后一节重复骨架，连续侧未形成整体明确改善。"]
+    },
+    {
+      "sample": "S1-02", "slot_A": "planned", "slot_B": "continuous", "preferred_slot": "A",
+      "planned_core": [2, 2, 2], "continuous_core": [2, 2, 2], "continuous_improved": false,
+      "findings": ["两侧解释规则增长、主流程修改与单测，E1/E2/E3主要是设计和历史材料。", "旧侧明确规则少且稳定可直接if-else，并将代价和选择条件连起来；连续侧有假设注册例子，但较多篇幅讨论题目未问的事务和缓存。", "连续侧开头与结尾重复证据止点；读者背景中的事务/并发/缓存偏好被扩展成固定主题。"]
+    },
+    {
+      "sample": "S1-03", "slot_A": "continuous", "slot_B": "planned", "preferred_slot": "A",
+      "planned_core": [2, 1, 1], "continuous_core": [2, 1, 1], "continuous_improved": true,
+      "findings": ["连续侧明确takeToken先于reserveLocally加锁，且专门指出E5没有doPurchaseInTransaction正文，不声称找到了条件更新SQL。", "旧侧将缓存不失效最坏少卖、逆序释放避免死锁等历史/通用说法升级得更强；连续侧关系与止点更容易跟随。", "两侧仍把null/非成功订单响应解释为确定未创建、安全释放；E3只展示分支和compensateKnownFailure调用，缺远程约定和补偿正文。", "连续侧开头和结尾也将锁内本地事务说成已建立原子性保证；只有类摘要和方法签名，不能认证该保证。"]
+    },
+    {
+      "sample": "S1-04", "slot_A": "continuous", "slot_B": "planned", "preferred_slot": "A",
+      "planned_core": [2, 1, 1], "continuous_core": [2, 1, 1], "continuous_improved": true,
+      "findings": ["连续侧正常时序与E2相符，并在末尾明确doPurchaseInTransaction正文缺失；旧侧开头把乘车人归属检查放在token之前，与E2执行语句相反。", "旧侧把afterCommit安排说成两处归还不会同时发生，并将历史回归数值用于证明当前正确性。连续侧对回归外推较谨慎。", "连续侧仍说锁和本地事务真正保证不重复占座，并把后到请求看到最新状态作为结论；实际裁决SQL、隔离与锁有效性未完整取得，强保证仍不能认证。"]
+    },
+    {
+      "sample": "S1-05", "slot_A": "planned", "slot_B": "continuous", "preferred_slot": "B",
+      "planned_core": [2, 1, 1], "continuous_core": [2, 1, 2], "continuous_improved": true,
+      "findings": ["两侧都用E17与E3解释订单/订单项和车票/座位的各自本地事务。", "连续侧明确E22举例是关单链路，不能直接推导支付完整编排；旧侧将注释外推为支付通知顺序和最终一致性收敛。", "连续侧说明零行可能已处理，而不是一定已处理，并把原子性限定到本地条件更新；但额外缓存小节对主要问题帮助有限。", "缺少支付完整编排和全局事务配置，不能认证所有订单与票务场景；结论适用于当前提供的本地推进实现。"]
+    },
+    {
+      "sample": "S1-06", "slot_A": "planned", "slot_B": "continuous", "preferred_slot": "A",
+      "planned_core": [1, 2], "continuous_core": [2, 2], "continuous_improved": false,
+      "findings": ["E4直接证明UserInfoController#register、POST映射和UserLoginService委托；实际文件在user-services/controller/UserInfoController.java。", "连续侧给出缩略文件路径和行号，位置覆盖更完整；但定位问题又增加事务、并发、缓存未知清单，回答明显超出必要范围。", "旧侧也有重复，但围绕入口与业务接口的解释更集中。"]
+    }
+  ],
+  "planned_core_total": 27,
+  "continuous_core_total": 29,
+  "continuous_clear_improvements": 3,
+  "promotion": {
+    "default": "planned", "promoted": false,
+    "reason": "只确认3题明确改善，未达到至少4题；核心覆盖虽不低于旧侧，购票强保证仍存在无证据外推，不能声称质量门槛全部通过。"
+  },
+  "limitations": ["每题每侧只有一次样本，不能推出稳定胜率或性能提升。", "两侧都恢复旧计划/旧实际Writer证据；未执行完整取证，不测真实Full质量。", "原始冻结代码部分中文注释已有替换字符，未擅自修复或重新索引。"]
+}

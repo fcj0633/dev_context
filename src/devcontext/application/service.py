@@ -88,7 +88,7 @@ def _configure_request(settings: Settings, request: AskRequest):
     if engine is not None:
         if request.answer_mode != "teach" or request.no_plan or request.plan_only:
             raise ValueError("--teaching-generation-mode requires the teach answering workflow")
-        settings = settings.model_copy(update={"teaching_generation_mode": engine})
+        settings = settings.model_copy(update={"teaching_generation_mode": engine, "answer_synthesis_mode": "planned"})
     return settings, policy
 
 

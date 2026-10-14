@@ -1,0 +1,138 @@
+[
+  {
+    "repository": "onyx-dot-app/onyx",
+    "commit": "103300798fa31186794ff1733bc07dc99341f2b7",
+    "path": "backend/onyx/chat/answer.py",
+    "sha256": "b627377d0df93cc52459f9cdc10a7bf17c73f797902e551cf30e5ceb7804675b",
+    "url": "https://github.com/onyx-dot-app/onyx/blob/103300798fa31186794ff1733bc07dc99341f2b7/backend/onyx/chat/answer.py",
+    "local_copy": "artifacts/refactor-stage4/references/onyx/backend/onyx/chat/answer.py"
+  },
+  {
+    "repository": "onyx-dot-app/onyx",
+    "commit": "103300798fa31186794ff1733bc07dc99341f2b7",
+    "path": "backend/onyx/chat/prompt_builder/answer_prompt_builder.py",
+    "sha256": "088b66de262d25ee81f92e62c7c82477e79a102287d301deadf66b4354cd3913",
+    "url": "https://github.com/onyx-dot-app/onyx/blob/103300798fa31186794ff1733bc07dc99341f2b7/backend/onyx/chat/prompt_builder/answer_prompt_builder.py",
+    "local_copy": "artifacts/refactor-stage4/references/onyx/backend/onyx/chat/prompt_builder/answer_prompt_builder.py"
+  },
+  {
+    "repository": "onyx-dot-app/onyx",
+    "commit": "103300798fa31186794ff1733bc07dc99341f2b7",
+    "path": "backend/onyx/chat/prompt_builder/citations_prompt.py",
+    "sha256": "54d799924510fd2f2ebf50c3706ef863cb53286001c3496700b48672f773ec65",
+    "url": "https://github.com/onyx-dot-app/onyx/blob/103300798fa31186794ff1733bc07dc99341f2b7/backend/onyx/chat/prompt_builder/citations_prompt.py",
+    "local_copy": "artifacts/refactor-stage4/references/onyx/backend/onyx/chat/prompt_builder/citations_prompt.py"
+  },
+  {
+    "repository": "onyx-dot-app/onyx",
+    "commit": "103300798fa31186794ff1733bc07dc99341f2b7",
+    "path": "backend/onyx/agents/agent_search/basic/graph_builder.py",
+    "sha256": "d676f4a8fce159339a8063626037b97c734b3f9a3afd409115f55415ab173614",
+    "url": "https://github.com/onyx-dot-app/onyx/blob/103300798fa31186794ff1733bc07dc99341f2b7/backend/onyx/agents/agent_search/basic/graph_builder.py",
+    "local_copy": "artifacts/refactor-stage4/references/onyx/backend/onyx/agents/agent_search/basic/graph_builder.py"
+  },
+  {
+    "repository": "onyx-dot-app/onyx",
+    "commit": "103300798fa31186794ff1733bc07dc99341f2b7",
+    "path": "backend/onyx/agents/agent_search/orchestration/nodes/use_tool_response.py",
+    "sha256": "719362ab65386e001c5a82eba411c4e14ba95b3ff660a648d07a3e7e982f938c",
+    "url": "https://github.com/onyx-dot-app/onyx/blob/103300798fa31186794ff1733bc07dc99341f2b7/backend/onyx/agents/agent_search/orchestration/nodes/use_tool_response.py",
+    "local_copy": "artifacts/refactor-stage4/references/onyx/backend/onyx/agents/agent_search/orchestration/nodes/use_tool_response.py"
+  },
+  {
+    "repository": "onyx-dot-app/onyx",
+    "commit": "103300798fa31186794ff1733bc07dc99341f2b7",
+    "path": "backend/tests/unit/onyx/chat/test_answer.py",
+    "sha256": "041ac871221d3ad37509459a18d360188ec823f113114a2384a46844ac7a2eaf",
+    "url": "https://github.com/onyx-dot-app/onyx/blob/103300798fa31186794ff1733bc07dc99341f2b7/backend/tests/unit/onyx/chat/test_answer.py",
+    "local_copy": "artifacts/refactor-stage4/references/onyx/backend/tests/unit/onyx/chat/test_answer.py"
+  },
+  {
+    "repository": "run-llama/llama_index",
+    "commit": "5b7b6e323e1da3edd787a2104a89257c14f026d0",
+    "path": "llama-index-core/llama_index/core/response_synthesizers/simple_summarize.py",
+    "sha256": "541cbff5072c97a60be5e6cf5f4ddba87bc5661ece1715ff3212685cd0b3b927",
+    "url": "https://github.com/run-llama/llama_index/blob/5b7b6e323e1da3edd787a2104a89257c14f026d0/llama-index-core/llama_index/core/response_synthesizers/simple_summarize.py",
+    "local_copy": "artifacts/refactor-stage4/references/llama_index/llama-index-core/llama_index/core/response_synthesizers/simple_summarize.py"
+  },
+  {
+    "repository": "run-llama/llama_index",
+    "commit": "5b7b6e323e1da3edd787a2104a89257c14f026d0",
+    "path": "llama-index-core/llama_index/core/response_synthesizers/compact_and_refine.py",
+    "sha256": "e3bebf9fb7aeeb1165b1a5f1485f38bc1d81ab2230ad6267453232d310c700a3",
+    "url": "https://github.com/run-llama/llama_index/blob/5b7b6e323e1da3edd787a2104a89257c14f026d0/llama-index-core/llama_index/core/response_synthesizers/compact_and_refine.py",
+    "local_copy": "artifacts/refactor-stage4/references/llama_index/llama-index-core/llama_index/core/response_synthesizers/compact_and_refine.py"
+  },
+  {
+    "repository": "run-llama/llama_index",
+    "commit": "5b7b6e323e1da3edd787a2104a89257c14f026d0",
+    "path": "llama-index-core/tests/response_synthesizers/test_simple_summarize.py",
+    "sha256": "dc27439bb2b9e2c0c2d4df88c448f66c5e9b1334fb7276262ef52dc0dd659375",
+    "url": "https://github.com/run-llama/llama_index/blob/5b7b6e323e1da3edd787a2104a89257c14f026d0/llama-index-core/tests/response_synthesizers/test_simple_summarize.py",
+    "local_copy": "artifacts/refactor-stage4/references/llama_index/llama-index-core/tests/response_synthesizers/test_simple_summarize.py"
+  },
+  {
+    "repository": "openai/openai-agents-python",
+    "commit": "a30c32e722a4cdb761fe8b250606757ec8581296",
+    "path": "src/agents/run.py",
+    "sha256": "2372b05115eaa90c03605de008df4a9a9229c5a909870223e8d9d8bf1bef7792",
+    "url": "https://github.com/openai/openai-agents-python/blob/a30c32e722a4cdb761fe8b250606757ec8581296/src/agents/run.py",
+    "local_copy": "artifacts/refactor-stage4/references/openai-agents-python/src/agents/run.py"
+  },
+  {
+    "repository": "openai/openai-agents-python",
+    "commit": "a30c32e722a4cdb761fe8b250606757ec8581296",
+    "path": "src/agents/_run_impl.py",
+    "sha256": "6863dd8e54d883695c25aa2bc71f2b0ad56f94ccdfa57c9f05becfaa0805e384",
+    "url": "https://github.com/openai/openai-agents-python/blob/a30c32e722a4cdb761fe8b250606757ec8581296/src/agents/_run_impl.py",
+    "local_copy": "artifacts/refactor-stage4/references/openai-agents-python/src/agents/_run_impl.py"
+  },
+  {
+    "repository": "openai/openai-agents-python",
+    "commit": "a30c32e722a4cdb761fe8b250606757ec8581296",
+    "path": "tests/test_agent_runner.py",
+    "sha256": "b96e095601e8a8e127c242dd1ef1c1da185cdaf6f35e847983c445e7e82d9f46",
+    "url": "https://github.com/openai/openai-agents-python/blob/a30c32e722a4cdb761fe8b250606757ec8581296/tests/test_agent_runner.py",
+    "local_copy": "artifacts/refactor-stage4/references/openai-agents-python/tests/test_agent_runner.py"
+  },
+  {
+    "repository": "openai/openai-agents-python",
+    "commit": "a30c32e722a4cdb761fe8b250606757ec8581296",
+    "path": "tests/test_agent_runner_streamed.py",
+    "sha256": "cd515fd4a47f0f2d14ed1c88203aa91aa9799ca83a995e87d576264d61deeebf",
+    "url": "https://github.com/openai/openai-agents-python/blob/a30c32e722a4cdb761fe8b250606757ec8581296/tests/test_agent_runner_streamed.py",
+    "local_copy": "artifacts/refactor-stage4/references/openai-agents-python/tests/test_agent_runner_streamed.py"
+  },
+  {
+    "repository": "continuedev/continue",
+    "commit": "5522c6f44ca0ac3528b37244818fbfa39b5af470",
+    "path": "core/context/retrieval/retrieval.ts",
+    "sha256": "bda6b3fee1698163de63040f2f7af20bd932086eb1c008178980553f078af399",
+    "url": "https://github.com/continuedev/continue/blob/5522c6f44ca0ac3528b37244818fbfa39b5af470/core/context/retrieval/retrieval.ts",
+    "local_copy": "artifacts/refactor-stage4/references/continue/core/context/retrieval/retrieval.ts"
+  },
+  {
+    "repository": "continuedev/continue",
+    "commit": "5522c6f44ca0ac3528b37244818fbfa39b5af470",
+    "path": "core/context/retrieval/pipelines/BaseRetrievalPipeline.ts",
+    "sha256": "0bf9bac8722fe181a0fb4502b02a22d2d2dea5592a4aa1d49c6a8aca5acf9db8",
+    "url": "https://github.com/continuedev/continue/blob/5522c6f44ca0ac3528b37244818fbfa39b5af470/core/context/retrieval/pipelines/BaseRetrievalPipeline.ts",
+    "local_copy": "artifacts/refactor-stage4/references/continue/core/context/retrieval/pipelines/BaseRetrievalPipeline.ts"
+  },
+  {
+    "repository": "continuedev/continue",
+    "commit": "5522c6f44ca0ac3528b37244818fbfa39b5af470",
+    "path": "core/context/retrieval/pipelines/RerankerRetrievalPipeline.ts",
+    "sha256": "32cdfcd8311504308f698de3cbdf05dc20b7b01fb1b007b1e02f15e6234099fc",
+    "url": "https://github.com/continuedev/continue/blob/5522c6f44ca0ac3528b37244818fbfa39b5af470/core/context/retrieval/pipelines/RerankerRetrievalPipeline.ts",
+    "local_copy": "artifacts/refactor-stage4/references/continue/core/context/retrieval/pipelines/RerankerRetrievalPipeline.ts"
+  },
+  {
+    "repository": "continuedev/continue",
+    "commit": "5522c6f44ca0ac3528b37244818fbfa39b5af470",
+    "path": "core/context/retrieval/pipelines/NoRerankerRetrievalPipeline.ts",
+    "sha256": "0bfacc0d53f6f4d45603e91a9bf3c6215a3aba890f369aac57dcbe8cdcd5cdec",
+    "url": "https://github.com/continuedev/continue/blob/5522c6f44ca0ac3528b37244818fbfa39b5af470/core/context/retrieval/pipelines/NoRerankerRetrievalPipeline.ts",
+    "local_copy": "artifacts/refactor-stage4/references/continue/core/context/retrieval/pipelines/NoRerankerRetrievalPipeline.ts"
+  }
+]

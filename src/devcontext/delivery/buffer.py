@@ -131,16 +131,20 @@ class BufferedDelivery:
             self.pending = None
         self.due = None
 
-    def _finish_redactors(self, generation_id=None):
+    def _finish_redactors(self, generation_id=None, section_id=None):
         """Persist redactor tails before a generation terminal event."""
-        for (current_id, section_id), redactor in list(self.redactors.items()):
+        for key, redactor in list(self.redactors.items()):
+            current_id, current_section = key
             if generation_id is not None and current_id != generation_id:
                 continue
+            if section_id is not None and current_section != section_id:
+                continue
             text = redactor.finish()
+            self.redactors.pop(key)
             if text:
                 self._flush()
                 self.sink(AnswerEvent("answer.text_delta", current_id,
-                                      {"section_id": section_id, "delta": text}))
+                                      {"section_id": current_section, "delta": text}))
 
     def _run(self):
         try:
@@ -163,6 +167,8 @@ class BufferedDelivery:
                     self._flush()
                     if item.type == "answer.generation_started":
                         self.redactors.clear()
+                    if item.type == "answer.section_upsert":
+                        self._finish_redactors(item.generation_id, item.data["section_id"])
                     if item.type == "answer.generation_finished":
                         self._finish_redactors(item.generation_id)
                     self.sink(item)

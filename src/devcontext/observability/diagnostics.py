@@ -47,6 +47,8 @@ class DiagnosticCapture:
     retrieval_progress: dict | None = None
     attempts: list = field(default_factory=list)
     outcome: dict | None = None
+    answer_input: dict | None = None
+    answer_events: list = field(default_factory=list)
     _buffers: dict = field(default_factory=dict, repr=False)
 
     def __post_init__(self):
@@ -115,12 +117,51 @@ class DiagnosticCapture:
         return clean({"schema_version": SCHEMA_VERSION, "timeline": self.timeline,
                       "events": self.events, "retrieval": self.retrieval,
                       "retrieval_progress": self.retrieval_progress,
-                      "model_attempts": self.attempts, "outcome": self.outcome}, self.secrets)
+                      "model_attempts": self.attempts, "outcome": self.outcome,
+                      **({"answer_input": self.answer_input} if self.answer_input is not None else {}),
+                      **({"answer_events": self._safe_answer_events()} if self.answer_events else {})}, self.secrets)
+
+    def _safe_answer_events(self):
+        from devcontext.delivery.buffer import StreamRedactor
+        result, redactors = [], {}
+        for raw in self.answer_events:
+            event = deepcopy(raw)
+            key = (event["generation_id"], event["data"].get("section_id"))
+            if event["type"] == "answer.text_delta":
+                event["data"]["delta"] = redactors.setdefault(key, StreamRedactor(self.secrets)).feed(event["data"]["delta"])
+            elif event["type"] in {"answer.section_upsert", "answer.generation_finished"}:
+                for current, redactor in list(redactors.items()):
+                    if current[0] != key[0] or (key[1] is not None and current != key):
+                        continue
+                    tail = redactor.finish()
+                    if tail:
+                        result.append({"offset_ms": event["offset_ms"], "type": "answer.text_delta",
+                            "generation_id": current[0], "data": {"section_id": current[1], "delta": tail}})
+                    redactors.pop(current)
+            result.append(event)
+        # A failure/cancellation may leave no model terminal event. Never emit a
+        # retained possible secret suffix when saving that interrupted snapshot.
+        return result
 
     def save(self, path):
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(self.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def record_answer_input(value):
+    capture = _active.get()
+    if capture is not None:
+        capture.answer_input = clean(value.to_dict(), capture.secrets)
+        capture.mark("answer_input_built", {"included": sorted(value.available_labels),
+            "omitted": [e["label"] for e in value.selection if not e["included"]]})
+
+
+def record_answer_event(event):
+    capture = _active.get()
+    if capture is not None:
+        capture.answer_events.append({"offset_ms": round((capture.clock()-capture.started)*1000,3),
+            **clean(event.to_dict(), capture.secrets)})
 
 
 @contextmanager

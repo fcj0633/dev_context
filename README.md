@@ -13,6 +13,10 @@ DevContext 从 Java 源码和 Markdown 文档中建立知识索引，结合代�
 
 **本目录已整合 Web UI，CLI 和 Web 均可用。** 原 Web 工作树保留历史版本。统一应用入口说明见 [第 2 阶段报告](docs/refactor/02-stage2-application-boundary.md)。详细说明见 [Web 接口与事件协议](docs/web/README.md)和[验收报告](docs/web/test-report.md)。
 
+第 4 阶段新增连续回答引擎：在 `.env` 设置 `ANSWER_SYNTHESIS_MODE=continuous`，CLI 和 Web 的 Fast/Full 都会直接从实际证据包生成自然 Markdown，不先生成独立教学计划。设置 `planned` 可使用原计划式回答。显式 `--teaching-generation-mode single_stream/v3/multi_pass` 仍进入对应兼容路径。质量对照、默认选择和限制见 [第 4 阶段报告](docs/refactor/04-stage4-continuous-answer.md)。
+
+Web 默认显示生成中正文，完成片段原位替换；`DEVCONTEXT_WEB_STREAM_PREVIEW=false` 关闭正文预览。CLI 可用 `--stream-events` 输出纯 NDJSON 增量事件，该模式与调试、性能报告、重复执行及只生成计划互斥。
+
 以下命令以 Windows PowerShell 为例。执行 Python 命令时应在实际使用的工作树根目录，确保读取正确的 `.env`。
 
 ## 2. 已经配置好：日常启动

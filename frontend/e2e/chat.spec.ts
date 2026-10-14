@@ -1,5 +1,45 @@
 import { expect, test } from '@playwright/test'
 
+for (const profile of ['fast', 'full']) test(`${profile}: natural Markdown streams before a title and keeps committed parts stable`, async ({ page }) => {
+  const query = `continuous-${profile}-${Date.now()}`
+  await page.goto('/')
+  await page.getByLabel('回答模式').selectOption(profile)
+  await page.getByRole('textbox', { name: '输入问题' }).fill(query)
+  await page.getByRole('button', { name: '发送问题', exact: true }).click()
+  await expect(page.locator('.draft-body')).toContainText('直接回答已经可见🙂')
+  await expect(page.getByRole('heading', { name: '机制与条件' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '查看证据 E1' })).toHaveCount(0)
+  await page.reload()
+  await expect(page.locator('.draft-body')).toContainText('直接回答已经可见🙂')
+  await page.request.post(`http://127.0.0.1:8000/fixture/release/${query}`)
+  await expect(page.getByRole('heading', { name: '机制与条件' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '代码中的标题' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '查看证据 E1' })).toHaveCount(1)
+  const first = await page.locator('.markdown:not(.draft-body)').first().innerHTML()
+  await page.request.post(`http://127.0.0.1:8000/fixture/release/${query}-next`)
+  await expect(page.getByText('已完成', { exact: true })).toBeVisible()
+  expect(await page.locator('.markdown').first().innerHTML()).toBe(first)
+  await expect(page.getByRole('button', { name: '查看证据 E404' })).toHaveCount(0)
+  await expect(page.locator('.draft-body')).toHaveCount(0)
+  await page.reload()
+  await expect(page.getByRole('heading', { name: '机制与条件' })).toBeVisible()
+})
+
+test('natural Markdown preview remains unfinished on cancel and refresh', async ({ page, context }) => {
+  const query = `continuous-cancel-${Date.now()}`
+  await context.grantPermissions(['clipboard-read', 'clipboard-write'])
+  await page.goto('/')
+  await page.getByRole('textbox', { name: '输入问题' }).fill(query)
+  await page.getByRole('button', { name: '发送问题', exact: true }).click()
+  await expect(page.locator('.draft-body')).toContainText('直接回答已经可见🙂')
+  await page.getByRole('button', { name: '停止生成' }).click()
+  await expect(page.getByText('已停止', { exact: true })).toBeVisible()
+  await page.reload()
+  await expect(page.locator('.draft-section')).toContainText('这部分内容尚未完成')
+  await page.getByRole('button', { name: '复制回答', exact: true }).click()
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toContain('以下内容尚未完成')
+})
+
 for (const profile of ['fast', 'full']) test(`${profile}: body is visible while section end is gated, then survives refresh`, async ({ page }) => {
   const query = `gate-${profile}-${Date.now()}`
   await page.goto('/')
