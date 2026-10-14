@@ -13,3 +13,9 @@ java-parser/target/
 *.iml
 /参考项目/
 /docs/参考项目/
+/data/web/
+/frontend/node_modules/
+/frontend/dist/
+/frontend/test-results/
+/frontend/playwright-report/
+/frontend/*.tsbuildinfo

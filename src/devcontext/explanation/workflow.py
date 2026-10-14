@@ -295,6 +295,8 @@ class TeachingExplanationWorkflow:
                 stages.append(_stage("teaching_evidence_pack", started, "rules", None, None))
                 started = time.perf_counter()
             pack_done = True
+            from devcontext.execution import publish_evidence
+            publish_evidence(bound)
             sections, trace = self.streaming_writer.write(
                 request.original_query, plan, bound, budget, request_started=request_started,
                 on_section=on_section,

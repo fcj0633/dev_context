@@ -66,6 +66,8 @@ def write_direct(client_factory, request, package, pack, capabilities, estimator
         with llm_stage("teaching_fallback_draft"):
             iterator = client.generate_stream(messages)
             for event in iterator:
+                from devcontext.execution import check_cancelled
+                check_cancelled()
                 remaining_seconds()
                 if event.type == "content":
                     if finished:

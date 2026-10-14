@@ -17,9 +17,11 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest==9.1.1"]
+web = ["fastapi>=0.115,<1", "uvicorn>=0.34,<1", "portalocker>=3,<4", "httpx>=0.28,<1"]
 
 [project.scripts]
 devcontext = "devcontext.cli:main"
+devcontext-web = "devcontext.web.__main__:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/devcontext"]

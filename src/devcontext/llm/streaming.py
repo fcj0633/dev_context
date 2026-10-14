@@ -191,6 +191,8 @@ def generate_stream(client, messages: Sequence[LLMMessage]) -> Iterator[StreamEv
         prefix = ReasoningPrefixFilter()
     try:
         for event in parse_sse(source):
+            from devcontext.execution import check_cancelled
+            check_cancelled()
             if prefix is not None and event.type == "content":
                 text = prefix.feed(event.text)
                 if text:

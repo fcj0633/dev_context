@@ -162,6 +162,8 @@ class SingleStreamingTeachingWriter:
                 with llm_stage("teaching_draft", "single_stream"):
                     iterator = self.last_client.generate_stream(messages)
                     for event in iterator:
+                        from devcontext.execution import check_cancelled
+                        check_cancelled()
                         if event.type == "content":
                             if finish:
                                 raise StreamFailure("content after finish")

@@ -65,6 +65,8 @@ class ChatCompletionsLLMClient:
         taken as an argument, so the ``LLMClient`` protocol - and every test
         double that implements it - keeps its single-parameter shape.
         """
+        from devcontext.execution import check_cancelled
+        check_cancelled()
         check_fatal_request()
         started = time.perf_counter()
         self.last_usage = {}
