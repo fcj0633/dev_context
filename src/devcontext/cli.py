@@ -399,303 +399,92 @@ def _print_evidence_plan(plan: EvidencePlan) -> None:
     print(json.dumps(plan.to_dict(), ensure_ascii=False, indent=2))
 
 
-def _v3_client_factory(settings: Settings, factory):
-    def create():
-        client = factory()
-        if settings.llm_provider == "openai":
-            client.reasoning_effort = settings.openai_v3_reasoning_effort
-        return client
-    return create
+from devcontext.application.assembly import WorkflowFactory
+from devcontext.application import AskRequest, AskService, resolve_request
 
 
-def _profile_answer_factory(settings: Settings, *, planner=False):
-    return lambda: create_llm_client(settings, deepseek_client_type=DeepSeekLLMClient,
-        legacy_model=(settings.deepseek_answer_planner_model if planner else settings.deepseek_answer_model) or settings.deepseek_model,
-        requested_reasoning_effort=settings.answer_reasoning_effort or ("low" if settings.answer_profile == "fast" else "high"),
-        max_tokens=min(settings.model_capabilities().max_output_tokens, 32768 if settings.answer_profile == "full" else (8000 if planner else 16000)),
-        timeout_seconds=(settings.answer_full_planner_timeout_seconds if planner else settings.answer_full_writer_timeout_seconds) if settings.answer_profile == "full" else (settings.answer_planner_timeout_seconds if planner else settings.answer_writer_timeout_seconds),
-        json_mode=planner)
+def _v3_client_factory(*args, **kwargs):
+    return WorkflowFactory(globals())._v3_client_factory(*args, **kwargs)
 
 
-def _query_router(settings: Settings) -> QueryRouter:
-    return QueryRouter(
-        lambda: create_llm_client(
-        settings, deepseek_client_type=DeepSeekLLMClient,
-            legacy_model=settings.deepseek_model,
-            max_tokens=1024,
-        )
-    )
+def _profile_answer_factory(*args, **kwargs):
+    return WorkflowFactory(globals())._profile_answer_factory(*args, **kwargs)
 
 
-def _short_llm_factory(settings: Settings) -> Callable[[], LLMClient]:
-    return lambda: create_llm_client(
-        settings, deepseek_client_type=DeepSeekLLMClient,
-        legacy_model=settings.deepseek_model,
-        max_tokens=1024,
-    )
+def _query_router(*args, **kwargs):
+    return WorkflowFactory(globals())._query_router(*args, **kwargs)
 
 
-def _answer_client(settings: Settings, *, explain: bool = False) -> DeepSeekLLMClient:
-    return create_llm_client(
-        settings, deepseek_client_type=DeepSeekLLMClient,
-        legacy_model=settings.deepseek_answer_model or settings.deepseek_model,
-        reasoning_effort="high" if explain else "low",
-        max_tokens=EXPLAIN_ANSWER_MAX_TOKENS if explain else ANSWER_MAX_TOKENS,
-    )
+def _short_llm_factory(*args, **kwargs):
+    return WorkflowFactory(globals())._short_llm_factory(*args, **kwargs)
 
 
-def _planner_llm_factory(settings: Settings) -> Callable[[], LLMClient]:
-    return lambda: create_llm_client(
-        settings, deepseek_client_type=DeepSeekLLMClient,
-        legacy_model=settings.deepseek_planner_model or settings.deepseek_model,
-        reasoning_effort="low" if settings.llm_provider == "openai" else "high",
-        max_tokens=PLANNER_MAX_TOKENS,
-        timeout_seconds=120 if settings.answer_engine_enabled else (35 if settings.llm_provider == "openai" else 120),
-        json_mode=True,
-        **({"requested_reasoning_effort": "low"} if settings.answer_engine_enabled else {}),
-    )
+def _answer_client(*args, **kwargs):
+    return WorkflowFactory(globals())._answer_client(*args, **kwargs)
 
 
-def _rewrite_llm_factory(settings: Settings) -> Callable[[], LLMClient]:
-    return lambda: create_llm_client(
-        settings, deepseek_client_type=DeepSeekLLMClient,
-        legacy_model=settings.deepseek_model,
-        reasoning_effort="low",
-        max_tokens=REWRITE_MAX_TOKENS,
-        json_mode=True,
-        **({"requested_reasoning_effort": "low"} if settings.answer_engine_enabled else {}),
-    )
+def _planner_llm_factory(*args, **kwargs):
+    return WorkflowFactory(globals())._planner_llm_factory(*args, **kwargs)
 
 
-def _sub_question_sufficiency_factory(
-    settings: Settings,
-) -> Callable[[], LLMClient]:
-    return lambda: create_llm_client(
-        settings, deepseek_client_type=DeepSeekLLMClient,
-        legacy_model=settings.deepseek_model,
-        reasoning_effort="low",
-        max_tokens=SUB_QUESTION_SUFFICIENCY_MAX_TOKENS,
-        json_mode=True,
-        **({"requested_reasoning_effort": "low"} if settings.answer_engine_enabled else {}),
-    )
+def _rewrite_llm_factory(*args, **kwargs):
+    return WorkflowFactory(globals())._rewrite_llm_factory(*args, **kwargs)
 
 
-def _answer_planner_factory(settings: Settings) -> Callable[[], LLMClient]:
-    return lambda: create_llm_client(
-        settings, deepseek_client_type=DeepSeekLLMClient,
-        legacy_model=settings.deepseek_answer_planner_model or settings.deepseek_model,
-        reasoning_effort="high",
-        max_tokens=ANSWER_PLANNER_MAX_TOKENS,
-        json_mode=True,
-    )
+def _sub_question_sufficiency_factory(*args, **kwargs):
+    return WorkflowFactory(globals())._sub_question_sufficiency_factory(*args, **kwargs)
 
 
-def _reviewer_factory(settings: Settings) -> Callable[[], LLMClient]:
-    return lambda: create_llm_client(
-        settings, deepseek_client_type=DeepSeekLLMClient,
-        legacy_model=settings.deepseek_reviewer_model or settings.deepseek_model,
-        reasoning_effort="high",
-        max_tokens=REVIEWER_MAX_TOKENS,
-        json_mode=True,
-    )
+def _answer_planner_factory(*args, **kwargs):
+    return WorkflowFactory(globals())._answer_planner_factory(*args, **kwargs)
 
 
-def _explanation_planner_factory(settings: Settings) -> Callable[[], LLMClient]:
-    return lambda: create_llm_client(
-        settings, deepseek_client_type=DeepSeekLLMClient,
-        legacy_model=settings.deepseek_answer_planner_model or settings.deepseek_model,
-        reasoning_effort="high",
-        max_tokens=EXPLANATION_PLANNER_MAX_TOKENS,
-        json_mode=True,
-    )
+def _reviewer_factory(*args, **kwargs):
+    return WorkflowFactory(globals())._reviewer_factory(*args, **kwargs)
 
 
-def _teaching_writer_factory(settings: Settings) -> Callable[[], LLMClient]:
-    return lambda: create_llm_client(
-        settings, deepseek_client_type=DeepSeekLLMClient,
-        legacy_model=settings.deepseek_answer_model or settings.deepseek_model,
-        reasoning_effort="high",
-        max_tokens=TEACHING_ANSWER_MAX_TOKENS,
-    )
+def _explanation_planner_factory(*args, **kwargs):
+    return WorkflowFactory(globals())._explanation_planner_factory(*args, **kwargs)
 
 
-def _teaching_reviewer_factory(settings: Settings) -> Callable[[], LLMClient]:
-    return lambda: create_llm_client(
-        settings, deepseek_client_type=DeepSeekLLMClient,
-        legacy_model=settings.deepseek_reviewer_model or settings.deepseek_model,
-        reasoning_effort="high",
-        max_tokens=TEACHING_REVIEWER_MAX_TOKENS,
-        json_mode=True,
-    )
+def _teaching_writer_factory(*args, **kwargs):
+    return WorkflowFactory(globals())._teaching_writer_factory(*args, **kwargs)
 
 
-def _composer_factory(settings: Settings) -> Callable[[], LLMClient]:
-    return lambda: create_llm_client(
-        settings, deepseek_client_type=DeepSeekLLMClient,
-        legacy_model=settings.deepseek_answer_model or settings.deepseek_model,
-        reasoning_effort="high",
-        max_tokens=COMPOSER_MAX_TOKENS,
-    )
+def _teaching_reviewer_factory(*args, **kwargs):
+    return WorkflowFactory(globals())._teaching_reviewer_factory(*args, **kwargs)
 
 
-def _question_planner(settings: Settings) -> QuestionPlanner:
-    return QuestionPlanner(_planner_llm_factory(settings))
+def _composer_factory(*args, **kwargs):
+    return WorkflowFactory(globals())._composer_factory(*args, **kwargs)
 
 
-def _evidence_planner(settings: Settings) -> EvidencePlanner:
-    return EvidencePlanner(_planner_llm_factory(settings), full_teaching=settings.answer_engine_enabled and settings.answer_profile == "full")
+def _question_planner(*args, **kwargs):
+    return WorkflowFactory(globals())._question_planner(*args, **kwargs)
 
 
-def _answer_judge_factory(
-    settings: Settings, model: str | None = None
-) -> Callable[[], LLMClient]:
-    """The blind judge reads two long answers and emits a tiny verdict."""
-    return lambda: create_llm_client(
-        settings, deepseek_client_type=DeepSeekLLMClient,
-        model=model,
-        reasoning_effort="high",
-        max_tokens=JUDGE_MAX_TOKENS,
-        json_mode=True,
-    )
+def _evidence_planner(*args, **kwargs):
+    return WorkflowFactory(globals())._evidence_planner(*args, **kwargs)
 
 
-def _agentic_workflow(
-    settings: Settings,
-    builder: ContextBuilder,
-) -> AgenticRetrievalWorkflow:
-    short_llm_factory = _short_llm_factory(settings)
-    return AgenticRetrievalWorkflow(
-        router=_query_router(settings),
-        retrieval_policy=RetrievalPolicy(RetrievalService(settings)),
-        context_builder=builder,
-        sufficiency_checker=ContextSufficiencyChecker(short_llm_factory),
-        query_rewriter=TargetedQueryRewriter(_rewrite_llm_factory(settings)),
-        answer_generator_factory=lambda: AnswerGenerator(_answer_client(settings)),
-    )
+def _answer_judge_factory(*args, **kwargs):
+    return WorkflowFactory(globals())._answer_judge_factory(*args, **kwargs)
 
 
-def _planned_workflow(
-    settings: Settings,
-    planned_builder: ContextBuilder,
-    legacy_builder: ContextBuilder,
-    answer_mode: str = "legacy",
-    context_budget_override: int | None = None,
-    request_policy=None,
-) -> EvidenceDrivenWorkflow:
-    # Keep the builder arguments for one-cycle factory compatibility.  The new
-    # controller derives its budget from EvidencePlan complexity unless the
-    # caller explicitly supplies context_budget_override.
-    _ = planned_builder, legacy_builder
-    request_policy = request_policy or settings.answer_request_policy
-    controller = _retrieval_controller(settings)
-    teaching_workflow = None
-    if answer_mode == "teach":
-        # The teach path keeps its own client policy: its planner and its writer
-        # do different work from the explain path's, so sharing budgets and
-        # effort settings between them would just constrain both.
-        teaching_workflow = TeachingExplanationWorkflow(
-            ExplanationPlanner(_explanation_planner_factory(settings)),
-            TeachingWriter(_teaching_writer_factory(settings)),
-            SectionComposer(_composer_factory(settings)),
-            TeachingReviewer(_teaching_reviewer_factory(settings)),
-            capabilities=settings.model_capabilities(),
-            runtime_options=TeachingRuntimeOptions(settings.teaching_generation_mode),
-            micro_planner=MicroExplanationPlanner(_profile_answer_factory(settings, planner=True) if request_policy else _explanation_planner_factory(settings), settings.model_capabilities()),
-            streaming_writer=SingleStreamingTeachingWriter(_profile_answer_factory(settings) if request_policy else _teaching_writer_factory(settings), permissive=request_policy is not None),
-        )
-        if settings.teaching_generation_mode == "v3" or (request_policy and request_policy.profile == "full"):
-            from devcontext.explanation.v3.planner import TeachingPlannerV3
-            from devcontext.explanation.v3.writer import TeachingWriterV3
-            teaching_workflow.request_timeout_seconds = settings.teaching_request_timeout_seconds
-            teaching_workflow.v3_planner = TeachingPlannerV3(
-                _profile_answer_factory(settings, planner=True) if request_policy else _v3_client_factory(settings, _explanation_planner_factory(settings)), teaching_workflow.capabilities, teaching_workflow.estimator)
-            teaching_workflow.v3_writer = TeachingWriterV3(_profile_answer_factory(settings) if request_policy else _v3_client_factory(settings, _teaching_writer_factory(settings)), permissive=request_policy is not None)
-    return EvidenceDrivenWorkflow(
-        controller,
-        answer_generator_factory=lambda: AnswerGenerator(
-            _answer_client(settings, explain=answer_mode == "explain")
-        ),
-        answer_planner=AnswerPlanner(_answer_planner_factory(settings)),
-        answer_reviewer=AnswerReviewer(_reviewer_factory(settings)),
-        answer_mode=answer_mode,
-        context_budget_override=context_budget_override,
-        teaching_workflow=teaching_workflow,
-        request_policy=request_policy,
-    )
+def _agentic_workflow(*args, **kwargs):
+    return WorkflowFactory(globals())._agentic_workflow(*args, **kwargs)
 
 
-def _retrieval_controller(
-    settings: Settings,
-    *,
-    observer: RetrievalObserver | None = None,
-    frozen_case: dict | None = None,
-    frozen_plan: EvidencePlan | None = None,
-    shared_coverage_factory=None,
-) -> RetrievalEngine:
-    source_policy = SourcePolicy.from_file(
-        settings.source_policy_path or default_source_policy_path()
-    )
-    if frozen_case is None:
-        evidence_planner = _evidence_planner(settings)
-        action_planner = SearchActionPlanner(_rewrite_llm_factory(settings))
-        coverage_checker = CoverageChecker(
-            _sub_question_sufficiency_factory(settings)
-        )
-        if settings.answer_engine_enabled and settings.answer_profile == "fast" and frozen_plan is None:
-            from devcontext.agentic.fast import FastRetrievalPlanner, FastActionPlanner
-            evidence_planner = FastRetrievalPlanner(_planner_llm_factory(settings))
-            action_planner = FastActionPlanner(evidence_planner)
-            coverage_checker = CoverageChecker(_sub_question_sufficiency_factory(settings), max_attempts=1)
-    else:
-        evidence_planner = FrozenEvidencePlanner(frozen_case)
-        action_planner = FrozenSearchActionPlanner(frozen_case)
-        coverage_checker = OracleCoverageChecker(frozen_case)
-    if frozen_plan is not None:
-        from devcontext.agentic.retrieval_engine import FixedEvidencePlanner
-        evidence_planner = FixedEvidencePlanner(frozen_plan)
-    if shared_coverage_factory is not None:
-        coverage_checker = shared_coverage_factory()
-    from devcontext.agentic.structural_coverage import combined
-    from devcontext.code_graph.hydration import GraphMetadataHydrator
-    from devcontext.code_graph.store import CodeGraphStore
-    hydrator = GraphMetadataHydrator(CodeGraphStore(settings.database_url, settings.repository_name, settings.symbol_graph_query_timeout_seconds), "tool_agent" if settings.tool_agent_enabled else "auto_graph" if settings.symbol_graph_enabled else "fixed_search")
-    coverage_checker = combined(coverage_checker, hydrator)
-    if settings.tool_agent_enabled:
-        from devcontext.agentic.tool_driven_retrieval_controller import ToolDrivenRetrievalController
-        from devcontext.code_graph.store import CodeGraphStore
-        from devcontext.tool_agent.executor import ToolExecutor
-        from devcontext.tool_agent.planner import AgentPlanner
-        from devcontext.tool_agent.registry import ToolRegistry
-        from devcontext.tool_agent.runtime import AgentRuntime
-        from devcontext.tool_agent.tools import RepositoryTools
-        if shared_coverage_factory is None and frozen_case is None:
-            coverage_checker = combined(CoverageChecker(_sub_question_sufficiency_factory(settings), max_attempts=1), hydrator)
-        tools = RepositoryTools(RetrievalPolicy(RetrievalService(settings)),
-            CodeGraphStore(settings.database_url, settings.repository_name, settings.symbol_graph_query_timeout_seconds), observer)
-        factory = lambda: create_llm_client(settings, deepseek_client_type=DeepSeekLLMClient,
-            legacy_model=settings.deepseek_planner_model or settings.deepseek_model,
-            requested_reasoning_effort="low", max_tokens=8192, json_mode=True,
-            timeout_seconds=settings.tool_agent_planner_timeout_seconds)
-        return ToolDrivenRetrievalController(evidence_planner,
-            AgentRuntime(AgentPlanner(factory), ToolExecutor(ToolRegistry(tools)), coverage_checker, source_policy), observer)
-    return RetrievalController(
-        evidence_planner=evidence_planner,
-        action_planner=action_planner,
-        retrieval_policy=RetrievalPolicy(RetrievalService(settings)),
-        coverage_checker=coverage_checker,
-        source_policy=source_policy,
-        observer=observer,
-        graph_expander=_code_graph_expander(settings),
-    )
+def _planned_workflow(*args, **kwargs):
+    return WorkflowFactory(globals())._planned_workflow(*args, **kwargs)
 
 
-def _code_graph_expander(settings: Settings):
-    if not settings.symbol_graph_enabled:
-        return None
-    from devcontext.code_graph.expansion import CodeGraphExpander
-    from devcontext.code_graph.store import CodeGraphStore
-    return CodeGraphExpander(CodeGraphStore(settings.database_url, settings.repository_name,
-                                           settings.symbol_graph_query_timeout_seconds))
+def _retrieval_controller(*args, **kwargs):
+    return WorkflowFactory(globals())._retrieval_controller(*args, **kwargs)
+
+
+def _code_graph_expander(*args, **kwargs):
+    return WorkflowFactory(globals())._code_graph_expander(*args, **kwargs)
 
 
 def _budget(args: argparse.Namespace, *, planned: bool) -> tuple[int, int]:
@@ -803,28 +592,9 @@ def main(argv: list[str] | None = None) -> int:
     try:
         request_policy = None
         if args.command == "ask":
-            from devcontext.answer_policy import resolve_policy
-            mapping = {"single_stream": "fast", "v3": "full"}
-            engine = args.teaching_generation_mode
-            new_controls = args.profile is not None or args.reasoning_effort is not None
-            if new_controls and (args.answer_mode != "teach" or engine == "multi_pass" or args.no_plan or args.plan_only):
-                raise ValueError("--profile/--reasoning-effort conflict with legacy/explain/multi_pass or plan-only/no-plan")
-            if engine in mapping and args.profile is not None and mapping[engine] != args.profile:
-                raise ValueError("--profile conflicts with --teaching-generation-mode")
-            if args.answer_mode == "teach" and engine != "multi_pass" and not args.no_plan and not args.plan_only:
-                request_policy = resolve_policy(args.query, settings, profile=args.profile or mapping.get(engine),
-                    reasoning_effort=args.reasoning_effort, hard_timeout=args.hard_timeout)
-                settings = settings.model_copy(update={"answer_engine_enabled": True, "answer_profile": request_policy.profile,
-                    "answer_reasoning_effort": request_policy.reasoning_effort,
-                    "answer_request_policy": request_policy,
-                    "teaching_generation_mode": "single_stream" if request_policy.profile == "fast" else "v3"})
+            settings, request_policy = resolve_request(settings, AskRequest.from_cli(args))
+            if request_policy is not None:
                 args._answer_engine_enabled = True
-            elif args.hard_timeout is not None:
-                raise ValueError("--hard-timeout requires the Fast/Full answering workflow")
-        if args.command == "ask" and args.teaching_generation_mode is not None:
-            if args.answer_mode != "teach" or args.no_plan or args.plan_only:
-                raise ValueError("--teaching-generation-mode requires the teach answering workflow")
-            settings = settings.model_copy(update={"teaching_generation_mode": args.teaching_generation_mode})
         if args.command == "init-db":
             ChunkStore(settings.database_url).initialize()
             print("Database schema is ready.")
@@ -924,9 +694,8 @@ def main(argv: list[str] | None = None) -> int:
                 top_k, max_chars = _budget(args, planned=False)
 
                 def run_legacy() -> AgenticAnswerResult:
-                    return _agentic_workflow(
-                        settings, ContextBuilder(max_chars=max_chars)
-                    ).run(args.query, top_k)
+                    return AskService(settings, legacy_factory=_agentic_workflow).ask(
+                        AskRequest(args.query, answer_mode="legacy", no_plan=True, top_k=top_k, max_chars=max_chars), configure=False)
 
                 result, reports = _run_ask(
                     run_legacy, args=args, top_k=top_k, answer_mode="legacy"
@@ -948,16 +717,13 @@ def main(argv: list[str] | None = None) -> int:
                 def run_planned() -> AgenticAnswerResult:
                     # Rebuilt per repetition: samples share an interpreter, not
                     # mutable workflow state.
-                    workflow = _planned_workflow(
-                        settings,
-                        ContextBuilder(max_chars=max_chars),
-                        ContextBuilder(max_chars=legacy_max_chars),
-                        args.answer_mode,
-                        args.max_chars,
+                    return AskService(settings, workflow_factory=_planned_workflow).ask(
+                        AskRequest(args.query, answer_mode=args.answer_mode, top_k=top_k,
+                                   max_chars=args.max_chars, legacy_max_chars=legacy_max_chars),
+                        on_section=publish_section if request_policy is not None or
+                            (settings.teaching_generation_mode == "v3" and args.answer_mode == "teach") else None,
+                        configure=False,
                     )
-                    if request_policy is not None or (settings.teaching_generation_mode == "v3" and args.answer_mode == "teach"):
-                        return workflow.run(args.query, top_k, on_section=publish_section)
-                    return workflow.run(args.query, top_k)
 
                 result, reports = _run_ask(
                     run_planned, args=args, top_k=top_k,

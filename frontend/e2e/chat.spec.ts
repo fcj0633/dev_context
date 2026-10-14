@@ -1,0 +1,51 @@
+import { expect, test } from '@playwright/test'
+
+test('Fast and Full preserve history, streamed chapters and real evidence', async ({ page }) => {
+  await page.goto('/')
+  await expect(page.getByRole('heading', { name: '从代码出发， 把设计想明白。' })).toBeVisible()
+  await page.getByRole('textbox', { name: '输入问题' }).fill('first question')
+  await page.getByRole('button', { name: '发送问题', exact: true }).click()
+  await expect(page.getByText('已完成', { exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '实现解释 2' })).toBeVisible()
+  await page.getByRole('button', { name: '查看证据 E1' }).first().click()
+  await expect(page.getByRole('dialog')).toContainText('Order.java')
+  await expect(page.getByRole('dialog')).toContainText('void order() {}')
+  await page.getByRole('button', { name: '关闭证据' }).click()
+  await page.reload()
+  await expect(page.getByRole('heading', { name: '实现解释 2' })).toBeVisible()
+  await page.getByLabel('回答模式').selectOption('full')
+  await page.getByRole('textbox', { name: '输入问题' }).fill('second question')
+  await page.getByRole('button', { name: '发送问题', exact: true }).click()
+  await expect(page.getByText('已完成', { exact: true })).toHaveCount(2)
+  await page.screenshot({ path: 'test-results/chat-desktop.png', fullPage: true })
+})
+
+test('cancel, failure and partial answers have clear states', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('textbox', { name: '输入问题' }).fill('slow')
+  await page.getByRole('button', { name: '发送问题', exact: true }).click()
+  await expect(page.getByRole('button', { name: '停止生成' })).toBeVisible()
+  await page.getByRole('button', { name: '停止生成' }).click()
+  await expect(page.getByText('已停止', { exact: true })).toBeVisible()
+  for (const [query, status] of [['fail', '执行失败'], ['partial', '部分回答']]) {
+    await page.getByRole('textbox', { name: '输入问题' }).fill(query)
+    await page.getByRole('button', { name: '发送问题', exact: true }).click()
+    await expect(page.getByText(status, { exact: true })).toBeVisible()
+  }
+})
+
+test('network disconnection does not cancel a run and mobile layout fits', async ({ page, context }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.goto('/')
+  await page.getByRole('textbox', { name: '输入问题' }).fill('slow')
+  await page.getByRole('button', { name: '发送问题', exact: true }).click()
+  await expect(page.getByRole('button', { name: '停止生成' })).toBeVisible()
+  await context.setOffline(true)
+  await page.waitForTimeout(4500)
+  await context.setOffline(false)
+  await expect(page.getByText('已完成', { exact: true })).toBeVisible({ timeout: 15000 })
+  await page.reload()
+  await expect(page.getByRole('heading', { name: '实现解释 2' })).toBeVisible()
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+  await page.screenshot({ path: 'test-results/chat-mobile.png', fullPage: true })
+})

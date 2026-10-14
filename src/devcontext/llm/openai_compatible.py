@@ -80,6 +80,8 @@ class OpenAICompatibleLLMClient(ChatCompletionsLLMClient):
         started = time.perf_counter()
         try:
             for event in parse_sse(source):
+                from devcontext.execution import check_cancelled
+                check_cancelled()
                 if event.type == "content":
                     parts.append(prefix.feed(event.text))
                 elif event.type == "usage":

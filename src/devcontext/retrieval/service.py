@@ -34,6 +34,8 @@ class RetrievalService:
         *,
         source_type: str | None = None,
     ) -> SearchExecution:
+        from devcontext.execution import check_cancelled
+        check_cancelled()
         total_started = time.perf_counter()
         if not query.strip():
             raise ValueError("Query must not be empty")

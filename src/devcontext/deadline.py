@@ -13,6 +13,8 @@ class RequestDeadlineExceeded(TimeoutError):
 
 
 def remaining_seconds() -> float | None:
+    from devcontext.execution import check_cancelled
+    check_cancelled()
     value = _deadline.get()
     if value is None:
         return None

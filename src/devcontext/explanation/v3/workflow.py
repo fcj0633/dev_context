@@ -64,6 +64,8 @@ def run_v3(host, request, package, *, on_section=None):
             if hasattr(host.v3_writer, "capabilities"):
                 host.v3_writer.capabilities = host.capabilities
                 host.v3_writer.estimator = host.estimator
+            from devcontext.execution import publish_evidence
+            publish_evidence(pack.bundle)
             sections, trace = host.v3_writer.write(request.original_query, blueprint, pack, budget,
                 request_started=started, on_section=on_section, messages=messages)
             stages.append(_stage("teaching_draft", t, "llm", host.v3_writer.last_client, "high"))
@@ -84,6 +86,8 @@ def run_v3(host, request, package, *, on_section=None):
             fallback_client = None
             try:
                 remaining_seconds()
+                from devcontext.execution import publish_evidence
+                publish_evidence(pack.bundle if pack else package.context_bundle)
                 sections, trace, fallback_client = write_direct(host.v3_writer.client_factory, request, package, pack,
                     host.capabilities, host.estimator, started=started, on_section=on_section)
                 trace["fallback_reason"] = fallback_reason

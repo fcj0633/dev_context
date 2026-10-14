@@ -52,6 +52,8 @@ class TeachingWriterV3:
                 with llm_stage("teaching_draft", "v3"):
                     iterator = self.last_client.generate_stream(messages)
                     for event in iterator:
+                        from devcontext.execution import check_cancelled
+                        check_cancelled()
                         remaining_seconds()
                         if event.type == "content":
                             raw_parts.append(event.text)

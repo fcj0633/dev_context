@@ -8,10 +8,10 @@ DevContext 从 Java 源码和 Markdown 文档中建立知识索引，结合代�
 
 | 目录 | 当前功能 | 使用方式 |
 |---|---|---|
-| `D:\Java-learning\DevContext` | CLI / V5 Tool Agent；本目录没有 Web 服务入口 | 命令行搜索、问答、索引和评测 |
+| `D:\Java-learning\DevContext` | CLI / V5 Tool Agent + Web UI | 命令行搜索、问答、索引和评测 |
 | `D:\Java-learning\DevContext-web-ui-v1` | CLI + Web UI V1，分支 `codex/web-ui-v1` | 浏览器聊天、历史会话、执行记录和证据查看 |
 
-**使用上一轮实现的 Web UI，请进入 `DevContext-web-ui-v1`。** Web 改动仍在独立工作树中，不能在本目录直接运行 `devcontext-web`。详细 Web 协议和验收文档位于该工作树的 `docs/web/`。
+**本目录已整合 Web UI，CLI 和 Web 均可用。** 原 Web 工作树保留历史版本。详细说明见 [Web 接口与事件协议](docs/web/README.md)和[验收报告](docs/web/test-report.md)。
 
 以下命令以 Windows PowerShell 为例。执行 Python 命令时应在实际使用的工作树根目录，确保读取正确的 `.env`。
 
@@ -20,7 +20,7 @@ DevContext 从 Java 源码和 Markdown 文档中建立知识索引，结合代�
 已有 Python 环境、模型配置、数据库索引和前端构建产物时，启动 Web：
 
 ```powershell
-cd D:\Java-learning\DevContext-web-ui-v1
+cd D:\Java-learning\DevContext
 docker compose up -d
 uv run --extra web devcontext-web
 ```
@@ -59,7 +59,7 @@ Docker 使用 `pgvector/pgvector:0.8.6-pg18-bookworm`，容器名 `devcontext-po
 ```powershell
 cd D:\Java-learning\DevContext
 # 使用 Web 时，将上一行替换为：
-# cd D:\Java-learning\DevContext-web-ui-v1
+# cd D:\Java-learning\DevContext
 
 .\scripts\bootstrap.ps1
 if (-not (Test-Path -LiteralPath .env)) {
@@ -277,7 +277,7 @@ context 在路由不明确时也可能调用分类模型。关系查询 callers/
 ### 6.1 首次构建或更新前端后
 
 ```powershell
-cd D:\Java-learning\DevContext-web-ui-v1
+cd D:\Java-learning\DevContext
 uv sync --locked --extra web --extra dev
 cd frontend
 npm ci
@@ -296,13 +296,13 @@ uv run --extra web devcontext-web
 
 ```powershell
 # 终端一。
-cd D:\Java-learning\DevContext-web-ui-v1
+cd D:\Java-learning\DevContext
 uv run --extra web devcontext-web
 ```
 
 ```powershell
 # 终端二。
-cd D:\Java-learning\DevContext-web-ui-v1\frontend
+cd D:\Java-learning\DevContext\frontend
 npm run dev
 ```
 
