@@ -1,419 +1,395 @@
-# DevContext-Java
+# DevContext：配置、启动与使用
 
-DevContext-Java 从 `my12306` 的 Java 源码和 Markdown 项目文档中提取结构化片段，使用 PostgreSQL/pgvector 建立关键词、向量和混合检索，并基于带引用的 Context 生成可追溯答案。系统不会修改源项目。
+DevContext 从 Java 源码和 Markdown 文档中建立知识索引，结合代码符号关系和真实证据解释项目实现。当前目标项目是 `my12306`；外部代码和文档只读，索引、缓存及运行记录写入本项目或数据库。
 
-## 数据源
+## 1. 先确认使用哪个目录
 
-- 代码：`D:\Java-learning\12306Project\12306\my12306`
-- 文档：`D:\Java-learning\12306Project\docs`
-- `参考项目` 不读取、不索引。
+本机有两个独立工作树，Python 环境与 `.env` 各自独立：
 
-两个数据源均为只读；索引和运行产物只写入本项目与 Docker 数据卷。
+| 目录 | 当前功能 | 使用方式 |
+|---|---|---|
+| `D:\Java-learning\DevContext` | CLI / V5 Tool Agent；本目录没有 Web 服务入口 | 命令行搜索、问答、索引和评测 |
+| `D:\Java-learning\DevContext-web-ui-v1` | CLI + Web UI V1，分支 `codex/web-ui-v1` | 浏览器聊天、历史会话、执行记录和证据查看 |
 
-## 快速开始
+**使用上一轮实现的 Web UI，请进入 `DevContext-web-ui-v1`。** Web 改动仍在独立工作树中，不能在本目录直接运行 `devcontext-web`。详细 Web 协议和验收文档位于该工作树的 `docs/web/`。
 
-要求：Java 21、Maven、Docker Desktop 和已配置的 `DASHSCOPE_API_KEY`。
+以下命令以 Windows PowerShell 为例。执行 Python 命令时应在实际使用的工作树根目录，确保读取正确的 `.env`。
 
-> **本机开着 VPN 时，必须把阿里云域名排除出代理。** Hiddify 这类工具会设置 `HTTP_PROXY` / `HTTPS_PROXY`，而经代理访问 `dashscope.aliyuncs.com` 会在 TLS 握手阶段失败（报 `schannel: failed to receive handshake`，Embedding 调用随即报错）。
->
-> 解决办法是把它加进 `NO_PROXY`，**不需要改代码**：
->
-> ```powershell
-> setx NO_PROXY "localhost,127.0.0.1,::1,.local,.aliyuncs.com"
-> ```
->
-> 只排除阿里云域名、保留 DeepSeek 继续走代理是有意的——DeepSeek 经代理访问正常，全量关掉代理反而会引入新问题。设置后需重开终端。注意 **curl 优先读小写 `no_proxy`**：如果环境里同时存在该变量，不要在只设大写时把它留成空值，否则绕过会失效。
+## 2. 已经配置好：日常启动
+
+已有 Python 环境、模型配置、数据库索引和前端构建产物时，启动 Web：
+
+```powershell
+cd D:\Java-learning\DevContext-web-ui-v1
+docker compose up -d
+uv run --extra web devcontext-web
+```
+
+打开 [http://127.0.0.1:8000](http://127.0.0.1:8000)。保持服务终端运行，按 `Ctrl+C` 停止。已有服务占用 8000 时直接访问它，或按第 6 节更换端口。
+
+只使用 CLI：
 
 ```powershell
 cd D:\Java-learning\DevContext
-.\scripts\bootstrap.ps1
 docker compose up -d
+uv run devcontext ask "OrderServiceImpl.createTicketOrder 主要负责什么？"
+uv run devcontext ask "详细解释购票库存与订单的一致性如何保证。" --profile full
+```
+
+已有索引时，日常启动不用重复执行 `init-db` 或 `ingest`。CLI 单次命令执行后退出，不依赖后台 Web 服务；Web 工作树也支持这些 CLI 命令。
+
+## 3. 首次安装与初始化
+
+### 3.1 环境要求
+
+| 环境 | 要求与用途 |
+|---|---|
+| Python + uv | Python 3.13，仓库锁定 3.13.15；bootstrap 可准备项目内 Python 和依赖 |
+| Docker Desktop | 运行 PostgreSQL/pgvector；Docker Compose 可用，5432 端口空闲 |
+| JDK + Maven | JDK 21+，Maven 在 PATH；首次索引与重建时分析 Java 源码及符号图 |
+| curl | `curl.exe` 或 `curl` 在 PATH；文本模型和默认 Embedding 传输需要 |
+| Node.js + npm | Node.js 22.12+ 或 24.x；仅 Web 前端构建、开发和测试需要 |
+
+Docker 使用 `pgvector/pgvector:0.8.6-pg18-bookworm`，容器名 `devcontext-postgres`，映射本机 5432，数据保存在 Docker 命名卷。
+
+### 3.2 准备环境和 .env
+
+选择对应工作树进入，再运行：
+
+```powershell
+cd D:\Java-learning\DevContext
+# 使用 Web 时，将上一行替换为：
+# cd D:\Java-learning\DevContext-web-ui-v1
+
+.\scripts\bootstrap.ps1
+if (-not (Test-Path -LiteralPath .env)) {
+    Copy-Item -LiteralPath .env.example -Destination .env
+}
+```
+
+bootstrap 准备 uv、项目内 Python、`.venv` 和开发依赖。接着编辑 `.env`，按第 4 节配置来源路径、数据库和模型。已有 `.env` 请保留，示例文件不是本机生效配置。
+
+CLI 工作树安装依赖：
+
+```powershell
+uv sync --locked --extra dev
+```
+
+Web 工作树安装依赖：
+
+```powershell
+uv sync --locked --extra web --extra dev
+```
+
+Windows 上 uv 若报“无法将文件移到不同磁盘”，使用 bootstrap 的项目内 Python 安装，或用 `uv sync --python '已有Python3.13的python.exe完整路径' --extra dev` 指定已有解释器；Web 再加 `--extra web`。
+
+### 3.3 建立知识索引
+
+确保配置的源码、文档目录均存在，已设置百炼密钥：
+
+```powershell
+docker compose up -d
+docker compose ps
 uv run devcontext init-db
 uv run devcontext smoke-api
 uv run devcontext ingest
 ```
 
-搜索示例：
+- `init-db`：创建或补齐数据库扩展、表和索引。
+- `smoke-api`：验证百炼 Embedding，不能代替文字模型连接验证。
+- `ingest`：通过 JavaParser 解析源码及符号图、解析 Markdown、生成向量，再替换当前仓库的知识快照。Java 解析器会自动调用 Maven 构建。
+
+入库要求代码、文档两类来源均非空。`ingest` 可能产生 Embedding 费用；内容未变化时可复用 `artifacts/embedding-cache.jsonl`，但仍是全量快照重建，不是增量索引。
+
+验证索引和文字模型：
 
 ```powershell
-uv run devcontext search --strategy keyword --query "purchaseTicket" --top-k 10
-uv run devcontext search --strategy vector --query "为什么使用余票令牌桶" --top-k 10
-uv run devcontext search --strategy hybrid --query "为什么缩短事务边界，相关实现在哪里" --top-k 10
-uv run devcontext context "购票事务是如何实现的？" --top-k 5
-uv run devcontext context "订单关闭的代码和设计依据" --top-k 10 --max-chars 8000
-uv run devcontext ask "OrderServiceImpl.createTicketOrder 如何保证事务和幂等？" --top-k 5
-uv run devcontext ask "订单超时关闭的设计依据是什么？" --top-k 10 --max-chars 8000
-uv run devcontext ask "购票库存参数由哪个责任链 handler 校验，为什么要先挡掉非法请求？" --debug
-uv run devcontext ask "详细解释当前购票占座的数据一致性是如何保证的" --answer-mode explain --debug
-uv run devcontext ask "详细解释项目的余票桶是如何设计的" --answer-mode teach --debug
+uv run devcontext search --strategy keyword --query "createTicketOrder" --top-k 5
+uv run devcontext ask "OrderServiceImpl.createTicketOrder 方法在哪个文件，主要负责什么？" --profile fast
 ```
 
-`--answer-mode` 三种取值的差别、以及 `teach` 为什么更贵，见下文 Teaching Explain。
+源码、文档内容或来源路径变化后，应重新 ingest。仅切换文字模型无需重建索引；切换 Embedding 模型需要重建。当前数据库列为 `VECTOR(1024)`，不要只修改向量维度而忽略 schema。
 
-运行测试与评测：
+## 4. 当前配置如何填写
+
+### 4.1 配置读取与优先级
+
+普通配置按 **进程环境变量 > 当前工作目录的 .env > 代码默认值** 读取。支持的 CLI 参数覆盖对应请求选项，例如 `--profile full`。
+
+只有 `CHATGPT_API_KEY`、`OPENAI_BASE_URL` 另有 Windows 用户/系统环境变量兜底读取；其他密钥没有该额外逻辑。设置永久环境变量后通常需要重开终端。`.env` 已被 Git 忽略。
+
+Web 的 `DEVCONTEXT_WEB_*` 直接读取启动进程环境，不通过 Settings 从 `.env` 加载；请用第 6 节的 `$env:` 设置并重启服务。
+
+### 4.2 数据源与数据库
+
+`.env` 示例，路径可使用正斜杠：
+
+```dotenv
+DEVCONTEXT_CODE_ROOT=D:/Java-learning/12306Project/12306/my12306
+DEVCONTEXT_DOC_ROOT=D:/Java-learning/12306Project/docs
+REPOSITORY_NAME=my12306
+
+POSTGRES_DB=devcontext
+POSTGRES_USER=devcontext
+POSTGRES_PASSWORD=devcontext_dev
+DATABASE_URL=postgresql://devcontext:devcontext_dev@localhost:5432/devcontext
+```
+
+| 配置 | 含义 |
+|---|---|
+| `DEVCONTEXT_CODE_ROOT` | 被分析的 Java 项目根目录，不是 DevContext 自己的目录 |
+| `DEVCONTEXT_DOC_ROOT` | 被索引的 Markdown 文档目录 |
+| `REPOSITORY_NAME` | 数据库中的仓库标识，默认 my12306；入库和查询需一致 |
+| `POSTGRES_*` | Compose 首次创建数据库使用的名称、用户和密码 |
+| `DATABASE_URL` | Python 实际连接地址，须与数据库凭据一致 |
+
+上述密码是仓库自带的本地开发示例。更改 `POSTGRES_PASSWORD` 不会自动修改已有数据卷中的数据库用户密码；已有数据库需同步修改用户凭据和 `DATABASE_URL`。
+
+### 4.3 Embedding：两种文字模型方案都需要
+
+```dotenv
+DASHSCOPE_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+EMBEDDING_MODEL=text-embedding-v4
+EMBEDDING_DIMENSIONS=1024
+EMBEDDING_TRANSPORT=curl
+```
+
+当前终端设置密钥：
 
 ```powershell
-uv run pytest
-mvn -q -f java-parser\pom.xml test
-uv run devcontext evaluate
-uv run devcontext evaluate --benchmark benchmark\cases.jsonl --baseline benchmark\baselines\retrieval-v1.json
-uv run devcontext evaluate-retrieval-workflow
-uv run devcontext evaluate-retrieval-workflow --suite regression --mode frozen
-uv run devcontext evaluate-retrieval-workflow --suite l1.5 --mode live --runs 3
+$env:DASHSCOPE_API_KEY = '替换为你的百炼密钥'
 ```
 
-## 命令
+Embedding 用于入库、vector/hybrid 检索。keyword 搜索只读数据库。传输支持 curl、openai、auto，默认 curl；此处 openai 指 SDK 传输方式，不是文字模型供应商。
 
-| 命令 | 用途 |
-|---|---|
-| `devcontext init-db` | 创建扩展、表和索引 |
-| `devcontext smoke-api` | 验证百炼连接及 1024 维输出 |
-| `devcontext ingest` | 全量重建 `my12306` 索引 |
-| `devcontext search` | 运行关键词、向量或混合检索 |
-| `devcontext context` | 按问题类型检索证据，并构建带 `[C1]` 引用和字符预算的 LLM-ready Context |
-| `devcontext ask` | 按问题类型检索，检查证据充分性，必要时定向改写并有限重试，最后生成带 Citation 的回答。`--answer-mode` 取 `legacy`（模板式单次生成）、`explain`（证据驱动）或 `teach`（规划、逐节生成、编排、审稿）；正文按理解任务自适应展开，不提供四档回答深度配置 |
-| `devcontext evaluate` | 运行 36 条分层基准问题，输出 Router Accuracy、分类指标、分段耗时、失败诊断和策略差异 |
-| `devcontext evaluate-retrieval-workflow` | 运行 18 条 L1.5 与 5 条关键回归案例，评估 RetrievalController 的证据覆盖、False READY、Context 保留和二次补查效果 |
+### 4.4 文字模型 A：DeepSeek
 
-`devcontext evaluate` 是 L1 固定 Query 底层检索回归：评测集由 CODE、DOC、MIXED 各 12 条组成，统计 Recall@3/@5/@10/@20、Full-case Success@3/@5/@10/@20、CODE/DOC hit、MIXED both-sources hit，并在 routed Top5 失败时区分 `RETRIEVAL_MISS`、`RANKING_MISS` 和 `COMPOSITION_MISS`。它只评估 keyword、vector、hybrid 和旧 routed 策略，不评估 EvidencePlanner、SearchActionPlanner、CoverageChecker 或 EvidencePackage，因此不能代表当前证据驱动链路的端到端质量。详细 Top20 排名写入 `artifacts/`，精简基线位于 `benchmark/baselines/retrieval-v1.json`；只有 benchmark 哈希一致时才进行前后对比。
+`.env`：
 
-`devcontext evaluate-retrieval-workflow` 是 L1.5 工作流评测。默认以冻结 EvidencePlan、冻结 SearchAction 和确定性 Oracle Coverage 运行真实 RetrievalPolicy、EvidencePool 与 ContextBuilder；`--mode live` 改为运行真实 LLM 规划与覆盖检查，但最终质量仍由人工 Ground Truth 独立评分。报告包含 Full-case Success、CORE Requirement Coverage、False READY、Context Survival、Second-round Rescue、状态准确率、动作数量、阶段延迟和 Token。第一版硬门槛只有执行错误为 0、False READY 为 0；其余指标先建立真实基线。`--suite regression` 会让 5 条关键问题真实运行到 EvidencePackage，而不是只检查 JSON 格式。
+```dotenv
+LLM_PROVIDER=deepseek
+DEEPSEEK_BASE_URL=https://api.deepseek.com
+DEEPSEEK_MODEL=deepseek-flash
+```
 
-## Context Builder V1
+当前终端：
 
-`devcontext context` 将 Router + Retrieval Policy 返回的 Top-K 结果转换为结构化 Context。默认字符预算为 6000，预算包含 Citation 元数据、正文和条目分隔符；输出会展示 Java 文件与行号，或 Markdown 文件与完整标题层级。相同 Chunk 按数据库 ID 去重，输入同时包含 CODE 和 DOCUMENT 且预算允许时会优先保留两类证据。该命令只构建 Context，不调用答案生成模型；但规则无法判断问题类型时可能调用一次短 LLM Router。
+```powershell
+$env:DEEPSEEK_API_KEY = '替换为你的 DeepSeek 密钥'
+```
 
-Context Builder 的后续方向包括 tokenizer 预算、语义去重、相邻 Chunk 合并、Parent Context、动态来源配额、意图识别、二次检索、Query Rewrite 和 Reranker；这些能力不属于 Context Builder V1。
+可选角色模型为 `DEEPSEEK_PLANNER_MODEL`、`DEEPSEEK_ANSWER_PLANNER_MODEL`、`DEEPSEEK_ANSWER_MODEL`、`DEEPSEEK_REVIEWER_MODEL`；不设置时沿用 `DEEPSEEK_MODEL`。
 
-## LLM Answer + Citation V1
+### 4.5 文字模型 B：OpenAI-compatible 网关
 
-`devcontext ask` 的兼容路径执行 Query Router → Retrieval Policy → Context Builder → Context Sufficiency → DeepSeek。模型只能根据当前 Context 回答，并使用 `[C1]` 等引用；程序会提取引用、拒绝不存在的 Citation，并根据 `ContextBundle` 中的真实元数据打印 Sources。最终 Context 为空时不调用答案模型。兼容路径默认使用 `deepseek-flash`、低强度思考、8192 token 单次答案生成上限、Top 5 和 6000 字符 Context 预算；任何非正常结束的生成结果都会被拒绝。API Key 只从 `DEEPSEEK_API_KEY` 用户环境变量读取。
+`.env`：
 
-## Evidence-driven Explain
+```dotenv
+LLM_PROVIDER=openai
+OPENAI_MODEL=gpt-6.1-sol
+OPENAI_CONTEXT_WINDOW=131072
+OPENAI_MAX_OUTPUT_TOKENS=32768
+```
 
-`ask --answer-mode explain` 启用“先找事实、再设计回答”的证据驱动路径。输入层只校验原始问题、回答模式和显式 Context 预算；Evidence Planner 随后把原问题转换为 1–6 条可验证的证据需求。每条需求只描述要确认的项目事实、满足条件、优先级、时间范围和所需来源，不包含搜索 Query、回答目标、解释策略或章节结构。`--plan-only` 默认展示这一版 EvidencePlan；兼容期可用 `--plan-format legacy` 查看旧 QuestionPlan。
+当前终端：
 
-Retrieval Controller 根据每条证据需求动态生成 SearchAction，并只调用系统已有的 keyword、vector、hybrid 与来源过滤能力。CORE 和 SUPPORTING 需求第一轮分别取得 5 个和 3 个候选；Coverage Checker 逐条检查来源与语义是否满足，只有仍为 PARTIAL 或 MISSING 的 CORE 才能执行第二条查询。第二轮会利用第一轮真实发现的类名、方法名、文件名、标题和明确缺口调整查询。单次请求最多 6 条需求、12 个逻辑 SearchAction 和两轮 Coverage 检查；检查器自身失败记为 UNVERIFIED，不冒充“没有证据”，也不会触发盲目补查。
+```powershell
+$env:CHATGPT_API_KEY = '替换为你的网关密钥'
+$env:OPENAI_BASE_URL = 'https://你的网关地址/v1'
+```
 
-检索 Context 预算由证据计划复杂度决定，而不是由回答深度决定：单条且非双来源需求使用 8000 字符，2–3 条需求或存在一条 BOTH 使用 16000 字符，4–6 条需求或存在多条 BOTH/当前核心需求使用 28000 字符；显式 `--max-chars` 优先。正文篇幅由理解任务决定，不以固定深度档位改变检索范围。
+须同时配置密钥、兼容 API 地址和网关实际支持的模型；模型名、上下文窗口、输出上限以实际服务能力为准。这一路径使用 `OPENAI_MODEL`，不继承 DeepSeek 角色模型。
 
-> 上面这套字符预算是 `legacy` 与 `explain` 两条路径的口径，保留不变以便与既有基线对比。`teach` 路径不走它——它从模型窗口推导每个视图的上限，见下文 Teaching Explain。
+仅设置 CHATGPT_API_KEY 不会切换供应商，必须设置 `LLM_PROVIDER=openai`。调用失败不会自动换供应商。无论选择 A 或 B，百炼 Embedding 都独立配置。
 
-检索期间，找到的全部证据写入 **EvidenceWorkspace**，并同时冻结成不可追加的 EvidencePackage。两者分工是：Workspace 持有证据本体（不受任何 prompt 预算限制），Package 固定证据与需求的归属、逐条 Coverage、未解决需求和查询历史。形成 Package 后，Answer Planner、答案生成器与 Reviewer 均不得再次搜索或更改 Coverage。
+以上密钥均为占位符。需要跨终端保存时，可用 `[Environment]::SetEnvironmentVariable('变量名', '你的值', 'User')`，再重开终端；也可以在本机 `.env` 填写对应变量。
 
-**Coverage 判定读的是 Workspace，不是回答用的 Context。** 这一点是刻意设计的：早前的实现让 Coverage 读那份已被字符预算截断的 ContextBundle，于是一条需求可能只因为"它的证据被回答预算挤掉了"就被判为 MISSING——把呈现层的取舍误报成检索的缺失。现在 Coverage 通过 requirement-scoped 视图读 Workspace，与回答预算无关。
+### 4.6 回答策略、思考档位与超时
 
-上一条还有一个连带修正：**第二轮检索的种子也改从 Workspace 取**，不再读被截断的 Context。否则第一轮被截断丢掉的类名或方法名，在第二轮再也拿不回来。
-
-Package 的状态为 READY、PARTIAL、EMPTY 或 RETRIEVAL_FAILED：全部核心需求满足才是 READY；有可用证据但仍有核心缺口是 PARTIAL；没有直接项目证据则是 EMPTY；**检索本身没跑成**（本轮所有 SearchAction 都报错）是 RETRIEVAL_FAILED。最后一种单列，是因为把"接口不可达"说成"项目里没有这份证据"是一句更强、也是错误的话。
-
-文档来源由 `config/source-policy.json` 按路径规则标记为验证报告、当前设计、普通文档、历史计划或未知来源；代码固定标记为当前实现。这些标记进入内部 Context、Answer Planner 和 `--debug` Trace，普通回答不会显示优先级。设计说明只能证明设计意图，历史或未来文档不能覆盖当前代码；无法消解的冲突必须在回答中明确说明。
-
-Answer Planner 在 EvidencePackage 形成后决定回答目标、解释策略和章节。旧显式 explain 路径根据章节复杂度、冲突和结构问题决定审阅；Fast/Full 没有 Reviewer。审稿失败保留原草稿，不阻断回答。最终 `AnswerResult` 仍保持原结构并剥离 Citation，`--debug` 会显示证据计划、SearchAction、Coverage、回答规划、冲突、审稿、来源及阶段耗时。
-
-**当前默认回答模式已切换为 `teach`**（`--answer-mode` 不给就用它）。切换依据与尚未闭合的部分一并说明如下，不把未跑的门槛当作已通过：
-
-| 项 | 状态 |
-|---|---|
-| 教学评分（7 维） | **4.857 / 5** —— 心智模型／因果解释／渐进展露／示例／失败推演／取舍 六项满分，可读性 4.0 |
-| 盲测胜率门槛 | **未取得结论。** 单例返回 `POSITION_BIASED`（正序判 explain 胜、换序判 teach 胜）；一个案例算不出胜率，门禁值为 `None`，既非通过也非不通过 |
-| 全量 19 例 A/B | **尚未运行** |
-| `detailed_in_2200_5000` | 该次对**两个臂都不通过**（explain 1,732 中文字低于下限，teach 10,923 高于上限），不能作为区分依据；对 teach 而言它本就是在拿本轮已废除的字数上限去量 |
-
-那次评审偏好 `explain` 的理由本身是错的：它以"teach 声称装载由 Key 不存在触发"为据，而 `TicketAvailabilityTokenBucket.java:85-90` 显示 `BUCKET_MISSING(-1)` 确实就是进入 `loadBucket` 的分支——键不存在确实是触发装载调用的原因；锁内的 `hMultiGet` 字段级判定是另一层，teach 也陈述正确。该基准条目已修正。
-
-`legacy` 与 `explain` 仍然可用（`--answer-mode legacy|explain`），且是 L1／L1.5／L2 既有基线的口径；要复现历史对比必须显式指定它们。
-
-规划器、Answer Planner、答案生成器和 Reviewer 使用 high reasoning，生成上限分别为 8192、8192、32768 和 32768；充分性判断与查询改写使用 low reasoning、4096 token。`teach` 路径的 Explanation Planner、Writer、Composer、Reviewer 也使用 high reasoning，生成上限分别为 32768、32768、16384 和 32768。各角色模型可通过 `.env.example` 中的可选配置分别覆盖。
-
-L2 回答质量集位于 `benchmark/l2-answer-quality.jsonl`，包含 19 条实现流程、设计取舍、异常边界、否定式和简单定位问题。确定性检查覆盖篇幅、重复标题、机械式“结论：”和有效引用；`teach-token-bucket-01` 另带教学维度（期望心智模型、必须解释的 why、可用场景、需要纠正的误解）。盲测胜率与事实正确性的人工核对**仍未完成**——详见上文默认模式切换的说明。
-
-## Teaching Explain (V3)
-
-`ask --answer-mode teach` 是当前质量最高的一条链路。它和 `explain` 的差别不在检索（两者共用同一套 EvidencePackage），而在**拿到证据之后怎么做**：`explain` 直接规划章节并生成；`teach` 先规划"读者应该按什么认知顺序理解"，再逐节写，再编排，再审。
-
-### ExplanationPlan：把"怎么讲"变成被规划的产物
-
-EvidencePlan 回答"我要查什么"，ExplanationPlan 回答"这些事实应该按什么顺序被理解"。后者包含：
-
-| 字段 | 作用 |
-|---|---|
-| `core_mental_model` | **贯穿全文的那一句话**。`explain` 缺的正是它——没有组织轴，答案就只能是按代码模块罗列。这一字段非空是构造时的硬约束。 |
-| `primary_strategy` / `secondary_strategies` | `PROBLEM_SOLUTION`、`CONCEPT_BUILDUP`、`TRADEOFF`、`FAILURE_ANALYSIS` 等，决定整体写法 |
-| `sections[].section_type` | 14 种：`PROBLEM_SETUP`、`MENTAL_MODEL`、`MECHANISM`、`FAILURE_SCENARIO`、`TRADEOFF`、`BOUNDARY`… 章节按**认知角色**划分，不按 requirement 划分 |
-| `sections[].claim_plans` | 每节要下的判断，以及**它凭什么下** |
-| `sections[].evidence_state` | 该节的证据强度：`CONFIRMED` / `PARTIAL` / `UNVERIFIED` |
-
-`claim_plans[].claim_type` 分四层，这是本版最重要的一条边界：
-
-| 层 | 含义 | 强制规则 |
+| 配置 | 默认值 | 含义 |
 |---|---|---|
-| `PROJECT_FACT` | 当前项目事实 | **必须绑定证据**，否则计划不成立 |
-| `PROJECT_INFERENCE` | 由项目证据推出 | 措辞须体现是推导（"因此/这说明"） |
-| `GENERAL_CONCEPT` | 通用技术知识 | 可以讲，但不得反推"本项目就是这样实现的" |
-| `ILLUSTRATIVE_EXAMPLE` | 假设案例 | **必须 `conditional=True` 且写明 `assumptions`** |
+| `ANSWER_PROFILE` | fast | CLI 默认策略；Web 请求默认显式 fast，可在界面切 full |
+| `ANSWER_REASONING_EFFORT` | 未设置 | Fast 默认 low、Full 默认 high；支持 low/medium/high |
+| `ANSWER_HARD_TIMEOUT_SECONDS` | 未设置 | 整次请求截止，含检索；CLI 可用 --hard-timeout 覆盖 |
+| `ANSWER_FAST_LATENCY_TARGET_SECONDS` | 45 | 观测目标，不强制中断或降档 |
+| `ANSWER_FULL_LATENCY_TARGET_SECONDS` | 300 | 同上 |
+| `ANSWER_PLANNER_TIMEOUT_SECONDS` | 180 | Fast 回答规划单次超时 |
+| `ANSWER_WRITER_TIMEOUT_SECONDS` | 240 | Fast Writer 单次超时 |
+| `ANSWER_FULL_PLANNER_TIMEOUT_SECONDS` | 300 | Full 回答规划单次超时 |
+| `ANSWER_FULL_WRITER_TIMEOUT_SECONDS` | 600 | Full Writer 单次超时 |
+| `LLM_SUPPORTED_REASONING_EFFORTS` | 未设置 | 声明未知模型实际支持的档位，例如 low,high |
 
-外加强约束：`conditional` 的 claim 不得是 `CONFIRMED`。也就是说"如果……那么……"这种推演，系统在计划层就被要求写成条件句，而不是写成对项目的断言。这正是 `explain` 做不到、而 ChatGPT 那份回答最出彩的地方——它可以推演证据里没有的失败场景，但必须标明那是推演。
+思考设置主要影响回答 Planner/Writer，检索调用有独立策略。模型能力未知时省略参数；当前 deepseek-flash 内建声明 low/high，不把 medium 自动映射成 high。
 
-计划器的其余硬约束：章节标题不得等于任何 Evidence Requirement 的 target（命名即调查项，说明是复制而非规划）；`LOCATION_ONLY` 最多 2 节（简单定位不该被过度规划）；`NEGATIVE_CORRECTION` 必须含 `MISCONCEPTION` 节。
+Fast 使用 Single Stream，Full 使用 V3；按已验证章节发布，Full 可进行原有有限修复和正文 fallback。`--depth` 已移除，简要/详细要求直接写在问题里。
 
-### 生成：Fast / Deep 双路径
+`TEACHING_GENERATION_MODE`、`OPENAI_V3_REASONING_EFFORT`、`TEACHING_REQUEST_TIMEOUT_SECONDS` 属于兼容路径；日常 Fast/Full 使用上表。内部 `ANSWER_ENGINE_ENABLED`、`ANSWER_REQUEST_POLICY` 由入口装配，不需手动设置。
 
-普通 ask 默认 Fast＋低。下面记录旧生成路径，显式 `--teaching-generation-mode multi_pass` 可继续使用。
-`single_stream` 兼容参数现映射到 Fast：轻量 Micro Planner 一次规划，单个 Streaming Writer
-按章节连续生成，每节完整后检查引用及证据 allowlist，校验通过才发布给章节回调。
-该模式跳过 Composer、Reviewer 和 Revision，仍使用原有检索、证据工作区与模型。
+### 4.7 Tool Agent 与 Symbol Graph
+
+| 配置 | 代码默认 | 含义 |
+|---|---|---|
+| `TOOL_AGENT_ENABLED` | true | Agent 选择代码/文档检索、符号定位、Graph 工具 |
+| `SYMBOL_GRAPH_ENABLED` | false | 固定检索的自动扩图开关，不限制 Agent 显式 Graph 工具 |
+| `TOOL_AGENT_PLANNER_TIMEOUT_SECONDS` | 60 | 工具规划单次调用超时 |
+| `SYMBOL_GRAPH_QUERY_TIMEOUT_SECONDS` | 2 | Graph 查询安全超时，最多 30 秒 |
+| `SOURCE_POLICY_PATH` | 内置 config/source-policy.json | 文档来源角色、时间状态和权威策略 |
+
+当前默认 **Tool Agent + Graph 工具 + 结构元数据检查**。旧 .env 中的 false 仍会覆盖默认值。回退到固定检索设置 TOOL_AGENT_ENABLED=false；再设 SYMBOL_GRAPH_ENABLED=false 则不自动扩图，结构 Coverage 检查仍保留。
+
+## 5. CLI 使用示例
 
 ```powershell
-uv run devcontext ask "详细解释当前购票占座的数据一致性是如何保证的" --answer-mode teach --teaching-generation-mode single_stream --perf --perf-json artifacts/single-stream.json
+# 搜索和查看上下文。
+uv run devcontext search --strategy keyword --query "createTicketOrder" --top-k 5
+uv run devcontext search --strategy hybrid --query "购票事务与幂等" --top-k 10
+uv run devcontext context "订单创建与支付的代码关系" --top-k 10 --max-chars 8000
+
+# 默认 teach + fast，或显式 Full。
+uv run devcontext ask "OrderServiceImpl.createTicketOrder 如何处理重复请求？"
+uv run devcontext ask "详细解释余票令牌桶的设计。" --profile full
+
+# 调试与性能。
+uv run devcontext ask "购票责任链如何执行？" --debug --perf
+uv run devcontext ask "购票事务如何保证一致性？" --profile full --hard-timeout 300 --perf-json artifacts/full-request.json
+
+# 只生成证据需求计划；仍会调用规划模型。
+uv run devcontext ask "订单关闭如何实现？" --plan-only
+
+# 查询符号。
+uv run devcontext graph symbol OrderServiceImpl --json
 ```
 
-新入口的 profile 参数优先于 ANSWER_PROFILE；显式 `--teaching-generation-mode multi_pass` 可使用旧流程。
-CLI 当前仍在生成结束后输出聚合答案，`--perf-json` 的 `stream` 字段提供首正文时间 TTFT、
-首个校验通过章节时间 TTFS、章节计数、重试和完成状态。它们以整个请求开始为原点，
-另有相对 Writer 开始的时间。发布章节前最多重试一次；发布后失败保留有效章节并标记
-`partial`，不重播或自动切换模式。无有效输出则标记 `failed`。
+context 在路由不明确时也可能调用分类模型。关系查询 callers/callees/implementations/hierarchy 要使用 symbol 结果中的完整 `symbol_key`，不要用简称代替。
 
-需要复现实验时运行 `.venv\Scripts\python.exe scripts/run_single_stream_experiment.py`：
-只执行 Q1/Q3 每种模式一次，共四次请求，没有预热、质量裁判或自动重跑。
-产物保存在 `artifacts/single-stream-experiment/`；目录非空时拒绝覆盖，另一次实验须使用
-`--output` 指定新目录。结果与限制见 [Single-Stream 实验报告](docs/performance/05-single-stream-teaching-experiment.md)。
-
-节数 ≤ 3 且深度为 `brief`/`standard` 时走 **Fast Path**：一次生成。否则走 **Deep Path**：逐节生成，一节一次调用，每节**只喂该节绑定的证据**，最后交给 Composer 编排。
-
-**Section-scoped Citation Validation。** 每一节只能使用它自己绑定的标签。即使用了存在于 Workspace、但不属于本节的证据，也记为 `invalid_citations`，不放行。这把 Citation 从"引用了一个存在的 chunk"升级为"这一节只能使用 Planner 指定的证据"。
-
-**Composer 违反禁令时整体丢弃，不做局部修补。** 若编排后的正文出现草稿里没有的 Citation，输出整体回退为章节草稿的确定性拼接。理由：能凭空造出一个 Citation 的调用，它在同一段文本里的其他判断也都不可信。同时明确禁止 Composer 新增项目事实与未出现过的符号。
-
-### 接地校验、Reviewer 与定向修订
-
-**确定性校验（零成本、不漏）** 先跑，四条：`PROJECT_FACT_WITHOUT_EVIDENCE`、`CONDITIONAL_NOT_MARKED`、`EXAMPLE_NOT_LABELLED`、`UNVERIFIED_WRITTEN_AS_FACT`。
-
-**Teaching Reviewer（LLM）** 接在其后，负责需要读懂语义的部分：9 类新 issue（`MISSING_MENTAL_MODEL`、`MISSING_WHY`、`POOR_SCAFFOLDING`、`MISLABELED_EXAMPLE`、`FACT_INFERENCE_CONFUSION`、`GENERAL_KNOWLEDGE_AS_PROJECT_FACT`、`SECTION_EVIDENCE_MISMATCH`、`UNHELPFUL_DETAIL`、`ABRUPT_TRANSITION`），并**同时接受既有的 8 类**（含 `UNSUPPORTED_CLAIM`）——上一轮的 legacy Reviewer 恰好抓到过一处真实过度声称，一个说不出这个词的教学 Reviewer 会在它替代的对象更强的地方更弱。
-
-**三档门控**，避免一句话的答案也为审稿付费：
-
-| 路径 | 门控 |
+| 兼容选项 | 用途 |
 |---|---|
-| `brief` / `LOCATION_ONLY` | 只跑确定性校验 |
-| `standard` | 确定性校验发现问题或计划含冲突时才上 LLM |
-| `detailed` / `deep` | 必跑 |
+| `--answer-mode teach` | 默认教学回答，支持 Fast/Full |
+| `--answer-mode explain` / `--answer-mode legacy` | 旧解释/模板式回答 |
+| `--no-plan` | 旧版单查询链路 |
+| `--teaching-generation-mode multi_pass` | 旧教学链路 |
+| `--teaching-generation-mode single_stream` / `--teaching-generation-mode v3` | Fast/Full 兼容别名 |
 
-**定向修订。** Reviewer 输出 `section_issues` 与 `revision_required`，工作流**只重生成被点名的章节**，然后重新编排；最多一轮。不让 Reviewer 替换一份基本没问题的答案。审稿调用失败时**不阻塞答案**，记为 `fallback` 并保留原草稿。
+`--profile`、`--reasoning-effort` 不与 explain、legacy、multi_pass、no-plan、plan-only 混用。执行 `uv run devcontext ask --help` 查看全部参数。debug/perf-json 会包含内部诊断，分享前检查内容。
 
-### 证据视图与 Token 预算
+## 6. Web UI 启动与使用
 
-`teach` 路径不继承 `explain` 那套 8000/16000/28000 字符预算。它从模型窗口推导每个视图的上限：先扣掉系统提示、问题与计划等不可裁剪部分和预留输出，剩下的才是证据视图的额度。窗口小到装不下任何东西是**合法结果**，返回空视图并记录被省略的证据，而不是报错。
-
-**证据的稳定身份。** 每个 chunk 在整次请求内获得一个 `E` 编号，跨节、跨视图不变（`legacy`/`explain` 沿用的 `C1` 是按位置分配的，同一个 chunk 在不同 bundle 里编号不同，无法作为身份）。`C` 与 `E` 两个命名空间并存，互不干扰。
-
-### 成本
-
-`teach` 明显更贵。同一问题实测（detail 深度）：`legacy` 约 3,100 字、5 次 LLM 调用；`explain` 约 3,700 字、6 次；`teach` 约 18,800 字、8 次调用，端到端约 5 分钟。检索侧三者相同，差额在回答侧。`brief` 问题走 Fast Path，约 2 次调用。
-
-### `--debug` 看什么
-
-`teach` 在 `--debug` 下额外打印一段摘要，比读全文更快看出这轮做了什么：
-
-```
-Explanation Strategy:
-PROBLEM_SOLUTION + CONCEPT_BUILDUP + TRADEOFF + FAILURE_ANALYSIS
-
-Mental Model:
-余票桶是购票准入用的近似令牌池，不是库存账本……
-
-Context:
-  Workspace evidence: 20
-  Bound evidence: 14
-  S1 view: 3
-
-Generation:
-  9 sections
-  0 targeted revision
-```
-
-Trace JSON 里另有 `explanation_plan`、`teaching.section_drafts`、`teaching.section_citations`、`teaching.section_confidence`、`teaching.context_views`、`teaching.revision_trace`。`compression_events` 存在但为空——读者应当能区分"没有发生"与"没有记录"。
-
-### 本轮不在范围内
-
-`teach` 不含 Symbol Graph、Repo Map、LangGraph、Web UI、增量索引，也没有把 `explain` 的固定字数上限一起改掉（那两处上限管的正是 L2 A/B 要对比的基线，同时改会混淆两个变量）。`EvidenceDigest`（把超长证据压成摘要再进 prompt）同样留待下一阶段——目前 Coverage 的 payload 仍送整块正文，这是它偏大的原因。
-
-## Query Router 与 Retrieval Policy V1
-
-Router 优先使用确定性规则，将问题分为 `CODE`、`DOC` 或 `MIXED`。没有明确规则信号时才使用 DeepSeek 输出一个严格标签；模型不可用或输出非法时安全回退到 `MIXED`，不重试。Router 请求最多允许 1024 个生成 token，以容纳模型内部推理，但只接受最终完整输出 `CODE`、`DOC` 或 `MIXED`。CLI 会显示 `Route: CODE/DOC/MIXED (rules/llm/fallback)`。
-
-- CODE：仅从代码来源执行现有 Hybrid Retrieval。
-- DOC：仅从文档来源执行现有 Vector Retrieval。
-- MIXED：分别执行 CODE 和 DOCUMENT Vector Retrieval。DOCUMENT 使用固定的 Top20 候选池，并根据文件、标题和完整标题层级与 query 的词项重合度，最多把一个最明确的文档证据提升为锚点；随后仍从 CODE 开始稳定交错。该操作不修改原始检索分数。
-
-该层不改变基础 Retriever 的关键词评分、向量距离或 RRF。文档锚点提升只用于 MIXED 证据组合，不影响 CODE 或 DOC 单源路由。评测报告在原有 Keyword、Vector、Hybrid 之外增加 Routed 指标，并将同一次运行中的 Hybrid 与 Routed 分类 Recall 和双源命中率直接对比。
-
-V1 不判断 Citation 是否在语义上真正支持对应结论，也不实现 LangGraph、Reranker、复杂检索调参或 Context Builder V2。
-
-## Agentic Retrieval V1
-
-`ask` 在检索后先做证据充分性检查。CODE 问题至少需要代码证据，DOC 至少需要文档证据，MIXED 必须同时具备两类来源；缺来源时由规则直接判定不足。来源齐全后，短 DeepSeek 调用会继续判断证据是否真正覆盖目标类、方法、设计或流程。检查输出采用严格 JSON，网络错误、空回答或非法结构都会失败关闭为“不充分”，不会把不确定证据交给普通答案生成。
-
-证据不足时，系统只针对 `missing_aspects` 指出的 CODE、DOCUMENT 或双侧缺口生成一个新检索 Query。原始 Router 决策不会重跑，Retrieval Policy 和 Context Builder 行为也不会改变。每轮新增结果放在旧结果前，按 Chunk ID 稳定去重，再使用原始问题重建 Context。最多重试 2 次，即总计最多 3 轮检索；证据足够便立即停止。达到上限或改写失败后，只允许基于已有证据生成部分回答，并明确说明尚不能确认的方面。最终 Citation 仍必须存在于最终 ContextBundle。
-
-普通输出显示 Route、Sufficiency 和 Retries。加入 `--debug` 后会额外打印 JSON Trace，包括每轮检索 Query、目标类型、选中 Chunk、缺失方面、改写结果、重试次数和停止原因；Trace 不包含 Chunk 全文、API Key 或模型凭据。最坏路径可能发生 3 次充分性判断、2 次 Query Rewrite 和 1 次答案生成；若 Router 规则无法分类，还会多一次 Router 模型调用。这是 V1 已知的延迟与成本边界。
-
-默认配置见 `.env.example`。API Key 始终从系统环境变量读取，不应写入 `.env` 或提交到 Git。
-
-## 设计边界
-
-当前版本不包含 LangChain、LangGraph、FastAPI、Web UI、增量索引或近似向量索引。Symbol Graph V1 支持仓库内静态代码关系索引，自动检索增强默认关闭。`docs/` 中的自有项目文档可以提交；`docs/参考项目/` 及外部 `my12306` 数据源继续排除在 Git 之外。
-
-
-### 使用 APINebula 文字模型
-
-项目 `.env` 设置 `LLM_PROVIDER=openai` 与 `OPENAI_MODEL=gpt-6.1-sol`。
-`CHATGPT_API_KEY` 和 `OPENAI_BASE_URL` 从环境读取；当前网关地址为
-`https://apinebula.ai/v1`。读取顺序为进程环境、项目 `.env`、Windows 用户环境、
-Windows 系统环境。密钥不必写进项目文件。
-
-OpenAI 模式下，检索规划、改写、覆盖检查、教学规划、正文和 Reviewer
-统一使用 `OPENAI_MODEL`，不继承 `DEEPSEEK_*_MODEL`；显式模型参数仍优先。
-百炼嵌入、数据库及现有索引保持原配置，无需重新入库。
-普通 ask 默认 Fast；可用 `--profile full` 或兼容参数 `--teaching-generation-mode v3` 显式选择 Full。
-切回 DeepSeek 时设置 `LLM_PROVIDER=deepseek`；调用失败不会自动切换供应商。
-
-
-APINebula 接入会分离返回正文开头的 `<think>...</think>` 推理前缀，
-传输与章节协议仍检查完整性，新流程的证据校验改为宽松策略。
-
-### 回答执行模式与思考深度
-
-新回答入口默认 **Fast＋低思考深度**；显式 `--profile full` 默认高。两档都支持
-`--reasoning-effort low|medium|high`，只控制回答 Planner/Writer；检索阶段使用低。
-正文按问题理解任务自适应展开；`--depth` 已移除，可在问题中说明简要或详细。
-模型没有声明支持所选档位时真正省略 `reasoning_effort`，使用模型默认行为，并在 debug 中显示。
-DeepSeek Flash 原生为 low/high/max，中档兼容值映射为高；本项目按用户选择省略 medium，不做映射。
-未知模型可通过 `LLM_SUPPORTED_REASONING_EFFORTS` 显式声明原生支持，不要只因网关接受参数就声明支持。
+### 6.1 首次构建或更新前端后
 
 ```powershell
-uv run devcontext ask "详细解释项目为何要使用责任链校验。" --debug
-uv run devcontext ask "详细解释项目为何要使用责任链校验。" --profile full --debug
-uv run devcontext ask "问题" --profile full --reasoning-effort high
-uv run devcontext ask "问题" --profile full --hard-timeout 300 --perf-json artifacts/request.json
+cd D:\Java-learning\DevContext-web-ui-v1
+uv sync --locked --extra web --extra dev
+cd frontend
+npm ci
+npm run build
+cd ..
+uv run --extra web devcontext-web
 ```
 
-默认没有请求总时间截止，Fast 45 秒、Full 300 秒只是观测目标，超时不降档、不截断正文。
-可选 `ANSWER_HARD_TIMEOUT_SECONDS` / `--hard-timeout` 从检索开始计时。
-外部调用仍有超时：Fast Planner 180 秒、Writer 240 秒；Full Planner 300 秒、Writer 600 秒；检索 LLM 120 秒、嵌入 30 秒、数据库连接 10 秒/查询 30 秒。
-`--debug` 直接显示各阶段耗时、模型、请求档位、实际传参和首节发布时间；`--perf-json` 保存正文、蓝图及诊断。
-`complete` 表示当前交付路径正常完成，不是事实审查认证；部分发布后失败返回 partial，不重放已发布章节。
+访问 [8000 端口页面](http://127.0.0.1:8000)，FastAPI 提供 frontend/dist。日常只启动后端即可，前端源码更新后重新 build。
 
-Fast/Full 支持 WHAT、WHY、HOW、COMPARE、DEBUG、LOCATE、GENERAL；空检索仍可解释通用原理，定位未命中不会编造文件路径。
-Full 保留 WHY/HOW 骨架，其他问题采用适配结构；Fast 使用合并检索规划与最多一轮补检。
-`single_stream` / `v3` 兼容参数映射 Fast / Full。旧 `multi_pass`、`legacy`、`explain` 可显式使用，不能与新 Profile/思考参数混用。
-旧 `OPENAI_V3_REASONING_EFFORT`、`TEACHING_REQUEST_TIMEOUT_SECONDS` 不再控制新 Fast/Full。
+左侧管理会话，中央提问，输入区选择 Fast/Full。Enter 发送、Shift+Enter 换行。引用查看器显示真实文件、行号、符号和内容；执行面板显示真实检索事件和最终摘要。
 
-OpenAI 的 JSON 结果内部通过 SSE 收集，完成后才交给结构解析器，避免长非流式蓝图触发网关 524。
+知识索引在 PostgreSQL；历史会话、答案、证据与执行记录在 `data/web/devcontext.sqlite3`。刷新或断网不会取消 Run；历史仅用于展示，不作为多轮 Agent Memory。
 
-
-## 当前 Full 教学流程与配置迁移
-
-普通 ask 默认 Fast＋low；Full 默认 high，按问题需要安排解释，章节和例子不再由四档深度控制。
+### 6.2 前端开发用两个终端
 
 ```powershell
-uv run devcontext ask "项目中的责任链校验是什么，它与业务流程是什么关系？" --profile full --debug
-uv run devcontext ask "详细解释项目为何要使用责任链校验。" --profile full --reasoning-effort high --debug
-uv run devcontext ask "详细解释当前购票占座的数据一致性是如何保证的。" --profile full --debug --perf-json artifacts/full-how.json
+# 终端一。
+cd D:\Java-learning\DevContext-web-ui-v1
+uv run --extra web devcontext-web
 ```
-
-`--depth` 已移除；请在问题中表达简要或详细。旧计划/诊断中的深度字段读取时忽略，旧显式模式也不再用档位控制章节数、预算或审阅。`--teaching-generation-mode v3` 映射当前 Full，不还原历史版本。
-
-配置优先级为命令参数、进程环境、项目 .env、代码默认。`ANSWER_REASONING_EFFORT` 是全局覆盖项；不设置时 Fast 用 low、Full 用 high。思考参数只影响回答 Planner/Writer，检索阶段保持 low；能力未知时省略参数并在 debug 说明。
-
-| 配置 | 默认 | 行为 |
-|---|---:|---|
-| ANSWER_PROFILE | fast | 默认模式 |
-| ANSWER_REASONING_EFFORT | 未设置 | 可用 low/medium/high；显式值覆盖模式默认 |
-| ANSWER_HARD_TIMEOUT_SECONDS | 未设置 | 可选完整请求截止，包含检索和重试 |
-| ANSWER_FAST_LATENCY_TARGET_SECONDS | 45 | Fast 软观测目标 |
-| ANSWER_FULL_LATENCY_TARGET_SECONDS | 300 | Full 软观测目标，不中断或降档 |
-| ANSWER_PLANNER_TIMEOUT_SECONDS | 180 | Fast Planner 单次调用超时 |
-| ANSWER_WRITER_TIMEOUT_SECONDS | 240 | Fast Writer 单次调用超时 |
-| ANSWER_FULL_PLANNER_TIMEOUT_SECONDS | 300 | Full Planner 单次调用超时 |
-| ANSWER_FULL_WRITER_TIMEOUT_SECONDS | 600 | Full Writer 单次调用超时 |
-
-Full 正常只有 Planner、Organizer、Writer；回答模型调用两次，无 Reviewer。恢复 WHY/HOW 专用场景、完整示范与依赖覆盖检查，WHAT 用职责、关系和贯穿例子解释。证据不足缩小具体断言，必要证据超窗口明确失败。章节流式发布后不重试、不重放；complete 只表示完整交付，不认证内容质量。
-
-## Full 结构恢复与正文兜底
-
-Full 正常路径仍为一次 Planner、一次 Writer。蓝图中的重复编号和悬空核心引用需要修正；合法但跳号的编号可保留。非法场景会设为 NONE，清空章节场景引用，保留机制骨架，不猜测分叉父节点。UNKNOWN 结论不会作为已建立保证。
-
-Planner 最多修正一次，修正输入包含原始响应及具体字段错误；Writer 首节发布前最多重试一次，携带错误与精确章节协议。修正输入超模型窗口时跳过重试。两次 Planner 响应及 Writer 拒绝输出均进入诊断。
-
-仍无法执行 Full 时，且未发布正文，使用同一批证据、同一模型与思考档位执行一次普通 Markdown 正文兜底，不重新检索。兜底先缓冲再整体发布；正常结束且正文非空为 complete，截断或异常但有正文为 partial，无正文为 failed。已发布章节后出错不兜底、不续写、不重放。HTTP 400/401/402/403/404 等配置、权限或余额错误不重复调用；显式硬截止仍停止后续调用。
-
-Debug 的 `delivery_path` 区分 `full`、`full_repaired`、`full_direct_fallback`；正文兜底也会在普通结果信息中明确标记。兜底计作实际一个交付单元，不把原蓝图章节计为已完成。`--perf-json` 保存原始规划响应、警告、重试、兜底原因及分阶段耗时。最多五次回答模型调用，无无限重试。
-
-## Symbol Graph V1
-
-`ingest` 使用 JavaParser + SymbolSolver 两阶段分析仓库源码，并在同一事务中写入 Chunk、Symbol、Edge。支持 CLASS、INTERFACE、METHOD、CONSTRUCTOR，以及 EXTENDS、IMPLEMENTS、CALLS、CONSTRUCTS、OVERRIDES。无法可靠解析的声明保留 Chunk，无法解析的关系不生成猜测边；重复身份和无效引用属于致命契约错误，不能覆盖旧索引。
 
 ```powershell
-uv run devcontext ingest
-uv run devcontext graph symbol PayServiceImpl --json
-uv run devcontext graph callees 'M:完整包名.PayServiceImpl#payCallback(java.lang.String)' --json
-uv run devcontext evaluate-symbol-graph --fixture
-uv run devcontext evaluate-retrieval-workflow --suite l1.5 --mode frozen --symbol-graph-ab
+# 终端二。
+cd D:\Java-learning\DevContext-web-ui-v1\frontend
+npm run dev
 ```
 
-配置 `SYMBOL_GRAPH_ENABLED=true` 后，Fast/Full 共用的 RetrievalController 在已有检索之后添加图证据。现有 keyword/vector/hybrid 策略不变；`SearchExecution.results` 和 `source_candidates` 保留原始检索语义，增强结果放在独立的 `graph_results`，进入证据池时合并。CODE、BOTH、ANY 可以增强其代码侧；DOCUMENT 不增强。每个 action 最多 3 个锚点、2 条物理关系边、每节点 5 个邻居、8 个新增 Chunk，OVERRIDES 计一跳。
+访问 [5173 开发页面](http://127.0.0.1:5173)，API 代理到 8000；更改后端端口时也要调整 frontend/vite.config.ts。
 
-`SYMBOL_GRAPH_QUERY_TIMEOUT_SECONDS=2` 是查询安全超时，受请求 Deadline 约束。100ms 仅为图增强 P95 评测目标，不用于提前跳过请求。图缺失或查询失败保留基础检索结果，并记录独立 Trace。
+### 6.3 Web 专用参数
 
-受控 fixture 评测使用固定候选与 Oracle Coverage，不调用 embedding/LLM，临时快照在结束后清理；不能据此推断真实业务召回或回答准确率。真实仓库的 OFF/ON 对照使用 `evaluate-retrieval-workflow --symbol-graph-ab`，会沿用该评测原有的 embedding/LLM 调用。更多契约、限制和验证结果见 [Symbol Graph V1 实现与验收](docs/V4-graph等功能规划/03-symbol-graph-v1实现与验收.md)。
-
-## Tool-driven Retrieval Agent V1
-
-`TOOL_AGENT_ENABLED=false` 默认保留固定检索。显式开启后，Fast/Full 使用同一工具 Agent 取得证据，最终回答流程不变。七个只读工具覆盖代码/文档搜索、Symbol 定位、callers、callees（含 CONSTRUCTS）、implementations 和 hierarchy。Agent 最多三步、八次调用，每步最多三次；每步结束后统一检查 Coverage 和进展。
+| 进程环境变量 | 默认 | 含义 |
+|---|---|---|
+| `DEVCONTEXT_WEB_HOST` | 127.0.0.1 | 本机监听 |
+| `DEVCONTEXT_WEB_PORT` | 8000 | HTTP 端口 |
+| `DEVCONTEXT_WEB_WORKERS` | 2 | Agent 线程/准入名额，1–16，不是 Uvicorn 进程数 |
+| `DEVCONTEXT_WEB_DATABASE` | data/web/devcontext.sqlite3 | 会话文件，自定义建议用绝对路径 |
 
 ```powershell
-$env:TOOL_AGENT_ENABLED='true'
-uv run devcontext ask "谁调用 OrderDelayCloseProducer.doSend？" --profile fast --debug
-uv run devcontext ask "OrderService.createTicketOrder 由哪个方法实现？" --profile full --debug
+$env:DEVCONTEXT_WEB_PORT = '8001'
+uv run --extra web devcontext-web
 ```
 
-Graph 工具只允许使用当前 Observation 中属于本 Requirement、已 CONFIRMED 的 Symbol。歧义候选须通过限定名称定位或上下文搜索确认。Agent 模式不执行自动扩图，`SYMBOL_GRAPH_ENABLED` 不控制显式 Graph 工具。`TOOL_AGENT_PLANNER_TIMEOUT_SECONDS=60` 为 Planner 调用超时；Graph 继续用现有 2 秒查询超时，100ms 是 P95 目标。
+V1 为本机单用户、单进程，没有账户隔离。同一会话一次一个 Run；重复提交去重。取消立即记录状态，调用返回或超时后才释放名额。核心证据不足、生成中断显示部分回答，重启不将未完成请求标为成功。
+
+## 7. 常见问题
+
+| 现象 | 检查 |
+|---|---|
+| 找不到 devcontext-web / 没有 web extra | 切到 DevContext-web-ui-v1，安装 --extra web |
+| frontend_not_built / 页面 503 | Web 的 frontend 目录执行 npm ci、npm run build |
+| 数据库连接失败 | docker compose ps、5432、实际密码与 DATABASE_URL |
+| 修改 .env 仍用旧模型 | 同名 $env: 优先；确认工作目录，重启 Web |
+| 配网关密钥却调用 DeepSeek | 检查 LLM_PROVIDER，密钥不会自动选择供应商 |
+| keyword 正常，vector/hybrid 失败 | 检查百炼密钥、网络与维度；运行 smoke-api |
+| ingest 找不到目录或没有文档 | 检查两个源目录，代码和 Markdown 都要非空 |
+| Maven/Java 构建失败 | java -version、mvn -version、依赖下载 |
+| 模型 401/403/402/404 | 密钥、权限/余额、地址与模型名，不会自动切换供应商 |
+| Web 409/429 | 会话仍执行/全局名额已满，等待线程退出 |
+| 取消后发送按钮未恢复 | 在途同步调用未返回，仍占用名额 |
+| 检索到旧代码或旧文档 | 主动 ingest 重建，不是只修改目录配置 |
+
+Windows 代理环境若访问百炼遇到 TLS/握手失败，可按实际网络设置绕过列表，例如：
 
 ```powershell
-uv run devcontext evaluate-tool-agent --cases benchmark/tool-agent-v1.jsonl --runs 3 --output artifacts/tool-agent-live-abc.json
-uv run devcontext evaluate-tool-agent --cases benchmark/l1.5-retrieval.jsonl --cases benchmark/regression/regression-v1.jsonl --checker oracle --runs 1 --output artifacts/tool-agent-regression-abc.json
+$env:NO_PROXY = 'localhost,127.0.0.1,::1,.aliyuncs.com'
+$env:no_proxy = $env:NO_PROXY
 ```
 
-三组分别为固定检索、固定检索加自动 Graph、Tool Agent；每个 paired run 共享同一不可变 EvidencePlan 和完全相同的 CoverageChecker 配置。semantic 模式三组都用标准 Checker、max_attempts=1；oracle 模式三组都用同一 Ground Truth，固定组同时冻结搜索 Query，Agent 的选工具仍由真实 LLM 决定。结果包括 Workspace 证据召回、False READY、工具选择、调用预算、延迟和实际 token usage；缺失 usage 为 null。
+有原列表时合并现有条目；curl 可能优先读取小写变量，避免大小写冲突。这只作用于当前终端及子进程，不要盲目关闭其他模型调用需要的代理。
 
-实现、六项约束和验收结果见 [Tool Agent V1 实现与验收](docs/V4-graph等功能规划/05-tool-agent-v1实现与验收.md)。首版保持关闭，评测不达门槛时不会扩大循环预算或自动启用。
+## 8. 测试、评测与文件位置
 
-## V5 Evidence Loop
-
-V5 将检索需求和运行时证据分开：不可变 schema v3 计划包含 CODE、DOCUMENT、RELATION 或 PATH need；已确认 Symbol、真实物理 Relation、需求归属与查询 Probe 保存在 Workspace。旧 v2 只在规划入口归一化，运行模块只接受 v3。CALL_CHAIN 只描述路径，物理边仍为原有五类。
-
-所有检索模式按“来源检查 → 结构检查 → 语义检查”判断 Coverage。只有来源与结构通过的需求才调用语义 Checker；只有全部 CORE SATISFIED 才能 READY。关系需求需要真实关系和端点正文，方法实现需要 METHOD 正文。缺边表示当前证据未证明关系；验证超时、索引不可用与尚未验证会保留 UNVERIFIED。Fast/Full 的 Chunk EvidencePackage 和引用格式保持兼容。
-
-`SYMBOL_GRAPH_ENABLED` **只控制自动扩图**。即使为 false，Fixed、AutoGraph 和 ToolAgent 也按需求批量读取已取得 Symbol 之间的结构元数据。该读取不会发现邻居正文。Fixed 最多两轮；Agent 最多三步、八次调用，每步最多三次，保持原预算。
-
-Agent 决策先通过确定性候选策略与 DecisionPolicyValidator，再通过 ToolExecutor。Graph 权限限定为当前需求在本步观察中已经确认的 key；本步新 key 下一步才能使用。策略拒绝单独记录，不计实际 ToolCall 或 Executor invalid-call；第一次进入确定性 fallback，再失败停止。
-
-当前默认 `TOOL_AGENT_ENABLED=true`、`SYMBOL_GRAPH_ENABLED=false`，使用 **ToolAgent＋Graph tools＋structural metadata**。Agent 可主动调用 Graph 工具，自动扩图开关不限制这些工具。已有 `.env` 或进程环境配置优先；已有 `TOOL_AGENT_ENABLED=false` 的用户需显式改为 true 才会切换。回退设置 `TOOL_AGENT_ENABLED=false` 且 `SYMBOL_GRAPH_ENABLED=false`，回到 Fixed＋structural metadata，结构校验继续生效。
+CLI 工作树：
 
 ```powershell
-# 工具 Agent 已默认启用；此设置也可覆盖旧 .env 中的 false
-$env:TOOL_AGENT_ENABLED='true'
-uv run devcontext ask "谁调用 OrderDelayCloseProducer.doSend？" --profile fast --debug
-uv run devcontext ask "OrderService.createTicketOrder 由哪个方法实现？" --profile full --debug
-
-# V5 新基线；每次使用新的报告目录，禁止覆盖历史样本
-uv run python scripts/run_v5_validation.py --output artifacts/v5/live-next --checks artifacts/v5/checks.json
-# 单独运行三组 semantic 或 Oracle 对照
-uv run devcontext evaluate-tool-agent --cases benchmark/tool-agent-v5.jsonl --checker semantic --runs 3 --output artifacts/v5/semantic-next.json
-uv run devcontext evaluate-tool-agent --cases benchmark/retrieval-workflow-v5.jsonl --checker oracle --runs 1 --output artifacts/v5/oracle-next.json
+uv sync --locked --extra dev
+uv run --extra dev pytest
+mvn -q -f java-parser/pom.xml test
 ```
 
-新基线 A=Fixed＋structural metadata，B=AutoGraph＋structural metadata，C=ToolAgent＋structural metadata。默认开启必须同时通过绝对门槛、C 相对 B 严格不退化、真实生产规划正负例、数据库集成和 Fast/Full 回归。受控测试和历史 V1 百分比不能代替新基线。当前实现、测试结果、实际模型验证及未完成的外部验收见 [V5 实现与验收](docs/V4-graph等功能规划/07-V5-agent执行流优化实现与验收.md)。
+Web 工作树：
 
-Docker 恢复后，V5 全量 Python（含 PostgreSQL 集成）767 项及 Java parser 6 项均通过，真实生产规划正负例 28/28 通过。最新完整模型验收尝试遭遇 DeepSeek HTTP402（余额不足），semantic/Oracle 和 Fast/Full 的零错误及完整验收门槛尚未通过，2026-10-08 按用户显式要求合并 main 并默认启用 Agent，此启用决定不代表质量门槛已通过。实际原始报告及逐轮有效性说明保存在 `benchmark/baselines/v5-postgres-validation/`；恢复服务后需在同一配置下重新执行完整新基线。
+```powershell
+uv sync --locked --extra web --extra dev
+uv run --extra web --extra dev pytest
+# PostgreSQL 已准备好时开启集成测试。
+$env:DEVCONTEXT_RUN_INTEGRATION = '1'
+uv run --extra web --extra dev pytest
+Remove-Item Env:DEVCONTEXT_RUN_INTEGRATION
+
+cd frontend
+npm test
+npm run build
+npx playwright install chromium
+npm run test:e2e
+```
+
+Playwright 自动启动测试服务，8000/5173 端口须空闲。真实问答和 live 评测会调用模型；单元测试不代表全部业务问答质量。
+
+评测入口有 evaluate、evaluate-retrieval-workflow、evaluate-tool-agent、evaluate-symbol-graph、evaluate-answers，使用各自 --help 查看参数。
+
+| 文件/目录 | 用途 |
+|---|---|
+| .env.example / src/devcontext/config.py | 配置模板 / 字段默认值与校验 |
+| scripts/bootstrap.ps1 | Windows 环境准备 |
+| docker-compose.yml / sql/ | 数据库容器 / 知识索引 schema |
+| java-parser/ | Java 解析与符号关系 |
+| artifacts/ | 向量缓存、解析结果、诊断和评测报告 |
+| docs/ | 架构、历史实现与评测 |
+| Web 的 frontend/、data/web/ | 前端 / 持久化会话 |
+| Web 的 docs/web/ | API、事件协议、审查和测试报告 |
+
+进一步阅读：[文档目录](docs/README.md)、[架构决策](docs/architecture-decisions.md)、[V5 实现与验收](docs/V4-graph等功能规划/07-V5-agent执行流优化实现与验收.md)。历史文档对应当时版本，配置和启动以当前代码及本文为准。
