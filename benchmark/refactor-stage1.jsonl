@@ -1,0 +1,6 @@
+{"id":"S1-01","question":"责任链是什么，以及当前项目如何使用它？","must_explain":["接口、处理器、容器的职责","一次校验如何经过链","规则分组与排序"],"must_not_claim":["没有源码依据的具体调用入口","所有校验都使用责任链"],"source":"独立新增定义题；不修改原冻结评测集"}
+{"id":"S1-02","question":"详细解释项目为何要使用责任链校验。","must_explain":["业务变化压力","相对简单写法的机制差异","扩展方式、成立条件与代价"],"must_not_claim":["if-else无法正确工作","责任链自动保证业务正确性"],"source":"本次会话已观察的问题"}
+{"id":"S1-03","question":"详细解释当前购票占座的数据一致性是如何保证的。","must_explain":["正常购票时序","锁、事务与条件更新的不同职责","远程订单调用与失败边界"],"must_not_claim":["回滚后座位必然全部可用","补偿调用意味着补偿已成功"],"source":"benchmark/l2-answer-quality.jsonl flow-01"}
+{"id":"S1-04","question":"两个请求同时购买同一张票时，系统如何避免重复售卖？","must_explain":["竞争发生的位置","具体裁决条件","失败请求的结果与协调机制"],"must_not_claim":["仅有分布式锁就证明绝不会超卖","Redis独立保证所有一致性"],"source":"benchmark/l2-answer-quality.jsonl edge-01"}
+{"id":"S1-05","question":"订单和车票状态是否在一个数据库事务里一起提交？","must_explain":["实际本地事务边界","远程调用与提交顺序","可以和不能承诺的原子性"],"must_not_claim":["存在远程调用就证明使用分布式事务","非成功响应证明远程绝对未提交"],"source":"benchmark/l2-answer-quality.jsonl negative-02"}
+{"id":"S1-06","question":"用户注册入口在哪个类？","must_explain":["实际入口类、方法与文件","入口与下游服务的必要区别"],"must_not_claim":["未找到时编造路径","凭设计文档确认源码入口"],"source":"benchmark/l2-answer-quality.jsonl locate-01"}

@@ -121,6 +121,8 @@ class AgentRuntime:
                     new_ownership_count=len({r.id for r in result.evidence_results} - owned_before))
                 results.append(result)
                 memory.observe(result)
+                from devcontext.observability.diagnostics import record_progress
+                record_progress(plan, workspace, memory.coverage)
                 if call.tool_name in {"search_code", "search_docs"}:
                     error = result.error.message if not result.completed and result.error else None
                     history.append(SearchAction(call.call_id, call.requirement_id, step,

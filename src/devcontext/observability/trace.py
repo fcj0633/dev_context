@@ -145,18 +145,19 @@ class PerfRecorder:
         return {query: count for query, count in counts.items() if count > 1}
 
     def llm_totals(self) -> dict[str, Any]:
+        from devcontext.observability.usage import usage_total
+        inputs = usage_total(call.input_tokens for call in self.llm_calls)
+        outputs = usage_total(call.output_tokens for call in self.llm_calls)
         return {
             "call_count": len(self.llm_calls),
             "latency_ms": sum(call.latency_ms for call in self.llm_calls),
             "discarded_latency_ms": sum(
                 call.discarded_latency_ms for call in self.llm_calls
             ),
-            "input_tokens": sum(
-                call.input_tokens or 0 for call in self.llm_calls
-            ),
-            "output_tokens": sum(
-                call.output_tokens or 0 for call in self.llm_calls
-            ),
+            "input_tokens": inputs["total"],
+            "output_tokens": outputs["total"],
+            "input_tokens_reporting": inputs,
+            "output_tokens_reporting": outputs,
         }
 
     def to_dict(self) -> dict[str, Any]:

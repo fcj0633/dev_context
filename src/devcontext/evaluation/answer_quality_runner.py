@@ -96,17 +96,22 @@ def _context_digest(bundle: Any) -> list[dict[str, Any]]:
 
 
 def _usage_totals(stages: Sequence[dict[str, Any]]) -> dict[str, Any]:
+    from devcontext.observability.usage import usage_total
     llm_stages = [stage for stage in stages if stage.get("model")]
     reported = [
         stage
         for stage in llm_stages
         if stage.get("input_tokens") is not None or stage.get("output_tokens") is not None
     ]
+    inputs = usage_total(stage.get("input_tokens") for stage in llm_stages)
+    outputs = usage_total(stage.get("output_tokens") for stage in llm_stages)
     return {
         "llm_calls": len(llm_stages),
         "latency_ms": round(sum(float(stage["latency_ms"]) for stage in stages), 1),
-        "input_tokens": sum(int(stage.get("input_tokens") or 0) for stage in llm_stages),
-        "output_tokens": sum(int(stage.get("output_tokens") or 0) for stage in llm_stages),
+        "input_tokens": inputs["total"],
+        "output_tokens": outputs["total"],
+        "input_tokens_reporting": inputs,
+        "output_tokens_reporting": outputs,
         "stages_reporting_usage": len(reported),
     }
 
@@ -287,9 +292,17 @@ def _percentile(values: Sequence[float], fraction: float) -> float | None:
 
 
 def _arm_metrics(records: Sequence[dict[str, Any]], mode: str) -> dict[str, Any]:
+    from devcontext.observability.usage import usage_total
     arms = [record["arms"][mode] for record in records]
     ok = [arm for arm in arms if not arm["error"]]
     latencies = [arm["usage"]["latency_ms"] for arm in ok]
+    def tokens(field):
+        reporting = usage_total(arm["usage"][field] for arm in ok)
+        reporting["known_total"] = sum(arm["usage"].get(field + "_reporting", {}).get(
+            "known_total", arm["usage"][field] or 0) for arm in ok)
+        reporting["unit"] = "case"
+        return reporting
+    inputs, outputs = tokens("input_tokens"), tokens("output_tokens")
     return {
         "case_count": len(arms),
         "failed": len(arms) - len(ok),
@@ -311,8 +324,10 @@ def _arm_metrics(records: Sequence[dict[str, Any]], mode: str) -> dict[str, Any]
             "total": round(sum(latencies), 1),
         },
         "llm_calls": sum(arm["usage"]["llm_calls"] for arm in ok),
-        "input_tokens": sum(arm["usage"]["input_tokens"] for arm in ok),
-        "output_tokens": sum(arm["usage"]["output_tokens"] for arm in ok),
+        "input_tokens": inputs["total"],
+        "output_tokens": outputs["total"],
+        "input_tokens_reporting": inputs,
+        "output_tokens_reporting": outputs,
         "stages_reporting_usage": sum(
             arm["usage"]["stages_reporting_usage"] for arm in ok
         ),

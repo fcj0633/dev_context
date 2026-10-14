@@ -115,12 +115,15 @@ class EvidenceDrivenWorkflow:
             self.request_policy,
         )
         policy_ms = (time.perf_counter() - policy_started) * 1000
+        from devcontext.observability.diagnostics import mark, record_package
+        mark("retrieval_started")
         retrieval = self.retrieval_controller.retrieve(request, top_k)
         intent = getattr(getattr(self.retrieval_controller, "evidence_planner", None), "primary_intent", None)
         if request.policy and intent:
             from dataclasses import replace
             request = replace(request, policy=replace(request.policy, primary_intent=intent))
         package = retrieval.package
+        record_package(request, package)
         outcome = self._answer(request, package)
         if request.policy is not None:
             trace_data = (outcome.workspace_stats or {}).get("trace", {})

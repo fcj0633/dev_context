@@ -76,9 +76,12 @@ class TeachingWriterV3:
                                     evidence_state="UNVERIFIED" if local_claims and all(c["status"] == "UNKNOWN" for c in local_claims) else "PARTIAL",
                                 )
                                 local_warnings = [issue.to_dict() for issue in grounding_issues(adapter, body)]
+                                from devcontext.observability.diagnostics import mark
+                                mark("first_section_ready", {"section_id": section_id})
                                 if on_section is not None:
                                     try:
                                         on_section(valid)
+                                        mark("first_published", {"section_id": section_id})
                                     except Exception as exc:
                                         raise StreamFailure("section callback failed", retryable=False) from exc
                                 sections.append(valid)

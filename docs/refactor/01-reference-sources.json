@@ -1,0 +1,44 @@
+[
+  {
+    "repository": "langchain-ai/langgraph",
+    "commit": "ccb851effb7b4c6255add86dbeed577061475aff",
+    "files": [
+      {
+        "path": "libs/langgraph/langgraph/types.py",
+        "url": "https://raw.githubusercontent.com/langchain-ai/langgraph/ccb851effb7b4c6255add86dbeed577061475aff/libs/langgraph/langgraph/types.py",
+        "sha256": "062583a1c0af9833477935a9a78d336408cc9a33c425722a1191e000d032107a"
+      },
+      {
+        "path": "libs/langgraph/langgraph/pregel/main.py",
+        "url": "https://raw.githubusercontent.com/langchain-ai/langgraph/ccb851effb7b4c6255add86dbeed577061475aff/libs/langgraph/langgraph/pregel/main.py",
+        "sha256": "c96d4424e7a75388aef09afeaa8fcfe17c026e60dafca1331003775ca1bf0ffc"
+      },
+      {
+        "path": "libs/langgraph/tests/test_pregel.py",
+        "url": "https://raw.githubusercontent.com/langchain-ai/langgraph/ccb851effb7b4c6255add86dbeed577061475aff/libs/langgraph/tests/test_pregel.py",
+        "sha256": "b6553c96f3a429e64b4ffb7f33c98560e569d30ab08e4aed4d4332d5cf16fad4"
+      }
+    ]
+  },
+  {
+    "repository": "run-llama/llama_index",
+    "commit": "5b7b6e323e1da3edd787a2104a89257c14f026d0",
+    "files": [
+      {
+        "path": "llama-index-core/llama_index/core/response_synthesizers/base.py",
+        "url": "https://raw.githubusercontent.com/run-llama/llama_index/5b7b6e323e1da3edd787a2104a89257c14f026d0/llama-index-core/llama_index/core/response_synthesizers/base.py",
+        "sha256": "5fb39a634acc1bcab884ace42754478abc6fcf427d89caa89622716c48015103"
+      },
+      {
+        "path": "llama-index-core/llama_index/core/query_engine/retriever_query_engine.py",
+        "url": "https://raw.githubusercontent.com/run-llama/llama_index/5b7b6e323e1da3edd787a2104a89257c14f026d0/llama-index-core/llama_index/core/query_engine/retriever_query_engine.py",
+        "sha256": "136c2476ce49d6647324cdd4b9633e293a41268d14966150691c710678a31c40"
+      },
+      {
+        "path": "llama-index-core/tests/response_synthesizers/test_simple_summarize.py",
+        "url": "https://raw.githubusercontent.com/run-llama/llama_index/5b7b6e323e1da3edd787a2104a89257c14f026d0/llama-index-core/tests/response_synthesizers/test_simple_summarize.py",
+        "sha256": "dc27439bb2b9e2c0c2d4df88c448f66c5e9b1334fb7276262ef52dc0dd659375"
+      }
+    ]
+  }
+]

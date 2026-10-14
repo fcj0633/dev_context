@@ -100,6 +100,8 @@ def build_perf_report(
             "llm_latency_ms": round(llm["latency_ms"], 3),
             "llm_input_tokens": llm["input_tokens"],
             "llm_output_tokens": llm["output_tokens"],
+            "llm_input_tokens_reporting": llm["input_tokens_reporting"],
+            "llm_output_tokens_reporting": llm["output_tokens_reporting"],
             "llm_reasoning_tokens": (
                 sum(call.reasoning_tokens for call in recorder.llm_calls)
                 if recorder.llm_calls and all(call.reasoning_tokens is not None for call in recorder.llm_calls)
@@ -145,9 +147,13 @@ def render_summary(report: dict[str, Any]) -> str:
         "",
     ]
     summary = report["summary"]
+    output_tokens = summary["llm_output_tokens"]
+    if output_tokens is None:
+        known = summary.get("llm_output_tokens_reporting", {}).get("known_total")
+        output_tokens = "unknown" if known is None else f"unknown; reported subtotal: {known}"
     lines += [
         f"LLM calls:        {summary['llm_calls']}"
-        f"   (output tokens: {summary['llm_output_tokens']})",
+        f"   (output tokens: {output_tokens})",
         f"Embedding calls:  {summary['embedding_calls']}",
         f"Retrieval actions:{summary['retrieval_actions']:>3}",
         f"Sections:         {summary['sections']}"

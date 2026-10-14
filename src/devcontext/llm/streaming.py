@@ -182,6 +182,8 @@ def generate_stream(client, messages: Sequence[LLMMessage]) -> Iterator[StreamEv
     started = time.perf_counter()
     client.last_usage = {}
     client.last_finish_reason = None
+    from devcontext.observability.diagnostics import begin_model, model_content, end_model
+    diagnostic_attempt = begin_model(client, messages, streaming=True)
     success = False
     error = None
     source = curl_stream(client, messages)
@@ -194,16 +196,20 @@ def generate_stream(client, messages: Sequence[LLMMessage]) -> Iterator[StreamEv
             if prefix is not None and event.type == "content":
                 text = prefix.feed(event.text)
                 if text:
+                    model_content(diagnostic_attempt, text)
                     yield StreamEvent("content", text=text)
                 continue
             if prefix is not None and event.type == "finish":
                 tail = prefix.finish()
                 if tail:
+                    model_content(diagnostic_attempt, tail)
                     yield StreamEvent("content", text=tail)
             if event.type == "usage":
                 client.last_usage.update(event.usage or {})
             elif event.type == "finish":
                 client.last_finish_reason = event.finish_reason
+            elif event.type == "content":
+                model_content(diagnostic_attempt, event.text)
             yield event
         success = True
     except Exception as exc:
@@ -211,6 +217,7 @@ def generate_stream(client, messages: Sequence[LLMMessage]) -> Iterator[StreamEv
         yield StreamEvent("error", text=error, retryable=getattr(exc, "retryable", True))
     finally:
         source.close()
+        end_model(diagnostic_attempt, client, error or (None if success else "stream consumer stopped early"))
         client.timeout_seconds = original_timeout
         client.last_latency_ms = (time.perf_counter() - started) * 1000
         record_llm_call(

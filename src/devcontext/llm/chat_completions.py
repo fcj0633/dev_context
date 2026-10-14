@@ -70,9 +70,12 @@ class ChatCompletionsLLMClient:
         self.last_usage = {}
         self.last_finish_reason = None
         self.last_partial_response = None
+        from devcontext.observability.diagnostics import begin_model, end_model
+        diagnostic_attempt = begin_model(self, messages)
         try:
             content = self._generate(messages)
         except Exception as exception:
+            end_model(diagnostic_attempt, self, str(exception))
             from devcontext.agentic.models import error_detail
 
             record_llm_call(
@@ -90,6 +93,7 @@ class ChatCompletionsLLMClient:
             )
             raise
         usage = self.last_usage
+        end_model(diagnostic_attempt, self)
         record_llm_call(
             latency_ms=(time.perf_counter() - started) * 1000,
             model=self.model,
