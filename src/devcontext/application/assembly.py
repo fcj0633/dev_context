@@ -1,12 +1,13 @@
 from __future__ import annotations
 from devcontext.llm.factory import create_llm_client
 from collections.abc import Callable
+from dataclasses import dataclass
+from devcontext.code_graph.store import CodeGraphStore
 from devcontext.agentic import AgenticRetrievalWorkflow, ContextSufficiencyChecker, CoverageChecker, EvidenceDrivenWorkflow, RetrievalController, RetrievalEngine, RetrievalObserver, SearchActionPlanner, TargetedQueryRewriter
 from devcontext.answer import ANSWER_MAX_TOKENS, EXPLAIN_ANSWER_MAX_TOKENS, AnswerGenerator, AnswerPlanner, AnswerReviewer
 from devcontext.config import Settings
 from devcontext.context import ContextBuilder
 from devcontext.evidence import SourcePolicy, default_source_policy_path
-from devcontext.evaluation.retrieval_workflow_runner import FrozenEvidencePlanner, FrozenSearchActionPlanner, OracleCoverageChecker
 from devcontext.llm import DeepSeekLLMClient, LLMClient
 from devcontext.explanation import EXPLANATION_PLANNER_MAX_TOKENS, ExplanationPlanner, SectionComposer, TeachingExplanationWorkflow, TeachingReviewer
 from devcontext.explanation.composer import COMPOSER_MAX_TOKENS
@@ -48,19 +49,55 @@ JUDGE_MAX_TOKENS = 32768
 REVIEWER_MAX_TOKENS = 32768
 
 
+@dataclass(frozen=True, slots=True)
+class RetrievalOverrides:
+    """Explicit retrieval components supplied by experiments, outside production assembly."""
+
+    evidence_planner: object | None = None
+    action_planner: object | None = None
+    coverage_checker: object | None = None
+
+
 class WorkflowFactory:
-    """Request-local workflow assembly; optional overrides preserve CLI adapters."""
+    """Compose existing workflows with explicit external dependencies."""
 
-    def __init__(self, dependencies=None, observer=None):
-        self.dependencies = dependencies or {}
+    def __init__(self, *, observer: RetrievalObserver | None = None,
+                 llm_client_factory: Callable[..., LLMClient] | None = None,
+                 deepseek_client_type: type[DeepSeekLLMClient] | None = None,
+                 retrieval_service_factory: Callable[[Settings], RetrievalService] | None = None,
+                 graph_store_factory: Callable[..., CodeGraphStore] | None = None,
+                 retrieval_engine_factory: Callable[..., RetrievalEngine] | None = None,
+                 teaching_workflow_factory: Callable[[Settings], TeachingExplanationWorkflow] | None = None):
         self.observer = observer
+        self.client_factory = llm_client_factory or create_llm_client
+        self.deepseek_client_type = deepseek_client_type or DeepSeekLLMClient
+        self.retrieval_service_factory = retrieval_service_factory or RetrievalService
+        self.graph_store_factory = graph_store_factory or CodeGraphStore
+        self.retrieval_engine_factory = retrieval_engine_factory
+        self.teaching_workflow_factory = teaching_workflow_factory
 
-    def _resolve(self, name):
-        if name in self.dependencies:
-            return self.dependencies[name]
-        return getattr(self, name) if hasattr(self, name) else globals()[name]
+    def build_answer_workflow(self, prepared):
+        settings = prepared.settings.model_copy(deep=True)
+        if prepared.request.no_plan:
+            return self.agentic_workflow(settings, ContextBuilder(max_chars=prepared.max_chars))
+        return self.planned_workflow(settings, ContextBuilder(max_chars=prepared.max_chars),
+            ContextBuilder(max_chars=prepared.request.legacy_max_chars), prepared.answer_mode,
+            prepared.request.max_chars, prepared.policy)
 
-    def _v3_client_factory(self, settings: Settings, factory):
+    def build_question_planner(self, settings):
+        return self.question_planner(settings)
+
+    def build_evidence_planner(self, settings, *, production=False):
+        if production and settings.answer_engine_enabled and settings.answer_profile == "fast":
+            from devcontext.agentic.fast import FastRetrievalPlanner
+            return FastRetrievalPlanner(self.planner_llm_factory(settings))
+        return self.evidence_planner(settings)
+
+    def build_retrieval_engine(self, settings, *, observer=None, overrides=None, frozen_plan=None):
+        return self.retrieval_controller(settings, observer=observer, overrides=overrides,
+                                          frozen_plan=frozen_plan)
+
+    def v3_client_factory(self, settings: Settings, factory):
         def create():
             client = factory()
             if settings.llm_provider == "openai":
@@ -69,8 +106,8 @@ class WorkflowFactory:
         return create
 
 
-    def _profile_answer_factory(self, settings: Settings, *, planner=False):
-        return lambda: self._resolve("create_llm_client")(settings, deepseek_client_type=self._resolve("DeepSeekLLMClient"),
+    def profile_answer_factory(self, settings: Settings, *, planner=False):
+        return lambda: self.client_factory(settings, deepseek_client_type=self.deepseek_client_type,
             legacy_model=(settings.deepseek_answer_planner_model if planner else settings.deepseek_answer_model) or settings.deepseek_model,
             requested_reasoning_effort=settings.answer_reasoning_effort or ("low" if settings.answer_profile == "fast" else "high"),
             max_tokens=min(settings.model_capabilities().max_output_tokens, 32768 if settings.answer_profile == "full" else (8000 if planner else 16000)),
@@ -78,36 +115,36 @@ class WorkflowFactory:
             json_mode=planner)
 
 
-    def _query_router(self, settings: Settings) -> QueryRouter:
-        return self._resolve("QueryRouter")(
-            lambda: self._resolve("create_llm_client")(
-            settings, deepseek_client_type=self._resolve("DeepSeekLLMClient"),
+    def query_router(self, settings: Settings) -> QueryRouter:
+        return QueryRouter(
+            lambda: self.client_factory(
+            settings, deepseek_client_type=self.deepseek_client_type,
                 legacy_model=settings.deepseek_model,
                 max_tokens=1024,
             )
         )
 
 
-    def _short_llm_factory(self, settings: Settings) -> Callable[[], LLMClient]:
-        return lambda: self._resolve("create_llm_client")(
-            settings, deepseek_client_type=self._resolve("DeepSeekLLMClient"),
+    def short_llm_factory(self, settings: Settings) -> Callable[[], LLMClient]:
+        return lambda: self.client_factory(
+            settings, deepseek_client_type=self.deepseek_client_type,
             legacy_model=settings.deepseek_model,
             max_tokens=1024,
         )
 
 
-    def _answer_client(self, settings: Settings, *, explain: bool = False) -> DeepSeekLLMClient:
-        return self._resolve("create_llm_client")(
-            settings, deepseek_client_type=self._resolve("DeepSeekLLMClient"),
+    def answer_client(self, settings: Settings, *, explain: bool = False) -> DeepSeekLLMClient:
+        return self.client_factory(
+            settings, deepseek_client_type=self.deepseek_client_type,
             legacy_model=settings.deepseek_answer_model or settings.deepseek_model,
             reasoning_effort="high" if explain else "low",
             max_tokens=EXPLAIN_ANSWER_MAX_TOKENS if explain else ANSWER_MAX_TOKENS,
         )
 
 
-    def _planner_llm_factory(self, settings: Settings) -> Callable[[], LLMClient]:
-        return lambda: self._resolve("create_llm_client")(
-            settings, deepseek_client_type=self._resolve("DeepSeekLLMClient"),
+    def planner_llm_factory(self, settings: Settings) -> Callable[[], LLMClient]:
+        return lambda: self.client_factory(
+            settings, deepseek_client_type=self.deepseek_client_type,
             legacy_model=settings.deepseek_planner_model or settings.deepseek_model,
             reasoning_effort="low" if settings.llm_provider == "openai" else "high",
             max_tokens=PLANNER_MAX_TOKENS,
@@ -117,9 +154,9 @@ class WorkflowFactory:
         )
 
 
-    def _rewrite_llm_factory(self, settings: Settings) -> Callable[[], LLMClient]:
-        return lambda: self._resolve("create_llm_client")(
-            settings, deepseek_client_type=self._resolve("DeepSeekLLMClient"),
+    def rewrite_llm_factory(self, settings: Settings) -> Callable[[], LLMClient]:
+        return lambda: self.client_factory(
+            settings, deepseek_client_type=self.deepseek_client_type,
             legacy_model=settings.deepseek_model,
             reasoning_effort="low",
             max_tokens=REWRITE_MAX_TOKENS,
@@ -128,11 +165,11 @@ class WorkflowFactory:
         )
 
 
-    def _sub_question_sufficiency_factory(self,
+    def sub_question_sufficiency_factory(self,
         settings: Settings,
     ) -> Callable[[], LLMClient]:
-        return lambda: self._resolve("create_llm_client")(
-            settings, deepseek_client_type=self._resolve("DeepSeekLLMClient"),
+        return lambda: self.client_factory(
+            settings, deepseek_client_type=self.deepseek_client_type,
             legacy_model=settings.deepseek_model,
             reasoning_effort="low",
             max_tokens=SUB_QUESTION_SUFFICIENCY_MAX_TOKENS,
@@ -141,9 +178,9 @@ class WorkflowFactory:
         )
 
 
-    def _answer_planner_factory(self, settings: Settings) -> Callable[[], LLMClient]:
-        return lambda: self._resolve("create_llm_client")(
-            settings, deepseek_client_type=self._resolve("DeepSeekLLMClient"),
+    def answer_planner_factory(self, settings: Settings) -> Callable[[], LLMClient]:
+        return lambda: self.client_factory(
+            settings, deepseek_client_type=self.deepseek_client_type,
             legacy_model=settings.deepseek_answer_planner_model or settings.deepseek_model,
             reasoning_effort="high",
             max_tokens=ANSWER_PLANNER_MAX_TOKENS,
@@ -151,9 +188,9 @@ class WorkflowFactory:
         )
 
 
-    def _reviewer_factory(self, settings: Settings) -> Callable[[], LLMClient]:
-        return lambda: self._resolve("create_llm_client")(
-            settings, deepseek_client_type=self._resolve("DeepSeekLLMClient"),
+    def reviewer_factory(self, settings: Settings) -> Callable[[], LLMClient]:
+        return lambda: self.client_factory(
+            settings, deepseek_client_type=self.deepseek_client_type,
             legacy_model=settings.deepseek_reviewer_model or settings.deepseek_model,
             reasoning_effort="high",
             max_tokens=REVIEWER_MAX_TOKENS,
@@ -161,9 +198,9 @@ class WorkflowFactory:
         )
 
 
-    def _explanation_planner_factory(self, settings: Settings) -> Callable[[], LLMClient]:
-        return lambda: self._resolve("create_llm_client")(
-            settings, deepseek_client_type=self._resolve("DeepSeekLLMClient"),
+    def explanation_planner_factory(self, settings: Settings) -> Callable[[], LLMClient]:
+        return lambda: self.client_factory(
+            settings, deepseek_client_type=self.deepseek_client_type,
             legacy_model=settings.deepseek_answer_planner_model or settings.deepseek_model,
             reasoning_effort="high",
             max_tokens=EXPLANATION_PLANNER_MAX_TOKENS,
@@ -171,18 +208,18 @@ class WorkflowFactory:
         )
 
 
-    def _teaching_writer_factory(self, settings: Settings) -> Callable[[], LLMClient]:
-        return lambda: self._resolve("create_llm_client")(
-            settings, deepseek_client_type=self._resolve("DeepSeekLLMClient"),
+    def teaching_writer_factory(self, settings: Settings) -> Callable[[], LLMClient]:
+        return lambda: self.client_factory(
+            settings, deepseek_client_type=self.deepseek_client_type,
             legacy_model=settings.deepseek_answer_model or settings.deepseek_model,
             reasoning_effort="high",
             max_tokens=TEACHING_ANSWER_MAX_TOKENS,
         )
 
 
-    def _teaching_reviewer_factory(self, settings: Settings) -> Callable[[], LLMClient]:
-        return lambda: self._resolve("create_llm_client")(
-            settings, deepseek_client_type=self._resolve("DeepSeekLLMClient"),
+    def teaching_reviewer_factory(self, settings: Settings) -> Callable[[], LLMClient]:
+        return lambda: self.client_factory(
+            settings, deepseek_client_type=self.deepseek_client_type,
             legacy_model=settings.deepseek_reviewer_model or settings.deepseek_model,
             reasoning_effort="high",
             max_tokens=TEACHING_REVIEWER_MAX_TOKENS,
@@ -190,29 +227,29 @@ class WorkflowFactory:
         )
 
 
-    def _composer_factory(self, settings: Settings) -> Callable[[], LLMClient]:
-        return lambda: self._resolve("create_llm_client")(
-            settings, deepseek_client_type=self._resolve("DeepSeekLLMClient"),
+    def composer_factory(self, settings: Settings) -> Callable[[], LLMClient]:
+        return lambda: self.client_factory(
+            settings, deepseek_client_type=self.deepseek_client_type,
             legacy_model=settings.deepseek_answer_model or settings.deepseek_model,
             reasoning_effort="high",
             max_tokens=COMPOSER_MAX_TOKENS,
         )
 
 
-    def _question_planner(self, settings: Settings) -> QuestionPlanner:
-        return self._resolve("QuestionPlanner")(self._resolve("_planner_llm_factory")(settings))
+    def question_planner(self, settings: Settings) -> QuestionPlanner:
+        return QuestionPlanner(self.planner_llm_factory(settings))
 
 
-    def _evidence_planner(self, settings: Settings) -> EvidencePlanner:
-        return self._resolve("EvidencePlanner")(self._resolve("_planner_llm_factory")(settings), full_teaching=settings.answer_engine_enabled and settings.answer_profile == "full")
+    def evidence_planner(self, settings: Settings) -> EvidencePlanner:
+        return EvidencePlanner(self.planner_llm_factory(settings), full_teaching=settings.answer_engine_enabled and settings.answer_profile == "full")
 
 
-    def _answer_judge_factory(self,
+    def answer_judge_factory(self,
         settings: Settings, model: str | None = None
     ) -> Callable[[], LLMClient]:
         """The blind judge reads two long answers and emits a tiny verdict."""
-        return lambda: self._resolve("create_llm_client")(
-            settings, deepseek_client_type=self._resolve("DeepSeekLLMClient"),
+        return lambda: self.client_factory(
+            settings, deepseek_client_type=self.deepseek_client_type,
             model=model,
             reasoning_effort="high",
             max_tokens=JUDGE_MAX_TOKENS,
@@ -220,22 +257,22 @@ class WorkflowFactory:
         )
 
 
-    def _agentic_workflow(self,
+    def agentic_workflow(self,
         settings: Settings,
         builder: ContextBuilder,
     ) -> AgenticRetrievalWorkflow:
-        short_llm_factory = self._resolve("_short_llm_factory")(settings)
-        return self._resolve("AgenticRetrievalWorkflow")(
-            router=self._resolve("_query_router")(settings),
-            retrieval_policy=self._resolve("RetrievalPolicy")(self._resolve("RetrievalService")(settings)),
+        short_llm_factory = self.short_llm_factory(settings)
+        return AgenticRetrievalWorkflow(
+            router=self.query_router(settings),
+            retrieval_policy=RetrievalPolicy(self.retrieval_service_factory(settings)),
             context_builder=builder,
-            sufficiency_checker=self._resolve("ContextSufficiencyChecker")(short_llm_factory),
-            query_rewriter=self._resolve("TargetedQueryRewriter")(self._resolve("_rewrite_llm_factory")(settings)),
-            answer_generator_factory=lambda: self._resolve("AnswerGenerator")(self._resolve("_answer_client")(settings)),
+            sufficiency_checker=ContextSufficiencyChecker(short_llm_factory),
+            query_rewriter=TargetedQueryRewriter(self.rewrite_llm_factory(settings)),
+            answer_generator_factory=lambda: AnswerGenerator(self.answer_client(settings)),
         )
 
 
-    def _planned_workflow(self,
+    def planned_workflow(self,
         settings: Settings,
         planned_builder: ContextBuilder,
         legacy_builder: ContextBuilder,
@@ -248,36 +285,16 @@ class WorkflowFactory:
         # caller explicitly supplies context_budget_override.
         _ = planned_builder, legacy_builder
         request_policy = request_policy or settings.answer_request_policy
-        controller = self._resolve("_retrieval_controller")(settings, observer=self.observer) if self.observer is not None else self._resolve("_retrieval_controller")(settings)
-        teaching_workflow = None
-        if answer_mode == "teach":
-            # The teach path keeps its own client policy: its planner and its writer
-            # do different work from the explain path's, so sharing budgets and
-            # effort settings between them would just constrain both.
-            teaching_workflow = self._resolve("TeachingExplanationWorkflow")(
-                self._resolve("ExplanationPlanner")(self._resolve("_explanation_planner_factory")(settings)),
-                self._resolve("TeachingWriter")(self._resolve("_teaching_writer_factory")(settings)),
-                self._resolve("SectionComposer")(self._resolve("_composer_factory")(settings)),
-                self._resolve("TeachingReviewer")(self._resolve("_teaching_reviewer_factory")(settings)),
-                capabilities=settings.model_capabilities(),
-                runtime_options=self._resolve("TeachingRuntimeOptions")(settings.teaching_generation_mode),
-                micro_planner=self._resolve("MicroExplanationPlanner")(self._resolve("_profile_answer_factory")(settings, planner=True) if request_policy else self._resolve("_explanation_planner_factory")(settings), settings.model_capabilities()),
-                streaming_writer=self._resolve("SingleStreamingTeachingWriter")(self._resolve("_profile_answer_factory")(settings) if request_policy else self._resolve("_teaching_writer_factory")(settings), permissive=request_policy is not None),
-            )
-            if settings.teaching_generation_mode == "v3" or (request_policy and request_policy.profile == "full"):
-                from devcontext.explanation.v3.planner import TeachingPlannerV3
-                from devcontext.explanation.v3.writer import TeachingWriterV3
-                teaching_workflow.request_timeout_seconds = settings.teaching_request_timeout_seconds
-                teaching_workflow.v3_planner = TeachingPlannerV3(
-                    self._resolve("_profile_answer_factory")(settings, planner=True) if request_policy else self._resolve("_v3_client_factory")(settings, self._resolve("_explanation_planner_factory")(settings)), teaching_workflow.capabilities, teaching_workflow.estimator)
-                teaching_workflow.v3_writer = TeachingWriterV3(self._resolve("_profile_answer_factory")(settings) if request_policy else self._resolve("_v3_client_factory")(settings, self._resolve("_teaching_writer_factory")(settings)), permissive=request_policy is not None)
-        return self._resolve("EvidenceDrivenWorkflow")(
+        controller = (self.retrieval_engine_factory(settings, observer=self.observer) if self.retrieval_engine_factory is not None
+                      else self.build_retrieval_engine(settings, observer=self.observer))
+        teaching_workflow = self.build_teaching_workflow(settings, request_policy=request_policy) if answer_mode == "teach" else None
+        return EvidenceDrivenWorkflow(
             controller,
-            answer_generator_factory=lambda: self._resolve("AnswerGenerator")(
-                self._resolve("_answer_client")(settings, explain=answer_mode == "explain")
+            answer_generator_factory=lambda: AnswerGenerator(
+                self.answer_client(settings, explain=answer_mode == "explain")
             ),
-            answer_planner=self._resolve("AnswerPlanner")(self._resolve("_answer_planner_factory")(settings)),
-            answer_reviewer=self._resolve("AnswerReviewer")(self._resolve("_reviewer_factory")(settings)),
+            answer_planner=AnswerPlanner(self.answer_planner_factory(settings)),
+            answer_reviewer=AnswerReviewer(self.reviewer_factory(settings)),
             answer_mode=answer_mode,
             context_budget_override=context_budget_override,
             teaching_workflow=teaching_workflow,
@@ -285,77 +302,100 @@ class WorkflowFactory:
         )
 
 
-    def _retrieval_controller(self,
+    def build_teaching_workflow(self, settings, *, request_policy=None):
+        if self.teaching_workflow_factory is not None:
+            return self.teaching_workflow_factory(settings)
+        request_policy = request_policy or settings.answer_request_policy
+        # The teach path keeps its own client policy: its planner and its writer
+        # do different work from the explain path's, so sharing budgets and
+        # effort settings between them would just constrain both.
+        teaching_workflow = TeachingExplanationWorkflow(
+            ExplanationPlanner(self.explanation_planner_factory(settings)),
+            TeachingWriter(self.teaching_writer_factory(settings)),
+            SectionComposer(self.composer_factory(settings)),
+            TeachingReviewer(self.teaching_reviewer_factory(settings)),
+            capabilities=settings.model_capabilities(),
+            runtime_options=TeachingRuntimeOptions(settings.teaching_generation_mode),
+            micro_planner=MicroExplanationPlanner(self.profile_answer_factory(settings, planner=True) if request_policy else self.explanation_planner_factory(settings), settings.model_capabilities()),
+            streaming_writer=SingleStreamingTeachingWriter(self.profile_answer_factory(settings) if request_policy else self.teaching_writer_factory(settings), permissive=request_policy is not None),
+        )
+        if settings.teaching_generation_mode == "v3" or (request_policy and request_policy.profile == "full"):
+            from devcontext.explanation.v3.planner import TeachingPlannerV3
+            from devcontext.explanation.v3.writer import TeachingWriterV3
+            teaching_workflow.request_timeout_seconds = settings.teaching_request_timeout_seconds
+            teaching_workflow.v3_planner = TeachingPlannerV3(
+                self.profile_answer_factory(settings, planner=True) if request_policy else self.v3_client_factory(settings, self.explanation_planner_factory(settings)), teaching_workflow.capabilities, teaching_workflow.estimator)
+            teaching_workflow.v3_writer = TeachingWriterV3(self.profile_answer_factory(settings) if request_policy else self.v3_client_factory(settings, self.teaching_writer_factory(settings)), permissive=request_policy is not None)
+        return teaching_workflow
+
+
+    def retrieval_controller(self,
         settings: Settings,
         *,
         observer: RetrievalObserver | None = None,
-        frozen_case: dict | None = None,
+        overrides: RetrievalOverrides | None = None,
         frozen_plan: EvidencePlan | None = None,
-        shared_coverage_factory=None,
     ) -> RetrievalEngine:
         source_policy = SourcePolicy.from_file(
-            settings.source_policy_path or self._resolve("default_source_policy_path")()
+            settings.source_policy_path or default_source_policy_path()
         )
-        if frozen_case is None:
-            evidence_planner = self._resolve("_evidence_planner")(settings)
-            action_planner = self._resolve("SearchActionPlanner")(self._resolve("_rewrite_llm_factory")(settings))
-            coverage_checker = self._resolve("CoverageChecker")(
-                self._resolve("_sub_question_sufficiency_factory")(settings)
+        if overrides is None or (overrides.evidence_planner is None and overrides.action_planner is None):
+            evidence_planner = self.evidence_planner(settings)
+            action_planner = SearchActionPlanner(self.rewrite_llm_factory(settings))
+            coverage_checker = CoverageChecker(
+                self.sub_question_sufficiency_factory(settings)
             )
             if settings.answer_engine_enabled and settings.answer_profile == "fast" and frozen_plan is None:
                 from devcontext.agentic.fast import FastRetrievalPlanner, FastActionPlanner
-                evidence_planner = FastRetrievalPlanner(self._resolve("_planner_llm_factory")(settings))
+                evidence_planner = FastRetrievalPlanner(self.planner_llm_factory(settings))
                 action_planner = FastActionPlanner(evidence_planner)
-                coverage_checker = self._resolve("CoverageChecker")(self._resolve("_sub_question_sufficiency_factory")(settings), max_attempts=1)
+                coverage_checker = CoverageChecker(self.sub_question_sufficiency_factory(settings), max_attempts=1)
         else:
-            evidence_planner = self._resolve("FrozenEvidencePlanner")(frozen_case)
-            action_planner = self._resolve("FrozenSearchActionPlanner")(frozen_case)
-            coverage_checker = self._resolve("OracleCoverageChecker")(frozen_case)
+            evidence_planner = overrides.evidence_planner or self.evidence_planner(settings)
+            action_planner = overrides.action_planner or SearchActionPlanner(self.rewrite_llm_factory(settings))
+            coverage_checker = overrides.coverage_checker or CoverageChecker(self.sub_question_sufficiency_factory(settings))
+        if overrides is not None and overrides.coverage_checker is not None:
+            coverage_checker = overrides.coverage_checker
         if frozen_plan is not None:
             from devcontext.agentic.retrieval_engine import FixedEvidencePlanner
             evidence_planner = FixedEvidencePlanner(frozen_plan)
-        if shared_coverage_factory is not None:
-            coverage_checker = shared_coverage_factory()
         from devcontext.agentic.structural_coverage import combined
         from devcontext.code_graph.hydration import GraphMetadataHydrator
-        from devcontext.code_graph.store import CodeGraphStore
-        hydrator = GraphMetadataHydrator(CodeGraphStore(settings.database_url, settings.repository_name, settings.symbol_graph_query_timeout_seconds), "tool_agent" if settings.tool_agent_enabled else "auto_graph" if settings.symbol_graph_enabled else "fixed_search")
+        hydrator = GraphMetadataHydrator(self.graph_store_factory(settings.database_url, settings.repository_name, settings.symbol_graph_query_timeout_seconds), "tool_agent" if settings.tool_agent_enabled else "auto_graph" if settings.symbol_graph_enabled else "fixed_search")
         coverage_checker = combined(coverage_checker, hydrator)
         if settings.tool_agent_enabled:
             from devcontext.agentic.tool_driven_retrieval_controller import ToolDrivenRetrievalController
-            from devcontext.code_graph.store import CodeGraphStore
             from devcontext.tool_agent.executor import ToolExecutor
             from devcontext.tool_agent.planner import AgentPlanner
             from devcontext.tool_agent.registry import ToolRegistry
             from devcontext.tool_agent.runtime import AgentRuntime
             from devcontext.tool_agent.tools import RepositoryTools
-            if shared_coverage_factory is None and frozen_case is None:
-                coverage_checker = combined(self._resolve("CoverageChecker")(self._resolve("_sub_question_sufficiency_factory")(settings), max_attempts=1), hydrator)
-            tools = RepositoryTools(self._resolve("RetrievalPolicy")(self._resolve("RetrievalService")(settings)),
-                CodeGraphStore(settings.database_url, settings.repository_name, settings.symbol_graph_query_timeout_seconds), observer)
-            factory = lambda: self._resolve("create_llm_client")(settings, deepseek_client_type=self._resolve("DeepSeekLLMClient"),
+            if overrides is None or overrides.coverage_checker is None:
+                coverage_checker = combined(CoverageChecker(self.sub_question_sufficiency_factory(settings), max_attempts=1), hydrator)
+            tools = RepositoryTools(RetrievalPolicy(self.retrieval_service_factory(settings)),
+                self.graph_store_factory(settings.database_url, settings.repository_name, settings.symbol_graph_query_timeout_seconds), observer)
+            factory = lambda: self.client_factory(settings, deepseek_client_type=self.deepseek_client_type,
                 legacy_model=settings.deepseek_planner_model or settings.deepseek_model,
                 requested_reasoning_effort="low", max_tokens=8192, json_mode=True,
                 timeout_seconds=settings.tool_agent_planner_timeout_seconds)
             return ToolDrivenRetrievalController(evidence_planner,
                 AgentRuntime(AgentPlanner(factory), ToolExecutor(ToolRegistry(tools)), coverage_checker, source_policy), observer)
-        return self._resolve("RetrievalController")(
+        return RetrievalController(
             evidence_planner=evidence_planner,
             action_planner=action_planner,
-            retrieval_policy=self._resolve("RetrievalPolicy")(self._resolve("RetrievalService")(settings)),
+            retrieval_policy=RetrievalPolicy(self.retrieval_service_factory(settings)),
             coverage_checker=coverage_checker,
             source_policy=source_policy,
             observer=observer,
-            graph_expander=self._resolve("_code_graph_expander")(settings),
+            graph_expander=self.code_graph_expander(settings),
         )
 
 
-    def _code_graph_expander(self, settings: Settings):
+    def code_graph_expander(self, settings: Settings):
         if not settings.symbol_graph_enabled:
             return None
         from devcontext.code_graph.expansion import CodeGraphExpander
-        from devcontext.code_graph.store import CodeGraphStore
-        return CodeGraphExpander(CodeGraphStore(settings.database_url, settings.repository_name,
+        return CodeGraphExpander(self.graph_store_factory(settings.database_url, settings.repository_name,
                                                settings.symbol_graph_query_timeout_seconds))
 
 

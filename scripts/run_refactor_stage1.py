@@ -15,10 +15,8 @@ from zoneinfo import ZoneInfo
 
 import psycopg
 
-from devcontext.answer_policy import resolve_policy
-from devcontext.cli import _planned_workflow
+from devcontext.application import AskRequest, AskService
 from devcontext.config import Settings
-from devcontext.context import ContextBuilder
 from devcontext.observability import capture
 from devcontext.observability.diagnostics import capture_diagnostics, clean
 from devcontext.observability.report import build_perf_report
@@ -98,21 +96,17 @@ def main():
     consecutive_failures = 0
     for index, case in enumerate(cases):
         print(f"Starting {case['id']} ({index+1}/{len(cases)}), Fast, 120s limit", flush=True)
-        policy = resolve_policy(case["question"], settings, profile="fast", hard_timeout=120)
-        scoped = settings.model_copy(update={"answer_engine_enabled": True, "answer_profile": "fast",
-            "answer_reasoning_effort": policy.reasoning_effort, "answer_request_policy": policy,
-            "teaching_generation_mode": "single_stream"})
+        service = AskService(settings)
+        prepared = service.prepare(AskRequest(case["question"], profile="fast", hard_timeout=120))
         result = None
         error = None
         started = time.perf_counter()
         with capture() as perf, capture_diagnostics(secrets=secrets) as diagnostic:
             try:
-                workflow = _planned_workflow(scoped, ContextBuilder(max_chars=10000), ContextBuilder(max_chars=6000),
-                                             answer_mode="teach", request_policy=policy)
                 def published(section):
                     # A completed callback is the measured consumer; not browser paint.
                     print(f"  {case['id']} section {section.section_id} published", flush=True)
-                result = workflow.run(case["question"], 12, on_section=published)
+                result = service.execute(prepared, on_section=published)
             except Exception as exc:
                 error = str(exc)
             finally:

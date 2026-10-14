@@ -1,0 +1,58 @@
+[
+  {
+    "repository": "run-llama/llama_index",
+    "commit": "5b7b6e323e1da3edd787a2104a89257c14f026d0",
+    "path": "llama-index-core/llama_index/core/query_engine/retriever_query_engine.py",
+    "url": "https://github.com/run-llama/llama_index/blob/5b7b6e323e1da3edd787a2104a89257c14f026d0/llama-index-core/llama_index/core/query_engine/retriever_query_engine.py",
+    "sha256": "136c2476ce49d6647324cdd4b9633e293a41268d14966150691c710678a31c40",
+    "local_copy": "artifacts/refactor-stage2/references/llama_index/llama-index-core/llama_index/core/query_engine/retriever_query_engine.py"
+  },
+  {
+    "repository": "run-llama/llama_index",
+    "commit": "5b7b6e323e1da3edd787a2104a89257c14f026d0",
+    "path": "llama-index-core/llama_index/core/response_synthesizers/base.py",
+    "url": "https://github.com/run-llama/llama_index/blob/5b7b6e323e1da3edd787a2104a89257c14f026d0/llama-index-core/llama_index/core/response_synthesizers/base.py",
+    "sha256": "5fb39a634acc1bcab884ace42754478abc6fcf427d89caa89622716c48015103",
+    "local_copy": "artifacts/refactor-stage2/references/llama_index/llama-index-core/llama_index/core/response_synthesizers/base.py"
+  },
+  {
+    "repository": "run-llama/llama_index",
+    "commit": "5b7b6e323e1da3edd787a2104a89257c14f026d0",
+    "path": "llama-index-core/tests/response_synthesizers/test_simple_summarize.py",
+    "url": "https://github.com/run-llama/llama_index/blob/5b7b6e323e1da3edd787a2104a89257c14f026d0/llama-index-core/tests/response_synthesizers/test_simple_summarize.py",
+    "sha256": "dc27439bb2b9e2c0c2d4df88c448f66c5e9b1334fb7276262ef52dc0dd659375",
+    "local_copy": "artifacts/refactor-stage2/references/llama_index/llama-index-core/tests/response_synthesizers/test_simple_summarize.py"
+  },
+  {
+    "repository": "run-llama/llama_index",
+    "commit": "5b7b6e323e1da3edd787a2104a89257c14f026d0",
+    "path": "llama-index-core/tests/query_engine/test_retriever_query_engine.py",
+    "url": "https://github.com/run-llama/llama_index/blob/5b7b6e323e1da3edd787a2104a89257c14f026d0/llama-index-core/tests/query_engine/test_retriever_query_engine.py",
+    "sha256": "497d5269beb000ae4c4109c2daa0c931e89b71d4777dfc054db150b0b2d69970",
+    "local_copy": "artifacts/refactor-stage2/references/llama_index/llama-index-core/tests/query_engine/test_retriever_query_engine.py"
+  },
+  {
+    "repository": "continuedev/continue",
+    "commit": "5522c6f44ca0ac3528b37244818fbfa39b5af470",
+    "path": "core/core.ts",
+    "url": "https://github.com/continuedev/continue/blob/5522c6f44ca0ac3528b37244818fbfa39b5af470/core/core.ts",
+    "sha256": "e073a7f5bc20d5920e5472b6d434118418deb7207336ff74800ce64b79c8e934",
+    "local_copy": "artifacts/refactor-stage2/references/continue/core/core.ts"
+  },
+  {
+    "repository": "continuedev/continue",
+    "commit": "5522c6f44ca0ac3528b37244818fbfa39b5af470",
+    "path": "core/llm/streamChat.ts",
+    "url": "https://github.com/continuedev/continue/blob/5522c6f44ca0ac3528b37244818fbfa39b5af470/core/llm/streamChat.ts",
+    "sha256": "674514c3deaba680974331b7e7e6e1553caaa1a1d6b53d9b984bb73b36496180",
+    "local_copy": "artifacts/refactor-stage2/references/continue/core/llm/streamChat.ts"
+  },
+  {
+    "repository": "continuedev/continue",
+    "commit": "5522c6f44ca0ac3528b37244818fbfa39b5af470",
+    "path": "core/protocol/messenger/index.ts",
+    "url": "https://github.com/continuedev/continue/blob/5522c6f44ca0ac3528b37244818fbfa39b5af470/core/protocol/messenger/index.ts",
+    "sha256": "76716dfbd379e3c4acfd8d00e887ef57efd6ec53b62bad1cec43e8b4869c6498",
+    "local_copy": "artifacts/refactor-stage2/references/continue/core/protocol/messenger/index.ts"
+  }
+]

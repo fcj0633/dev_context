@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from devcontext.llm.factory import create_llm_client
 
 import argparse
 import json
@@ -12,97 +11,31 @@ from datetime import datetime, timezone
 from hashlib import sha256
 from pathlib import Path
 
-from devcontext.agentic import (
-    AgenticAnswerResult,
-    AgenticRetrievalWorkflow,
-    ContextSufficiencyChecker,
-    CoverageChecker,
-    EvidenceDrivenWorkflow,
-    PlannedRetrievalWorkflow,
-    RetrievalController,
-    RetrievalEngine,
-    RetrievalObserver,
-    SearchActionPlanner,
-    SufficiencyResult,
-    TargetedQueryRewriter,
-)
-from devcontext.answer import (
-    ANSWER_MAX_TOKENS,
-    EXPLAIN_ANSWER_MAX_TOKENS,
-    AnswerGenerator,
-    AnswerPlanner,
-    AnswerReviewer,
-    format_source,
-)
+from devcontext.agentic import AgenticAnswerResult, CoverageChecker, EvidenceDrivenWorkflow, RetrievalController, SufficiencyResult
+from devcontext.answer import format_source
 from devcontext.config import Settings, project_root
 from devcontext.context import ContextBuilder
 from devcontext.embedding.client import BailianEmbeddingClient
-from devcontext.evidence import SourcePolicy, default_source_policy_path
+from devcontext.evidence import default_source_policy_path
 from devcontext.evaluation.answer_quality_runner import (
     PairwiseEvaluationConfig,
     run_answer_quality_evaluation,
 )
 from devcontext.evaluation.runner import evaluate
-from devcontext.evaluation.retrieval_workflow_runner import (
-    FrozenEvidencePlanner,
-    FrozenSearchActionPlanner,
-    OracleCoverageChecker,
-    RetrievalTraceRecorder,
-    build_workflow_baseline,
-    compare_workflow_baseline,
-    run_retrieval_workflow_evaluation,
-)
+from devcontext.evaluation.retrieval_workflow_runner import OracleCoverageChecker, RetrievalTraceRecorder, build_workflow_baseline, compare_workflow_baseline, run_retrieval_workflow_evaluation
 from devcontext.ingestion.pipeline import ingest
-from devcontext.llm import DeepSeekLLMClient, LLMClient
 from devcontext.models import SearchResult
 from devcontext.observability import PerfRecorder, capture
 from devcontext.observability.report import build_perf_report, render_summary
-from devcontext.explanation import (
-    EXPLANATION_PLANNER_MAX_TOKENS,
-    ExplanationPlanner,
-    SectionComposer,
-    TeachingExplanationWorkflow,
-    TeachingReviewer,
-)
-from devcontext.explanation.composer import COMPOSER_MAX_TOKENS
-from devcontext.explanation.reviewer import REVIEWER_MAX_TOKENS as TEACHING_REVIEWER_MAX_TOKENS
-from devcontext.explanation.writer import TEACHING_ANSWER_MAX_TOKENS, TeachingWriter
-from devcontext.explanation.micro import TeachingRuntimeOptions, MicroExplanationPlanner
-from devcontext.explanation.stream_writer import SingleStreamingTeachingWriter
-from devcontext.planning import EvidencePlan, EvidencePlanner, QuestionPlan, QuestionPlanner
+from devcontext.planning import EvidencePlan, QuestionPlan
 from devcontext.request import ANSWER_MODES
 from devcontext.retrieval import RetrievalPolicy, RetrievalService
-from devcontext.routing import QueryRouter, RouteDecision
+from devcontext.routing import RouteDecision
 from devcontext.storage import ChunkStore
 
-LEGACY_TOP_K = 5
-LEGACY_MAX_CHARS = 6000
-PLANNED_TOP_K = 12
-PLANNED_MAX_CHARS = 10000
-
-# Evidence planning emits several structured requirement objects, so it needs more
-# room than the other short calls: reasoning tokens can exhaust a smaller budget
-# before the JSON is emitted, which surfaces as finish_reason=length.
-PLANNER_MAX_TOKENS = 8192
-
-# Coverage checking emits one status object per requirement, and its prompt
-# carries each requirement's evidence bodies. At 4096 the reasoning alone
-# exhausted the cap before the JSON was emitted, so every round came back
-# finish_reason=length and all requirements were reported UNVERIFIED - which
-# reaches the user as "insufficient evidence" on a question the pipeline had
-# already retrieved the evidence for. Measured 2026-09-30: 6 requirements over
-# the full token-bucket evidence set needs far more than 4096.
-SUB_QUESTION_SUFFICIENCY_MAX_TOKENS = 32768
-
-# The rewriter's prompt carries every missing aspect, and per-requirement judging
-# produces a much longer gap list than the old source-type check did.
-REWRITE_MAX_TOKENS = 4096
-ANSWER_PLANNER_MAX_TOKENS = 8192
-# The judge reads two full detailed answers, so it needs the same headroom as the
-# draft and reviewer; at 8192 its reasoning alone exhausted the cap and the verdict
-# came back as finish_reason=length.
-JUDGE_MAX_TOKENS = 32768
-REVIEWER_MAX_TOKENS = 32768
+from devcontext.application.assembly import (
+    LEGACY_TOP_K, LEGACY_MAX_CHARS, PLANNED_TOP_K, PLANNED_MAX_CHARS,
+)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -400,99 +333,108 @@ def _print_evidence_plan(plan: EvidencePlan) -> None:
 
 
 from devcontext.application.assembly import WorkflowFactory
-from devcontext.application import AskRequest, AskService, resolve_request
+from devcontext.application import AskRequest, AskService, PlanRequest
+from devcontext.evaluation.assembly import retrieval_overrides
 
 
 def _v3_client_factory(*args, **kwargs):
-    return WorkflowFactory(globals())._v3_client_factory(*args, **kwargs)
+    return WorkflowFactory().v3_client_factory(*args, **kwargs)
 
 
 def _profile_answer_factory(*args, **kwargs):
-    return WorkflowFactory(globals())._profile_answer_factory(*args, **kwargs)
+    return WorkflowFactory().profile_answer_factory(*args, **kwargs)
 
 
 def _query_router(*args, **kwargs):
-    return WorkflowFactory(globals())._query_router(*args, **kwargs)
+    return WorkflowFactory().query_router(*args, **kwargs)
 
 
 def _short_llm_factory(*args, **kwargs):
-    return WorkflowFactory(globals())._short_llm_factory(*args, **kwargs)
+    return WorkflowFactory().short_llm_factory(*args, **kwargs)
 
 
 def _answer_client(*args, **kwargs):
-    return WorkflowFactory(globals())._answer_client(*args, **kwargs)
+    return WorkflowFactory().answer_client(*args, **kwargs)
 
 
 def _planner_llm_factory(*args, **kwargs):
-    return WorkflowFactory(globals())._planner_llm_factory(*args, **kwargs)
+    return WorkflowFactory().planner_llm_factory(*args, **kwargs)
 
 
 def _rewrite_llm_factory(*args, **kwargs):
-    return WorkflowFactory(globals())._rewrite_llm_factory(*args, **kwargs)
+    return WorkflowFactory().rewrite_llm_factory(*args, **kwargs)
 
 
 def _sub_question_sufficiency_factory(*args, **kwargs):
-    return WorkflowFactory(globals())._sub_question_sufficiency_factory(*args, **kwargs)
+    return WorkflowFactory().sub_question_sufficiency_factory(*args, **kwargs)
 
 
 def _answer_planner_factory(*args, **kwargs):
-    return WorkflowFactory(globals())._answer_planner_factory(*args, **kwargs)
+    return WorkflowFactory().answer_planner_factory(*args, **kwargs)
 
 
 def _reviewer_factory(*args, **kwargs):
-    return WorkflowFactory(globals())._reviewer_factory(*args, **kwargs)
+    return WorkflowFactory().reviewer_factory(*args, **kwargs)
 
 
 def _explanation_planner_factory(*args, **kwargs):
-    return WorkflowFactory(globals())._explanation_planner_factory(*args, **kwargs)
+    return WorkflowFactory().explanation_planner_factory(*args, **kwargs)
 
 
 def _teaching_writer_factory(*args, **kwargs):
-    return WorkflowFactory(globals())._teaching_writer_factory(*args, **kwargs)
+    return WorkflowFactory().teaching_writer_factory(*args, **kwargs)
 
 
 def _teaching_reviewer_factory(*args, **kwargs):
-    return WorkflowFactory(globals())._teaching_reviewer_factory(*args, **kwargs)
+    return WorkflowFactory().teaching_reviewer_factory(*args, **kwargs)
 
 
 def _composer_factory(*args, **kwargs):
-    return WorkflowFactory(globals())._composer_factory(*args, **kwargs)
+    return WorkflowFactory().composer_factory(*args, **kwargs)
 
 
 def _question_planner(*args, **kwargs):
-    return WorkflowFactory(globals())._question_planner(*args, **kwargs)
+    return WorkflowFactory().build_question_planner(*args, **kwargs)
 
 
 def _evidence_planner(*args, **kwargs):
-    return WorkflowFactory(globals())._evidence_planner(*args, **kwargs)
+    return WorkflowFactory().build_evidence_planner(*args, **kwargs)
 
 
 def _answer_judge_factory(*args, **kwargs):
-    return WorkflowFactory(globals())._answer_judge_factory(*args, **kwargs)
+    return WorkflowFactory().answer_judge_factory(*args, **kwargs)
 
 
 def _agentic_workflow(*args, **kwargs):
-    return WorkflowFactory(globals())._agentic_workflow(*args, **kwargs)
+    return WorkflowFactory().agentic_workflow(*args, **kwargs)
 
 
 def _planned_workflow(*args, **kwargs):
-    return WorkflowFactory(globals())._planned_workflow(*args, **kwargs)
+    return WorkflowFactory().planned_workflow(*args, **kwargs)
 
 
-def _retrieval_controller(*args, **kwargs):
-    return WorkflowFactory(globals())._retrieval_controller(*args, **kwargs)
+def _retrieval_controller(settings, *, observer=None, frozen_case=None, frozen_plan=None,
+                          shared_coverage_factory=None):
+    return WorkflowFactory().build_retrieval_engine(settings, observer=observer, frozen_plan=frozen_plan,
+        overrides=retrieval_overrides(frozen_case, shared_coverage_factory))
 
 
 def _code_graph_expander(*args, **kwargs):
-    return WorkflowFactory(globals())._code_graph_expander(*args, **kwargs)
+    return WorkflowFactory().code_graph_expander(*args, **kwargs)
 
 
-def _budget(args: argparse.Namespace, *, planned: bool) -> tuple[int, int]:
-    default_top_k = PLANNED_TOP_K if planned else LEGACY_TOP_K
-    default_max_chars = PLANNED_MAX_CHARS if planned else LEGACY_MAX_CHARS
-    top_k = args.top_k if args.top_k is not None else default_top_k
-    max_chars = args.max_chars if args.max_chars is not None else default_max_chars
-    return top_k, max_chars
+def ask_request_from_cli(args: argparse.Namespace) -> AskRequest:
+    return AskRequest(query=args.query, answer_mode=args.answer_mode, profile=args.profile,
+        reasoning_effort=args.reasoning_effort, hard_timeout=args.hard_timeout,
+        teaching_generation_mode=args.teaching_generation_mode, top_k=args.top_k,
+        max_chars=args.max_chars, no_plan=args.no_plan, plan_only=args.plan_only,
+        legacy_max_chars=args.max_chars if args.max_chars is not None else LEGACY_MAX_CHARS)
+
+
+def plan_request_from_cli(args: argparse.Namespace) -> PlanRequest:
+    return PlanRequest(args.query, format=args.plan_format, answer_mode=args.answer_mode,
+        profile=args.profile, reasoning_effort=args.reasoning_effort, hard_timeout=args.hard_timeout,
+        teaching_generation_mode=args.teaching_generation_mode)
 
 
 def _routed_search(
@@ -592,9 +534,12 @@ def main(argv: list[str] | None = None) -> int:
     try:
         request_policy = None
         if args.command == "ask":
-            settings, request_policy = resolve_request(settings, AskRequest.from_cli(args))
-            if request_policy is not None:
-                args._answer_engine_enabled = True
+            service = AskService(settings)
+            if not args.plan_only:
+                prepared = service.prepare(ask_request_from_cli(args))
+                settings, request_policy = prepared.settings, prepared.policy
+                if request_policy is not None:
+                    args._answer_engine_enabled = True
         if args.command == "init-db":
             ChunkStore(settings.database_url).initialize()
             print("Database schema is ready.")
@@ -686,26 +631,9 @@ def main(argv: list[str] | None = None) -> int:
                 print("No context found.")
         elif args.command == "ask":
             if args.plan_only:
-                if args.plan_format == "legacy":
-                    _print_question_plan(_question_planner(settings).plan(args.query))
-                else:
-                    _print_evidence_plan(_evidence_planner(settings).plan(args.query))
-            elif args.no_plan:
-                top_k, max_chars = _budget(args, planned=False)
-
-                def run_legacy() -> AgenticAnswerResult:
-                    return AskService(settings, legacy_factory=_agentic_workflow).ask(
-                        AskRequest(args.query, answer_mode="legacy", no_plan=True, top_k=top_k, max_chars=max_chars), configure=False)
-
-                result, reports = _run_ask(
-                    run_legacy, args=args, top_k=top_k, answer_mode="legacy"
-                )
-                _print_agentic_answer(args.query, result, debug=args.debug)
-                _emit_perf(args, reports)
+                plan = service.plan(plan_request_from_cli(args))
+                _print_question_plan(plan) if args.plan_format == "legacy" else _print_evidence_plan(plan)
             else:
-                top_k, max_chars = _budget(args, planned=True)
-                legacy_top_k, legacy_max_chars = _budget(args, planned=False)
-
                 streamed_sections = []
 
                 def publish_section(section):
@@ -714,25 +642,15 @@ def main(argv: list[str] | None = None) -> int:
                     print(section.markdown + "\n", flush=True)
                     streamed_sections.append(section)
 
-                def run_planned() -> AgenticAnswerResult:
-                    # Rebuilt per repetition: samples share an interpreter, not
-                    # mutable workflow state.
-                    return AskService(settings, workflow_factory=_planned_workflow).ask(
-                        AskRequest(args.query, answer_mode=args.answer_mode, top_k=top_k,
-                                   max_chars=args.max_chars, legacy_max_chars=legacy_max_chars),
+                def run_once() -> AgenticAnswerResult:
+                    return service.execute(prepared,
                         on_section=publish_section if request_policy is not None or
-                            (settings.teaching_generation_mode == "v3" and args.answer_mode == "teach") else None,
-                        configure=False,
-                    )
+                            (settings.teaching_generation_mode == "v3" and prepared.answer_mode == "teach") else None)
 
-                result, reports = _run_ask(
-                    run_planned, args=args, top_k=top_k,
-                    answer_mode=args.answer_mode,
-                )
-                _print_agentic_answer(
-                    args.query, result, debug=args.debug, include_plan=True,
-                    answer_already_published=bool(streamed_sections),
-                )
+                result, reports = _run_ask(run_once, args=args, top_k=prepared.top_k,
+                                          answer_mode=prepared.answer_mode)
+                _print_agentic_answer(args.query, result, debug=args.debug, include_plan=not args.no_plan,
+                                     answer_already_published=bool(streamed_sections))
                 _emit_perf(args, reports)
                 teaching_trace = getattr(getattr(result, "trace", None), "teaching", None) or {}
                 if teaching_trace.get("generation_mode") in {"v3", "single_stream"} and teaching_trace.get("completion_status") != "complete":

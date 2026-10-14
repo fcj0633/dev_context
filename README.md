@@ -8,10 +8,10 @@ DevContext 从 Java 源码和 Markdown 文档中建立知识索引，结合代�
 
 | 目录 | 当前功能 | 使用方式 |
 |---|---|---|
-| `D:\Java-learning\DevContext` | CLI / V5 Tool Agent + Web UI | 命令行搜索、问答、索引和评测 |
-| `D:\Java-learning\DevContext-web-ui-v1` | CLI + Web UI V1，分支 `codex/web-ui-v1` | 浏览器聊天、历史会话、执行记录和证据查看 |
+| `D:\Java-learning\DevContext` | CLI / V5 Tool Agent + Web UI | 当前统一版本：命令行和浏览器均可用 |
+| `D:\Java-learning\DevContext-web-ui-v1` | 已保存的 Web UI V1，分支 `codex/web-ui-v1` | 历史参照；后续统一开发在当前项目进行 |
 
-**本目录已整合 Web UI，CLI 和 Web 均可用。** 原 Web 工作树保留历史版本。详细说明见 [Web 接口与事件协议](docs/web/README.md)和[验收报告](docs/web/test-report.md)。
+**本目录已整合 Web UI，CLI 和 Web 均可用。** 原 Web 工作树保留历史版本。统一应用入口说明见 [第 2 阶段报告](docs/refactor/02-stage2-application-boundary.md)。详细说明见 [Web 接口与事件协议](docs/web/README.md)和[验收报告](docs/web/test-report.md)。
 
 以下命令以 Windows PowerShell 为例。执行 Python 命令时应在实际使用的工作树根目录，确保读取正确的 `.env`。
 
@@ -58,8 +58,6 @@ Docker 使用 `pgvector/pgvector:0.8.6-pg18-bookworm`，容器名 `devcontext-po
 
 ```powershell
 cd D:\Java-learning\DevContext
-# 使用 Web 时，将上一行替换为：
-# cd D:\Java-learning\DevContext
 
 .\scripts\bootstrap.ps1
 if (-not (Test-Path -LiteralPath .env)) {

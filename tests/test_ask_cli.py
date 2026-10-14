@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 import devcontext.cli as cli_module
+import devcontext.application.assembly as assembly_module
 from devcontext.models import SearchExecution, SearchResult, SearchTimings
 
 
@@ -82,8 +83,8 @@ def test_ask_cli_runs_grounded_pipeline_without_printing_sources(
             return "订单由检索到的方法创建。\n[C1]"
 
     monkeypatch.setenv("DEEPSEEK_API_KEY", "test-secret")
-    monkeypatch.setattr(cli_module, "RetrievalService", FakeRetrievalService)
-    monkeypatch.setattr(cli_module, "DeepSeekLLMClient", FakeDeepSeekClient)
+    monkeypatch.setattr(assembly_module, "RetrievalService", FakeRetrievalService)
+    monkeypatch.setattr(assembly_module, "DeepSeekLLMClient", FakeDeepSeekClient)
 
     exit_code = cli_module.main(
         [
@@ -139,8 +140,8 @@ def test_ask_cli_debug_prints_real_sources_and_citations(
             return "订单由检索到的方法创建。\n[C1]"
 
     monkeypatch.setenv("DEEPSEEK_API_KEY", "test-secret")
-    monkeypatch.setattr(cli_module, "RetrievalService", FakeRetrievalService)
-    monkeypatch.setattr(cli_module, "DeepSeekLLMClient", FakeDeepSeekClient)
+    monkeypatch.setattr(assembly_module, "RetrievalService", FakeRetrievalService)
+    monkeypatch.setattr(assembly_module, "DeepSeekLLMClient", FakeDeepSeekClient)
 
     exit_code = cli_module.main(
         ["ask", "创建订单的代码在哪里？", "--no-plan", "--debug"]
@@ -192,8 +193,8 @@ def test_ask_cli_empty_context_does_not_construct_llm_client(
             raise AssertionError("LLM client must not be created for empty context")
 
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
-    monkeypatch.setattr(cli_module, "RetrievalService", FakeRetrievalService)
-    monkeypatch.setattr(cli_module, "DeepSeekLLMClient", ForbiddenLLMClient)
+    monkeypatch.setattr(assembly_module, "RetrievalService", FakeRetrievalService)
+    monkeypatch.setattr(assembly_module, "DeepSeekLLMClient", ForbiddenLLMClient)
 
     exit_code = cli_module.main(["ask", "没有结果的代码在哪里", "--no-plan"])
     captured = capsys.readouterr()
@@ -231,8 +232,8 @@ def test_ask_cli_drops_invalid_citations_and_still_answers(
             return "这是一份带有错误标签的答案。\n[C9]"
 
     monkeypatch.setenv("DEEPSEEK_API_KEY", "test-secret")
-    monkeypatch.setattr(cli_module, "RetrievalService", FakeRetrievalService)
-    monkeypatch.setattr(cli_module, "DeepSeekLLMClient", FakeDeepSeekClient)
+    monkeypatch.setattr(assembly_module, "RetrievalService", FakeRetrievalService)
+    monkeypatch.setattr(assembly_module, "DeepSeekLLMClient", FakeDeepSeekClient)
 
     exit_code = cli_module.main(
         ["ask", "代码在哪里", "--no-plan", "--debug"]
@@ -282,8 +283,8 @@ def test_ask_cli_uses_llm_fallback_for_ambiguous_query(monkeypatch, capsys) -> N
             return "证据回答。\n[C1]"
 
     monkeypatch.setenv("DEEPSEEK_API_KEY", "test-secret")
-    monkeypatch.setattr(cli_module, "RetrievalService", FakeRetrievalService)
-    monkeypatch.setattr(cli_module, "DeepSeekLLMClient", FakeDeepSeekClient)
+    monkeypatch.setattr(assembly_module, "RetrievalService", FakeRetrievalService)
+    monkeypatch.setattr(assembly_module, "DeepSeekLLMClient", FakeDeepSeekClient)
 
     exit_code = cli_module.main(["ask", "帮我看看这个功能目前怎么样", "--no-plan"])
     captured = capsys.readouterr()
@@ -334,8 +335,8 @@ def test_ask_cli_debug_shows_targeted_retry_trace(monkeypatch, capsys) -> None:
             return "代码入口见 OrderService#createOrder。\n[C1][C2]"
 
     monkeypatch.setenv("DEEPSEEK_API_KEY", "test-secret")
-    monkeypatch.setattr(cli_module, "RetrievalService", FakeRetrievalService)
-    monkeypatch.setattr(cli_module, "DeepSeekLLMClient", FakeDeepSeekClient)
+    monkeypatch.setattr(assembly_module, "RetrievalService", FakeRetrievalService)
+    monkeypatch.setattr(assembly_module, "DeepSeekLLMClient", FakeDeepSeekClient)
 
     exit_code = cli_module.main(
         ["ask", "订单创建如何实现，为什么这样设计？", "--no-plan", "--debug"]
@@ -502,8 +503,8 @@ def test_ask_cli_planned_path_fans_out_over_sub_questions(
             return "订单关闭分为入口与设计两部分。\n[C1][C2]"
 
     monkeypatch.setenv("DEEPSEEK_API_KEY", "test-secret")
-    monkeypatch.setattr(cli_module, "RetrievalService", FakeRetrievalService)
-    monkeypatch.setattr(cli_module, "DeepSeekLLMClient", FakeDeepSeekClient)
+    monkeypatch.setattr(assembly_module, "RetrievalService", FakeRetrievalService)
+    monkeypatch.setattr(assembly_module, "DeepSeekLLMClient", FakeDeepSeekClient)
 
     exit_code = cli_module.main(["ask", "订单关闭是怎么实现的，为什么这样设计？", "--answer-mode", "legacy"])
     captured = capsys.readouterr()
@@ -552,8 +553,8 @@ def test_ask_cli_debug_prints_per_requirement_status(monkeypatch, capsys) -> Non
             return "订单关闭分为入口与设计两部分。\n[C1]"
 
     monkeypatch.setenv("DEEPSEEK_API_KEY", "test-secret")
-    monkeypatch.setattr(cli_module, "RetrievalService", FakeRetrievalService)
-    monkeypatch.setattr(cli_module, "DeepSeekLLMClient", FakeDeepSeekClient)
+    monkeypatch.setattr(assembly_module, "RetrievalService", FakeRetrievalService)
+    monkeypatch.setattr(assembly_module, "DeepSeekLLMClient", FakeDeepSeekClient)
 
     exit_code = cli_module.main(["ask", "订单关闭怎么实现？", "--debug", "--answer-mode", "legacy"])
     captured = capsys.readouterr()
@@ -606,8 +607,8 @@ def test_ask_cli_legacy_generation_prompt_excludes_the_plan(
             return "第一节内容。\n[C1]"
 
     monkeypatch.setenv("DEEPSEEK_API_KEY", "test-secret")
-    monkeypatch.setattr(cli_module, "RetrievalService", FakeRetrievalService)
-    monkeypatch.setattr(cli_module, "DeepSeekLLMClient", FakeDeepSeekClient)
+    monkeypatch.setattr(assembly_module, "RetrievalService", FakeRetrievalService)
+    monkeypatch.setattr(assembly_module, "DeepSeekLLMClient", FakeDeepSeekClient)
 
     # Pinned to legacy, which is what this was always exercising: it passed
     # before only because legacy happened to be the default. The assertions
@@ -643,8 +644,8 @@ def test_ask_cli_plan_only_prints_json_without_retrieving(
             return _evidence_plan_payload()
 
     monkeypatch.setenv("DEEPSEEK_API_KEY", "test-secret")
-    monkeypatch.setattr(cli_module, "RetrievalService", ForbiddenRetrievalService)
-    monkeypatch.setattr(cli_module, "DeepSeekLLMClient", FakeDeepSeekClient)
+    monkeypatch.setattr(assembly_module, "RetrievalService", ForbiddenRetrievalService)
+    monkeypatch.setattr(assembly_module, "DeepSeekLLMClient", FakeDeepSeekClient)
 
     exit_code = cli_module.main(["ask", "订单关闭怎么实现？", "--plan-only"])
     captured = capsys.readouterr()
@@ -718,8 +719,8 @@ def test_ask_cli_explain_mode_runs_answer_plan_and_review(
             return "原始草稿。 [C1][C2]"
 
     monkeypatch.setenv("DEEPSEEK_API_KEY", "test-secret")
-    monkeypatch.setattr(cli_module, "RetrievalService", FakeRetrievalService)
-    monkeypatch.setattr(cli_module, "DeepSeekLLMClient", FakeDeepSeekClient)
+    monkeypatch.setattr(assembly_module, "RetrievalService", FakeRetrievalService)
+    monkeypatch.setattr(assembly_module, "DeepSeekLLMClient", FakeDeepSeekClient)
 
     exit_code = cli_module.main([
         "ask", "订单关闭是怎么实现的，为什么这样设计？",
@@ -775,8 +776,8 @@ def test_ask_cli_planning_failure_falls_back_to_legacy_single_query(
             return "回退回答。\n[C1]"
 
     monkeypatch.setenv("DEEPSEEK_API_KEY", "test-secret")
-    monkeypatch.setattr(cli_module, "RetrievalService", FakeRetrievalService)
-    monkeypatch.setattr(cli_module, "DeepSeekLLMClient", FakeDeepSeekClient)
+    monkeypatch.setattr(assembly_module, "RetrievalService", FakeRetrievalService)
+    monkeypatch.setattr(assembly_module, "DeepSeekLLMClient", FakeDeepSeekClient)
 
     exit_code = cli_module.main(["ask", "创建订单的代码在哪里？", "--answer-mode", "legacy"])
     captured = capsys.readouterr()

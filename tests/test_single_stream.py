@@ -269,7 +269,8 @@ def test_cli_overrides_environment_without_changing_workflow_factory_contract(mo
     def factory(settings, *args):
         seen.append(settings.teaching_generation_mode)
         return SimpleNamespace(run=lambda *args, **kwargs: object())
-    monkeypatch.setattr(cli, "_planned_workflow", factory)
+    from devcontext.application.assembly import WorkflowFactory
+    monkeypatch.setattr(WorkflowFactory, "planned_workflow", lambda self, *args, **kwargs: factory(*args, **kwargs))
     monkeypatch.setattr(cli, "_print_agentic_answer", lambda *args, **kwargs: None)
     monkeypatch.setattr(cli, "_emit_perf", lambda *args: None)
     argv = ["ask", "q", "--answer-mode", "teach"]

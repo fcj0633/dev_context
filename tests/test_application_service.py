@@ -39,9 +39,9 @@ def test_real_workflow_factory_injects_observer_without_cli_import(monkeypatch):
         controller_calls.append(kwargs)
         return object()
     # Construct the actual teaching chain with its ordinary factories, but no calls to a model or DB.
-    factory = WorkflowFactory({"_retrieval_controller": controller}, observer=observer)
-    resolved, _ = resolve_request(settings, AskRequest("q", profile="fast"))
-    workflow = factory._planned_workflow(resolved, None, None, "teach")
+    factory = WorkflowFactory(retrieval_engine_factory=controller, observer=observer)
+    prepared = resolve_request(settings, AskRequest("q", profile="fast"))
+    workflow = factory.build_answer_workflow(prepared)
     assert controller_calls == [{"observer": observer}]
     assert workflow.teaching_workflow is not None and workflow.request_policy.profile == "fast"
 

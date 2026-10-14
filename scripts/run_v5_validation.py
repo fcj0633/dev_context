@@ -13,10 +13,7 @@ import sys
 
 import psycopg
 from devcontext.config import Settings
-from devcontext.cli import _evidence_planner, _planner_llm_factory, _planned_workflow
-from devcontext.agentic.fast import FastRetrievalPlanner
-from devcontext.answer_policy import resolve_policy
-from devcontext.context import ContextBuilder
+from devcontext.application import AskRequest, AskService, WorkflowFactory
 from devcontext.deadline import request_deadline
 from devcontext.evaluation.v5_acceptance import release_decision
 from devcontext.evaluation.v5_fingerprint import configuration_hash
@@ -35,7 +32,7 @@ def production_check(settings, output):
         scoped = settings.model_copy(update={'answer_profile': profile, 'answer_engine_enabled': True})
         for case in cases:
             print(f'production planner {profile} {case["id"]}', flush=True)
-            planner = FastRetrievalPlanner(_planner_llm_factory(scoped)) if profile == 'fast' else _evidence_planner(scoped)
+            planner = WorkflowFactory().build_evidence_planner(scoped, production=True)
             record = {'profile': profile, 'case_id': case['id'], 'positive': case['positive'], 'passed': False}
             try:
                 with request_deadline(60):
@@ -90,12 +87,9 @@ def answer_check(settings, output):
             print(f'answer {profile} {kind}',flush=True)
             scoped=settings.model_copy(update={'tool_agent_enabled':True,'symbol_graph_enabled':False,'answer_engine_enabled':True,
                                                'answer_profile':profile,'teaching_generation_mode':'single_stream' if profile=='fast' else 'v3'})
-            policy=resolve_policy(query,scoped)
-            scoped=scoped.model_copy(update={'answer_request_policy':policy})
             record={'profile':profile,'kind':kind,'passed':False}
             try:
-                workflow=_planned_workflow(scoped,ContextBuilder(),ContextBuilder(),answer_mode='teach',request_policy=policy)
-                result=workflow.run(query,12)
+                result=AskService(scoped).ask(AskRequest(query, profile=profile))
                 trace=result.trace.to_dict()
                 status=(trace.get('teaching') or {}).get('completion_status')
                 state=trace.get('evidence_package_state')

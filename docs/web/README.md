@@ -4,10 +4,10 @@
 
 ## 本地启动
 
-需要 Python 3.13、uv、Node.js 22.12+ 或 24.x、npm，以及原项目的数据库、知识索引和模型配置。以下是本次独立工作树；其他克隆请替换目录。
+需要 Python 3.13、uv、Node.js 22.12+ 或 24.x、npm，以及原项目的数据库、知识索引和模型配置。当前项目已统一 CLI/Web 入口；原 Web 工作树保留历史版本。整合与验收见 [第 2 阶段报告](../refactor/02-stage2-application-boundary.md)。其他克隆请替换目录。
 
 ```powershell
-cd D:\Java-learning\DevContext-web-ui-v1
+cd D:\Java-learning\DevContext
 # 首次安装 Python 环境；已有 .venv 时可跳过。
 .\scripts\bootstrap.ps1
 uv sync --locked --extra web --extra dev
@@ -36,7 +36,7 @@ uv run --extra web devcontext-web
 # 终端一，仓库根目录
 uv run --extra web devcontext-web
 # 终端二
-cd D:\Java-learning\DevContext-web-ui-v1\frontend
+cd D:\Java-learning\DevContext\frontend
 npm run dev
 ```
 
@@ -107,7 +107,7 @@ SSE 使用 `id: seq`、`event: type`、JSON `data`。恢复时 `Last-Event-ID` �
 ## 测试与真实验收
 
 ```powershell
-cd D:\Java-learning\DevContext-web-ui-v1
+cd D:\Java-learning\DevContext
 uv sync --locked --extra web --extra dev
 uv run --extra web --extra dev pytest
 # PostgreSQL 可用时，开启全部原有数据库集成测试。
@@ -129,7 +129,7 @@ Playwright 自动启动测试后端和 Vite，8000/5173 端口须空闲。测试
 真实验收使用原有 PostgreSQL、索引和模型，执行两条付费问答：
 
 ```powershell
-cd D:\Java-learning\DevContext-web-ui-v1
+cd D:\Java-learning\DevContext
 uv run --extra web python scripts/verify_web_v1_live.py
 ```
 
