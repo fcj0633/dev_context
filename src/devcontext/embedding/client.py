@@ -9,7 +9,8 @@ import time
 from collections.abc import Iterable, Sequence
 from collections.abc import Callable
 
-from openai import APIConnectionError, OpenAI
+from openai import APIConnectionError, DefaultHttpxClient, OpenAI
+from devcontext.network import curl_route_args, curl_route_config
 
 from devcontext.observability import record_embedding_call
 from devcontext.deadline import bounded_timeout, remaining_seconds
@@ -56,6 +57,7 @@ class BailianEmbeddingClient:
         dimensions: int = 1024,
         batch_size: int = 10,
         transport: str = "auto",
+        bypass_proxy: bool = False,
     ) -> None:
         if batch_size < 1 or batch_size > 10:
             raise ValueError("text-embedding-v4 batch_size must be between 1 and 10")
@@ -66,6 +68,7 @@ class BailianEmbeddingClient:
             base_url=base_url,
             timeout=30.0,
             max_retries=3,
+            **({"http_client": DefaultHttpxClient(trust_env=False)} if bypass_proxy else {}),
         )
         self.model = model
         self.dimensions = dimensions
@@ -73,6 +76,7 @@ class BailianEmbeddingClient:
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
         self.transport = transport
+        self.bypass_proxy = bypass_proxy
         self._curl_fallback = transport == "curl"
 
     def _batches(self, values: Sequence[str]) -> Iterable[Sequence[str]]:
@@ -186,6 +190,7 @@ class BailianEmbeddingClient:
                 'header = "Content-Type: application/json"',
                 "silent",
                 "show-error",
+                *curl_route_config(bypass_proxy=self.bypass_proxy),
             ]
         )
         body = json.dumps(
@@ -212,6 +217,7 @@ class BailianEmbeddingClient:
                     completed = subprocess.run(
                         [
                             executable,
+                            *curl_route_args(bypass_proxy=self.bypass_proxy),
                             "--config",
                             "-",
                             "--data-binary",

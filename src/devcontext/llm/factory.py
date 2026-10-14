@@ -21,6 +21,10 @@ def create_llm_client(settings: Settings, *, legacy_model=None, model=None,
     client_type = (OpenAICompatibleLLMClient if settings.llm_provider == "openai"
                    else (deepseek_client_type or DeepSeekLLMClient))
     selected_model = model or settings.text_model(legacy_model)
+    if settings.llm_provider == "openai" and settings.openai_proxy_url is not None:
+        kwargs.setdefault("proxy_url", settings.openai_proxy_url.get_secret_value())
+    elif settings.llm_provider == "deepseek" and settings.deepseek_bypass_proxy:
+        kwargs.setdefault("bypass_proxy", True)
     if requested_reasoning_effort is not None:
         supported = reasoning_capabilities(settings, selected_model)
         kwargs["reasoning_effort"] = requested_reasoning_effort if requested_reasoning_effort in supported else None

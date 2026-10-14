@@ -561,6 +561,7 @@ def main(argv: list[str] | None = None) -> int:
                 model=settings.embedding_model,
                 dimensions=settings.embedding_dimensions,
                 transport=settings.embedding_transport,
+                bypass_proxy=settings.embedding_bypass_proxy,
             )
             vector = client.embed_query("DevContext connectivity check")
             print(f"Bailian embedding is ready: model={settings.embedding_model} dimensions={len(vector)}")

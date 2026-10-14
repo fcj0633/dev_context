@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, SecretStr, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from devcontext.context.budget import ModelCapabilities
@@ -27,9 +27,12 @@ class Settings(BaseSettings):
     embedding_model: str = "text-embedding-v4"
     embedding_dimensions: int = 1024
     embedding_transport: str = "curl"
+    embedding_bypass_proxy: bool = False
     llm_provider: Literal["deepseek", "openai"] = "deepseek"
     chatgpt_api_key: SecretStr | None = Field(default=None, alias="CHATGPT_API_KEY")
     openai_base_url: str | None = None
+    openai_proxy_url: SecretStr | None = None
+    deepseek_bypass_proxy: bool = False
     openai_model: str = "gpt-6.1-sol"
     openai_v3_reasoning_effort: Literal["low", "medium", "high"] = "low"
     openai_context_window: int = Field(default=131_072, gt=0)
@@ -48,6 +51,14 @@ class Settings(BaseSettings):
     llm_supported_reasoning_efforts: str | None = None
     answer_engine_enabled: bool = False
     answer_request_policy: RequestPolicy | None = Field(default=None, exclude=True)
+
+    @field_validator("openai_proxy_url")
+    @classmethod
+    def validate_openai_proxy(cls, value):
+        if value is not None:
+            from devcontext.network import validate_proxy_url
+            validate_proxy_url(value.get_secret_value())
+        return value
 
     @model_validator(mode="before")
     @classmethod

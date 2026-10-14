@@ -343,7 +343,16 @@ V1 为本机单用户、单进程，没有账户隔离。同一会话一次一�
 | 取消后发送按钮未恢复 | 在途同步调用未返回，仍占用名额 |
 | 检索到旧代码或旧文档 | 主动 ingest 重建，不是只修改目录配置 |
 
-Windows 代理环境若访问百炼遇到 TLS/握手失败，可按实际网络设置绕过列表，例如：
+建议按客户端配置网络路径。例如在本机 `.env` 中配置 GPT 专属代理、百炼直连：
+
+```dotenv
+OPENAI_PROXY_URL=http://127.0.0.1:12334
+EMBEDDING_BYPASS_PROXY=true
+```
+
+代理地址应使用本机实际监听端口。GPT 的同步、JSON 和正文流式请求共用该配置，不改变其他请求的环境；百炼的 SDK、curl 及回退路径均绕过 HTTP 代理。修改后重启 Web。DeepSeek 默认继续继承环境代理，可用 `DEEPSEEK_BYPASS_PROXY=true` 单独改为直连。这里绕过的是 HTTP/SOCKS 代理，VPN 的 TUN/全局路由仍由 VPN 软件控制。实测和限制见 [网络耗时诊断](docs/refactor/04-network-routing-latency.md)。
+
+兼容原环境配置时，Windows 代理环境若访问百炼遇到 TLS/握手失败，也可按实际网络设置绕过列表，例如：
 
 ```powershell
 $env:NO_PROXY = 'localhost,127.0.0.1,::1,.aliyuncs.com'

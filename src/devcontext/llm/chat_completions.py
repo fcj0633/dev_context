@@ -12,6 +12,7 @@ from devcontext.llm.client import LLMMessage
 from devcontext.observability.recorder import record_llm_call
 from devcontext.deadline import bounded_timeout
 from devcontext.llm.errors import LLMRequestError, http_failure, check_fatal_request
+from devcontext.network import curl_route_args, curl_route_config
 
 
 class ChatCompletionsLLMClient:
@@ -31,6 +32,8 @@ class ChatCompletionsLLMClient:
         max_tokens: int = 4096,
         timeout_seconds: int = 120,
         json_mode: bool = False,
+        proxy_url: str | None = None,
+        bypass_proxy: bool = False,
     ) -> None:
         if not api_key.strip():
             raise ValueError(f"{self.config_prefix}_API_KEY is not configured")
@@ -51,6 +54,9 @@ class ChatCompletionsLLMClient:
         self.max_tokens = max_tokens
         self.timeout_seconds = timeout_seconds
         self.json_mode = json_mode
+        curl_route_config(proxy_url=proxy_url, bypass_proxy=bypass_proxy)
+        self.proxy_url = proxy_url
+        self.bypass_proxy = bypass_proxy
         self.last_usage: dict[str, int] = {}
         self.last_latency_ms: float = 0.0
         # Kept rather than discarded: "length" is how a call silently burns its
@@ -140,6 +146,7 @@ class ChatCompletionsLLMClient:
                 'header = "Content-Type: application/json"',
                 "silent",
                 "show-error",
+                *curl_route_config(proxy_url=self.proxy_url, bypass_proxy=self.bypass_proxy),
             ]
         )
         request_path: str | None = None
@@ -154,6 +161,7 @@ class ChatCompletionsLLMClient:
                 completed = subprocess.run(
                     [
                         executable,
+                        *curl_route_args(proxy_url=self.proxy_url, bypass_proxy=self.bypass_proxy),
                         "--config",
                         "-",
                         "--data-binary",

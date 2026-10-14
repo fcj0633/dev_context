@@ -15,6 +15,7 @@ from pathlib import Path
 
 from devcontext.llm.client import LLMMessage, StreamEvent
 from devcontext.observability.recorder import record_llm_call
+from devcontext.network import curl_route_args, curl_route_config
 
 
 class StreamFailure(RuntimeError):
@@ -106,12 +107,15 @@ def curl_stream(client, messages: Sequence[LLMMessage]) -> Iterator[bytes]:
     if client.json_mode:
         body["response_format"] = {"type": "json_object"}
     # Credentials remain on stdin, never in a command line or diagnostic.
+    route = {"proxy_url": getattr(client, "proxy_url", None),
+             "bypass_proxy": getattr(client, "bypass_proxy", False)}
     config = "\n".join([
         f'url = "{client.base_url}/chat/completions"',
         'request = "POST"',
         f'header = "Authorization: Bearer {client.api_key}"',
         'header = "Content-Type: application/json"',
         "silent", "show-error",
+        *curl_route_config(**route),
     ])
     with tempfile.TemporaryDirectory(prefix="devcontext-stream-") as directory:
         root = Path(directory)
@@ -120,7 +124,7 @@ def curl_stream(client, messages: Sequence[LLMMessage]) -> Iterator[bytes]:
         request.write_text(json.dumps(body, ensure_ascii=False), encoding="utf-8")
         with (root / "stderr.txt").open("wb") as stderr:
             process = subprocess.Popen(
-                [executable, "--config", "-", "--no-buffer", "--max-time",
+                [executable, *curl_route_args(**route), "--config", "-", "--no-buffer", "--max-time",
                  str(client.timeout_seconds), "--dump-header", str(headers),
                  "--data-binary", f"@{request}"],
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=stderr,

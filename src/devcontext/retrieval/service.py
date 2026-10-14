@@ -61,6 +61,7 @@ class RetrievalService:
             model=self.settings.embedding_model,
             dimensions=self.settings.embedding_dimensions,
             transport=self.settings.embedding_transport,
+            bypass_proxy=self.settings.embedding_bypass_proxy,
         )
         query_vector = client.embed_query(query)
         timings.query_embedding_ms = _elapsed_ms(started)

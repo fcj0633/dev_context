@@ -50,6 +50,7 @@ def settings() -> SimpleNamespace:
         embedding_model="model",
         embedding_dimensions=2,
         embedding_transport="curl",
+        embedding_bypass_proxy=False,
         api_key=lambda: "secret",
     )
 

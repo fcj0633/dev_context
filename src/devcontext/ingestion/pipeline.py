@@ -46,6 +46,7 @@ def ingest(settings: Settings) -> IngestionSummary:
         model=settings.embedding_model,
         dimensions=settings.embedding_dimensions,
         transport=settings.embedding_transport,
+        bypass_proxy=settings.embedding_bypass_proxy,
     )
     cache = EmbeddingCache(
         project_root() / "artifacts" / "embedding-cache.jsonl",
