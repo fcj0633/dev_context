@@ -3,7 +3,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ArrowUp, BookOpen, Check, ChevronDown, Code2, FileCode2, Menu, MessageSquare, MoreHorizontal, PanelLeftClose, Plus, Search, Square, X } from '@lucide/vue'
 import { useChat } from './store'
-import { renderMarkdown } from './markdown'
+import AnswerBody from './AnswerBody.vue'
 import { errorText } from './api'
 import type { Evidence, Profile, Run } from './types'
 
@@ -34,7 +34,7 @@ const visibleSessions = computed(() => chat.sessions.filter(s => s.title.toLower
 const active = computed(() => chat.current?.runs.find(r => r.worker_active))
 const runs = computed(() => chat.current?.runs || [])
 const statusText = (run: Run) => ({ queued: '等待执行', running: '生成中', completed: '已完成', partial: '部分回答', failed: '执行失败', cancelled: run.worker_active ? '正在停止' : '已停止' })[run.status]
-const reasonText = (run: Run) => run.error?.message || ({ evidence_insufficient: '核心证据尚不完整。请结合下方证据与覆盖状态阅读。', service_interrupted: '服务中断，已保留此前验证通过的内容。', user_cancelled: '已停止生成，保留停止前的内容。' } as Record<string, string>)[run.reason || ''] || ''
+const reasonText = (run: Run) => run.error?.message || ({ evidence_insufficient: '核心证据尚不完整。请结合下方证据与覆盖状态阅读。', service_interrupted: '服务中断，已保留此前内容；未完成部分已标注。', user_cancelled: '已停止生成，保留停止前的内容。' } as Record<string, string>)[run.reason || ''] || ''
 const stageName = (name: string) => ({ evidence_planning: '证据规划', agent_planning: '工具规划', evidence_retrieval: '检索取证', coverage_check: '覆盖检查', teaching_planning_v3: '教学规划', explanation_planning: '教学规划', teaching_evidence_pack: '证据组织', teaching_draft: '回答生成', teaching_fallback_draft: '回答恢复' } as Record<string, string>)[name] || name
 
 watch(() => route.params.id, async id => {
@@ -42,7 +42,7 @@ watch(() => route.params.id, async id => {
   // Persisting a freshly created session URL must not tear down its live stream.
   if (chat.current?.id !== id) await chat.select(id as string | undefined)
 }, { immediate: true })
-watch(() => runs.value.map(r => r.answer).join(''), async () => { await nextTick(); if (autoScroll.value && viewport.value) viewport.value.scrollTop = viewport.value.scrollHeight })
+watch(() => runs.value.map(r => r.answer + (r.drafts || []).map(d => d.text).join('')).join(''), async () => { await nextTick(); if (autoScroll.value && viewport.value) viewport.value.scrollTop = viewport.value.scrollHeight })
 onMounted(() => { void chat.list(); input.value?.focus(); document.addEventListener('keydown', dialogKey) })
 onUnmounted(() => { chat.disconnect(); document.removeEventListener('keydown', dialogKey) })
 
@@ -75,7 +75,8 @@ async function markdownClick(event: MouseEvent, run: Run) {
 }
 function openEvidence(run: Run, label: string) { selectedEvidence.value = { label, evidence: run.evidence.find(e => e.label === label) } }
 async function copyAnswer(run: Run) {
-  try { await navigator.clipboard.writeText(run.answer); copied.value = run.id; setTimeout(() => { copied.value = '' }, 1500) }
+  try { const tail = (run.drafts || []).filter(d => d.text && d.state !== 'committed' && d.state !== 'superseded').map(d => d.text).join('\n\n')
+    await navigator.clipboard.writeText(run.answer + (tail ? '\n\n[以下内容尚未完成]\n' + tail : '')); copied.value = run.id; setTimeout(() => { copied.value = '' }, 1500) }
   catch { chat.error = '无法复制，请选择回答后手动复制。' }
 }
 async function confirmRename() { await chat.rename(renameId.value, renameTitle.value); renameId.value = '' }
@@ -115,8 +116,8 @@ async function retry(run: Run) { draft.value = run.query; profile.value = run.pr
           <article v-for="run in runs" :key="run.id" class="exchange">
             <div class="user-question"><span class="role-label">你</span><div>{{ run.query }}</div></div>
             <div class="assistant-answer"><div class="answer-heading"><span class="mini-mark"><Code2 :size="18" /></span><strong>DevContext</strong><span class="mode-label">{{ run.profile === 'fast' ? 'Fast' : 'Full' }}</span><span class="run-status" :class="run.status"><span v-if="['queued','running'].includes(run.status)" class="running-dot"></span>{{ statusText(run) }}</span></div>
-              <div v-if="run.answer" class="markdown" @click="markdownClick($event, run)" v-html="renderMarkdown(run.answer)"></div>
-              <div v-else-if="['queued', 'running'].includes(run.status)" class="working"><span class="pulse-dots"><i></i><i></i><i></i></span>正在查找证据并组织回答…</div>
+              <div v-if="run.answer || run.drafts?.some(d => d.text)" @click="markdownClick($event, run)"><AnswerBody :run="run" /></div>
+              <div v-else-if="['queued', 'running'].includes(run.status)" class="working"><span class="pulse-dots"><i></i><i></i><i></i></span>{{ run.active_generation_id ? '正在生成正文…' : '正在查找证据并组织回答…' }}</div>
               <p v-if="reasonText(run)" class="status-notice" :class="run.status" role="status">{{ reasonText(run) }}</p>
               <details class="execution"><summary><span><ChevronDown :size="15" /> Agent 执行记录</span><span>{{ run.activity?.filter(a => a.type === 'retrieval.action_completed').length || 0 }} 次检索 · {{ run.evidence.length }} 条证据</span></summary>
                 <ul class="activity"><li v-for="event in run.activity" :key="event.seq"><span class="activity-dot"></span><template v-if="event.type === 'retrieval.action_completed'">{{ event.data.strategy || '检索' }} · {{ event.data.source_type }} · 找到 {{ event.data.result_count }} 个结果 <span>{{ Math.round(event.data.latency_ms) }} ms</span></template><template v-else>构建上下文 · {{ event.data.item_count }} 条材料</template></li></ul>
@@ -126,7 +127,7 @@ async function retry(run: Run) { draft.value = run.query; profile.value = run.pr
                 <p v-if="!run.activity?.length && !run.summary.stages?.length" class="subtle">执行事件将在实际动作完成后显示。</p>
               </details>
               <div v-if="run.evidence.length" class="evidence-links"><span>参考证据</span><button v-for="item in run.evidence" :key="item.label" @click="openEvidence(run, item.label)"><FileCode2 :size="13" /> {{ item.label }} <span>{{ item.citation.file_path.split(/[\\/]/).pop() }}</span></button></div>
-              <div v-if="!run.worker_active" class="answer-actions"><button v-if="run.answer" class="text-button" @click="copyAnswer(run)">{{ copied === run.id ? '已复制' : '复制回答' }}</button><button v-if="['partial','failed','cancelled'].includes(run.status)" class="text-button" :disabled="chat.busy" @click="retry(run)">重新提问</button></div>
+              <div v-if="!run.worker_active" class="answer-actions"><button v-if="run.answer || run.drafts?.some(d => d.text)" class="text-button" @click="copyAnswer(run)">{{ copied === run.id ? '已复制' : '复制回答' }}</button><button v-if="['partial','failed','cancelled'].includes(run.status)" class="text-button" :disabled="chat.busy" @click="retry(run)">重新提问</button></div>
             </div>
           </article>
         </div>

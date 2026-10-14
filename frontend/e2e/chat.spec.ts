@@ -1,5 +1,55 @@
 import { expect, test } from '@playwright/test'
 
+for (const profile of ['fast', 'full']) test(`${profile}: body is visible while section end is gated, then survives refresh`, async ({ page }) => {
+  const query = `gate-${profile}-${Date.now()}`
+  await page.goto('/')
+  await page.getByLabel('回答模式').selectOption(profile)
+  await page.getByRole('textbox', { name: '输入问题' }).fill(query)
+  await page.getByRole('button', { name: '发送问题', exact: true }).click()
+  await expect(page.locator('.draft-body')).toContainText('第一段已到达🙂')
+  await expect(page.getByText('已完成', { exact: true })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '查看证据 E1' })).toHaveCount(0)
+  await expect.poll(() => page.evaluate(() => performance.getEntriesByType('mark').some(m => m.name.startsWith('devcontext:first-body:')))).toBe(true)
+  const metrics = await page.evaluate(() => ({
+    submit: performance.getEntriesByType('mark').find(m => m.name.startsWith('devcontext:submit:'))?.startTime,
+    body: performance.getEntriesByType('mark').find(m => m.name.startsWith('devcontext:first-body:'))?.startTime,
+  }))
+  expect(metrics.submit).toBeDefined(); expect(metrics.body).toBeDefined()
+  expect(metrics.body!).toBeGreaterThan(metrics.submit!)
+  await page.screenshot({ path: `test-results/gated-${profile}-preview.png`, fullPage: true })
+  await page.reload()
+  await expect(page.locator('.draft-body')).toContainText('第一段已到达🙂')
+  const response = await page.request.post(`http://127.0.0.1:8000/fixture/release/${query}`)
+  expect((await response.json()).released).toBe(true)
+  await expect(page.getByText('已完成', { exact: true })).toBeVisible()
+  await expect(page.locator('.draft-body')).toHaveCount(0)
+  await expect(page.getByRole('heading', { name: '临时标题' })).toHaveCount(0)
+  await expect(page.getByRole('heading', { name: '实现解释 1' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '查看证据 E404' })).toHaveCount(0)
+  await page.reload()
+  await expect(page.getByRole('heading', { name: '实现解释 2' })).toBeVisible()
+  await page.screenshot({ path: `test-results/gated-${profile}.png`, fullPage: true })
+  await test.info().attach('browser-local-timing', { body: JSON.stringify({ ...metrics, submit_to_body_dom_ms: metrics.body! - metrics.submit! }), contentType: 'application/json' })
+})
+
+test('cancelling after preview preserves unfinished text across refresh and copy', async ({ page, context }) => {
+  const query = `gate-cancel-${Date.now()}`
+  await context.grantPermissions(['clipboard-read', 'clipboard-write'])
+  await page.goto('/')
+  await page.getByRole('textbox', { name: '输入问题' }).fill(query)
+  await page.getByRole('button', { name: '发送问题', exact: true }).click()
+  await expect(page.locator('.draft-body')).toContainText('第一段已到达🙂')
+  await page.getByRole('button', { name: '停止生成' }).click()
+  await expect(page.getByText('已停止', { exact: true })).toBeVisible()
+  await expect(page.locator('.draft-section')).toContainText('这部分内容尚未完成')
+  await page.reload()
+  await expect(page.locator('.draft-body')).toContainText('第一段已到达🙂')
+  await page.getByRole('button', { name: '复制回答', exact: true }).click()
+  const copied = await page.evaluate(() => navigator.clipboard.readText())
+  expect(copied).toContain('以下内容尚未完成')
+  expect(copied).toContain('第一段已到达🙂')
+})
+
 test('Fast and Full preserve history, streamed chapters and real evidence', async ({ page }) => {
   await page.goto('/')
   await expect(page.getByRole('heading', { name: '从代码出发， 把设计想明白。' })).toBeVisible()

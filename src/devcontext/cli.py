@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from hashlib import sha256
 from pathlib import Path
 
+from devcontext.delivery import DeliveryError
 from devcontext.agentic import AgenticAnswerResult, CoverageChecker, EvidenceDrivenWorkflow, RetrievalController, SufficiencyResult
 from devcontext.answer import format_source
 from devcontext.config import Settings, project_root
@@ -96,6 +97,7 @@ def _parser() -> argparse.ArgumentParser:
         help="Choose the plan schema printed by --plan-only",
     )
     ask.add_argument("--debug", action="store_true")
+    ask.add_argument("--stream-events", action="store_true", help="Fast/Full answer events as NDJSON")
     ask.add_argument("--profile", choices=("fast", "full"), default=None)
     ask.add_argument("--reasoning-effort", choices=("low", "medium", "high"), default=None)
     ask.add_argument("--hard-timeout", type=float, default=None)
@@ -533,11 +535,20 @@ def main(argv: list[str] | None = None) -> int:
     settings = Settings()
     try:
         request_policy = None
+        event_printer = None
+        if args.command == "ask" and args.stream_events:
+            if args.debug or args.perf or args.perf_json is not None or args.repeat != 1 or args.plan_only or args.no_plan:
+                raise ValueError("--stream-events conflicts with debug/performance/repeat/plan-only/no-plan")
         if args.command == "ask":
             service = AskService(settings)
             if not args.plan_only:
                 prepared = service.prepare(ask_request_from_cli(args))
                 settings, request_policy = prepared.settings, prepared.policy
+                if args.stream_events:
+                    if request_policy is None:
+                        raise ValueError("--stream-events requires Fast/Full")
+                    from devcontext.delivery.cli import EventPrinter
+                    event_printer = EventPrinter(settings)
                 if request_policy is not None:
                     args._answer_engine_enabled = True
         if args.command == "init-db":
@@ -633,6 +644,14 @@ def main(argv: list[str] | None = None) -> int:
             if args.plan_only:
                 plan = service.plan(plan_request_from_cli(args))
                 _print_question_plan(plan) if args.plan_format == "legacy" else _print_evidence_plan(plan)
+            elif args.stream_events:
+                event_printer.emit("run.started", {"profile": request_policy.profile})
+                result = service.execute(prepared, on_event=event_printer)
+                trace = getattr(result.trace, "teaching", None) or {}
+                status = trace.get("completion_status", "failed")
+                event_printer.emit("run.finished", {"status": status, "answer": result.answer_result.answer,
+                    "evidence_state": result.trace.evidence_package_state})
+                return 0 if status == "complete" else 1
             else:
                 streamed_sections = []
 
@@ -854,7 +873,14 @@ def main(argv: list[str] | None = None) -> int:
                 )
             )
         return 0
-    except Exception as exception:
+    except KeyboardInterrupt:
+        if event_printer is not None:
+            event_printer.emit("run.finished", {"status": "cancelled"})
+        return 130
+    except (Exception, DeliveryError) as exception:
+        if event_printer is not None:
+            event_printer.emit("run.finished", {"status": "failed", "error": "execution_failed"})
+            return 1
         print(f"ERROR: {exception}", file=sys.stderr)
         return 1
 

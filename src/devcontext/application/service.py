@@ -119,9 +119,9 @@ class AskService:
         return resolve_request(self.settings, request)
 
     def execute(self, prepared: ResolvedAsk, *, observer=None, on_section=None, on_evidence=None,
-                cancellation=None):
+                cancellation=None, on_event=None):
         scoped = replace(prepared, settings=prepared.settings.model_copy(deep=True))
-        with execution_scope(cancellation, on_evidence):
+        with execution_scope(cancellation, on_evidence, on_event):
             factory = (self.factory_builder or WorkflowFactory)(observer=observer)
             if scoped.request.no_plan and self.legacy_factory is not None:
                 workflow = self.legacy_factory(scoped.settings, ContextBuilder(max_chars=scoped.max_chars))
@@ -138,9 +138,9 @@ class AskService:
             return result
 
     def ask(self, request: AskRequest, *, observer=None, on_section=None, on_evidence=None,
-            cancellation=None):
+            cancellation=None, on_event=None):
         return self.execute(self.prepare(request), observer=observer, on_section=on_section,
-                            on_evidence=on_evidence, cancellation=cancellation)
+                            on_evidence=on_evidence, cancellation=cancellation, on_event=on_event)
 
     def plan(self, request: PlanRequest, *, observer=None, cancellation=None):
         if request.format not in {"legacy", "evidence"}:

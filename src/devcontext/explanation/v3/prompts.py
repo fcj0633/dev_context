@@ -134,6 +134,8 @@ def writer_messages(question, blueprint, pack, *, universal=False):
             "protocol_outline": "\n".join(f"<<<SECTION:{s.id}>>>\n## {s.title}\n（本节正文）\n<<<END_SECTION:{s.id}>>>" for s in evidence.sections),
             "delivery_instruction": "必须逐一输出上述全部章节的精确开始/结束边界，第三节及以后也不能省略；边界外不输出正文。"}
     instructions = writer_prompt(kind, blueprint.data["scenario"]["kind"])
+    if universal:
+        instructions = instructions.replace("只引用 allowed_labels", "引用范围为本次真实请求 catalog 中的非空证据；各节 allowed_labels 是推荐材料，不是引用白名单")
     instructions = instructions.replace("每节至少一条实际证据引用。", "概念段允许无引用，有材料时适量引用；不为引用凑内容。")
     instructions = instructions.replace("不新增核心结论或改变关系", "可补充帮助理解的局部原理，不改变核心关系")
     return [LLMMessage("system", instructions + "\n" + WRITING_METHOD),

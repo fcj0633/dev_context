@@ -5,7 +5,8 @@ import re
 
 TERMINAL = frozenset({"completed", "partial", "failed", "cancelled"})
 EVENT_TYPES = frozenset({"run.created", "run.started", "retrieval.action_completed", "retrieval.context_built",
-                         "evidence.updated", "answer.section_upsert", "run.summary", "run.finished"})
+                         "evidence.updated", "answer.section_upsert", "answer.generation_started", "answer.section_started",
+                         "answer.text_delta", "answer.generation_finished", "run.summary", "run.finished"})
 
 
 def now():
@@ -34,7 +35,7 @@ class PublicData:
     """Remove configured secrets even when a model or provider echoes them."""
     def __init__(self, settings):
         self.secrets = [v.get_secret_value() for v in vars(settings).values()
-                        if hasattr(v, "get_secret_value") and len(v.get_secret_value()) >= 6]
+                        if hasattr(v, "get_secret_value")]
         self.secrets.append(settings.database_url)
 
     def clean(self, value):

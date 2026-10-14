@@ -19,60 +19,108 @@ class ValidatedSection:
 
 
 class SectionParser:
-    """Yield immediately at each end marker, before consuming the next section."""
-    def __init__(self, section_ids):
+    """Parse control boundaries while releasing safe body prefixes immediately."""
+    def __init__(self, section_ids, on_update=None):
         self.ids = tuple(section_ids)
         self.index = 0
-        self.buffer = ""
         self.active = False
+        self.pending = ""
+        self.body = ""
+        self.on_update = on_update
+
+    @property
+    def buffer(self):
+        return self.body + self.pending
 
     @property
     def next_id(self):
         return self.ids[self.index] if self.index < len(self.ids) else None
 
+    def update(self, kind, section_id, text=""):
+        if self.on_update is not None:
+            self.on_update(kind, section_id, text)
+
+    def release(self, section_id, text):
+        if "<<<" in text or ">>>" in text:
+            raise StreamFailure("nested or mismatched section marker")
+        if len(self.body) + len(text) > 200_000:
+            raise StreamFailure("section buffer exceeds safety limit")
+        self.body += text
+        if text:
+            self.update("delta", section_id, text)
+
     def feed(self, text):
-        self.buffer += text
+        self.pending += text
         while True:
             if self.index == len(self.ids):
-                if self.buffer.strip():
+                if self.pending.strip():
                     raise StreamFailure("extra section or content outside markers")
-                self.buffer = ""
+                self.pending = ""
                 return
             section_id = self.ids[self.index]
             if not self.active:
-                self.buffer = self.buffer.lstrip()
+                self.pending = self.pending.lstrip()
                 start = f"<<<SECTION:{section_id}>>>"
-                if len(self.buffer) < len(start):
-                    if not start.startswith(self.buffer):
+                if len(self.pending) < len(start):
+                    if not start.startswith(self.pending):
                         raise StreamFailure("invalid section marker or order")
                     return
-                if not self.buffer.startswith(start):
+                if not self.pending.startswith(start):
                     raise StreamFailure("invalid section marker or order")
-                self.buffer = self.buffer[len(start):]
+                self.pending = self.pending[len(start):]
                 self.active = True
+                self.update("start", section_id)
             end = f"<<<END_SECTION:{section_id}>>>"
-            offset = self.buffer.find(end)
-            if offset < 0:
-                if len(self.buffer) > 200_000:
-                    raise StreamFailure("section buffer exceeds safety limit")
-                return
-            if offset > 200_000:
+            offset = self.pending.find(end)
+            if offset >= 0:
+                self.release(section_id, self.pending[:offset])
+                body = self.body.strip()
+                self.pending = self.pending[offset + len(end):]
+                self.body = ""
+                self.active = False
+                self.index += 1
+                yield section_id, body
+                continue
+            # Hold only the possible marker suffix, not the complete section.
+            offset = self.pending.find("<<<")
+            if offset >= 0:
+                if not end.startswith(self.pending[offset:]):
+                    raise StreamFailure("nested or mismatched section marker")
+                keep = len(self.pending) - offset
+            else:
+                if ">>>" in self.pending:
+                    raise StreamFailure("nested or mismatched section marker")
+                keep = max((n for n in range(1, min(len(self.pending), len(end)-1)+1)
+                            if end.startswith(self.pending[-n:]) or self.pending[-n:] in {">", ">>"}), default=0)
+            safe = self.pending[:-keep] if keep else self.pending
+            self.pending = self.pending[-keep:] if keep else ""
+            self.release(section_id, safe)
+            if len(self.buffer) > 200_000:
                 raise StreamFailure("section buffer exceeds safety limit")
-            body, self.buffer = self.buffer[:offset], self.buffer[offset + len(end):]
-            if "<<<" in body or ">>>" in body:
-                raise StreamFailure("nested or mismatched section marker")
-            self.active = False
-            self.index += 1
-            yield section_id, body.strip()
+            return
 
     def finish(self):
-        if self.active or self.index != len(self.ids) or self.buffer.strip():
+        if self.active or self.index != len(self.ids) or self.pending.strip():
             raise StreamFailure("missing or unclosed section")
 
 
-def validate_section(section, text, available, *, permissive=False, warnings=None):
+def validate_section(section, text, available, *, permissive=False, warnings=None, citation_policy=None):
+    started = time.perf_counter()
+    try:
+        return _validate_section(section, text, available, permissive=permissive,
+                                 warnings=warnings, citation_policy=citation_policy)
+    finally:
+        from devcontext.observability.diagnostics import mark
+        mark("publication_check", {"section_id": section.id,
+             "duration_ms": (time.perf_counter()-started)*1000})
+
+
+def _validate_section(section, text, available, *, permissive=False, warnings=None, citation_policy=None):
+    allowed = set(section.evidence_labels) & set(available)
+    if citation_policy is not None:
+        from devcontext.delivery.validation import prepare_section
+        text, allowed = prepare_section(section, text, available, citation_policy, warnings)
     if permissive:
-        allowed = set(section.evidence_labels) & set(available)
         def clean(match):
             ref = match.group(1)
             if re.fullmatch(r"E[1-9]\d*", ref) and ref in allowed:
@@ -93,7 +141,7 @@ def validate_section(section, text, available, *, permissive=False, warnings=Non
         raise StreamFailure("malformed citation")
     if not citations and not permissive:
         raise StreamFailure("zero-valid-citation")
-    if not set(citations) <= set(section.evidence_labels) & set(available):
+    if not set(citations) <= allowed:
         raise StreamFailure("citation outside section allowlist or writer evidence")
     return ValidatedSection(section.id, text, tuple(citations))
 
@@ -114,9 +162,10 @@ detailed 总正文约 3000～5000 中文字符；每节简洁，避免章节增�
 
 
 class SingleStreamingTeachingWriter:
-    def __init__(self, client_factory, *, permissive=False):
+    def __init__(self, client_factory, *, permissive=False, citation_policy=None):
         self.client_factory = client_factory
         self.permissive = permissive
+        self.citation_policy = citation_policy
         self.last_client = None
 
     def write(self, question, plan, bundle, budget, *, request_started, on_section=None):
@@ -129,6 +178,9 @@ class SingleStreamingTeachingWriter:
             from devcontext.explanation.v3.universal import WRITING_METHOD
             prompt = prompt.replace("每节至少引用一条本节 evidence_labels 中的证据", "需要引用时仅引用本节真实证据；概念章节允许无引用")
             prompt += "\n" + WRITING_METHOD
+        if self.citation_policy is not None:
+            prompt = prompt.replace("本节真实证据", "本次输入中的真实证据")
+            prompt += "\n引用范围为本次 Writer 输入的全部真实证据；本节 evidence_labels 是推荐材料，不是引用白名单。"
         messages = [LLMMessage("system", prompt), LLMMessage("user", json.dumps({
             "question": question, "plan": plan.to_dict(),
             "total_output_budget": budget.max_output_tokens,
@@ -145,7 +197,11 @@ class SingleStreamingTeachingWriter:
         missing_usage = set()
         stream_started = offset()
         for attempt in range(2):
-            parser = SectionParser(s.id for s in plan.sections)
+            from devcontext.delivery import Generation
+            from devcontext.execution import answer_subscribed
+            generation = Generation("single_stream")
+            parser = SectionParser((s.id for s in plan.sections),
+                                   generation.parser_update if answer_subscribed() else None)
             completed = failed = 0
             attempt_started = offset()
             attempt_content = attempt_ready = None
@@ -175,7 +231,7 @@ class SingleStreamingTeachingWriter:
                                 completed += 1
                                 failed_section = section_id
                                 section = plan.sections[len(sections)]
-                                valid = validate_section(section, body, available, permissive=self.permissive, warnings=warnings)
+                                valid = validate_section(section, body, available, permissive=self.permissive, warnings=warnings, citation_policy=self.citation_policy)
                                 from devcontext.observability.diagnostics import mark
                                 mark("first_section_ready", {"section_id": section_id})
                                 if on_section is not None:
@@ -184,6 +240,7 @@ class SingleStreamingTeachingWriter:
                                         mark("first_published", {"section_id": section_id})
                                     except Exception as exc:
                                         raise StreamFailure("section callback failed", retryable=False) from exc
+                                generation.commit(valid)
                                 sections.append(valid)
                                 failed_section = None
                                 if attempt_ready is None:
@@ -225,6 +282,7 @@ class SingleStreamingTeachingWriter:
                                  "finished_offset_ms": offset(), "first_content_token_ms": attempt_content,
                                  "first_section_ready_ms": attempt_ready, "error": error,
                                  "usage": usage})
+            generation.finish(status)
             if status == "complete" or sections or attempt == 1 or not retryable:
                 break
             mark_last_call_wasted("single stream attempt rejected", stage="teaching_draft")

@@ -20,6 +20,7 @@ class Settings(BaseSettings):
 
     devcontext_code_root: Path = Path(r"D:\Java-learning\12306Project\12306\my12306")
     devcontext_doc_root: Path = Path(r"D:\Java-learning\12306Project\docs")
+    web_stream_preview_enabled: bool = Field(default=True, validation_alias="DEVCONTEXT_WEB_STREAM_PREVIEW")
     database_url: str = "postgresql://devcontext:devcontext_dev@localhost:5432/devcontext"
     dashscope_api_key: SecretStr | None = Field(default=None, alias="DASHSCOPE_API_KEY")
     dashscope_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"

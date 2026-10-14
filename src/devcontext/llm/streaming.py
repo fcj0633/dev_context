@@ -125,14 +125,25 @@ def curl_stream(client, messages: Sequence[LLMMessage]) -> Iterator[bytes]:
                  "--data-binary", f"@{request}"],
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=stderr,
             )
-            chunks: queue.Queue[bytes | None] = queue.Queue()
+            chunks: queue.Queue[bytes | None] = queue.Queue(maxsize=64)
+            stopped = threading.Event()
+
+            def offer(chunk):
+                while not stopped.is_set():
+                    try:
+                        chunks.put(chunk, timeout=.05)
+                        return True
+                    except queue.Full:
+                        pass
+                return False
 
             def read_output():
                 try:
                     while chunk := process.stdout.read1(4096):
-                        chunks.put(chunk)
+                        if not offer(chunk):
+                            return
                 finally:
-                    chunks.put(None)
+                    offer(None)
 
             worker = threading.Thread(target=read_output, daemon=True)
             deadline = time.perf_counter() + client.timeout_seconds
@@ -147,13 +158,17 @@ def curl_stream(client, messages: Sequence[LLMMessage]) -> Iterator[bytes]:
                 process.stdin.close()
                 worker.start()
                 while True:
+                    from devcontext.execution import check_cancelled
+                    from devcontext.deadline import remaining_seconds
+                    check_cancelled()
+                    remaining_seconds()
                     remaining = deadline - time.perf_counter()
                     if remaining <= 0:
                         raise StreamFailure("stream request timed out")
                     try:
-                        chunk = chunks.get(timeout=remaining)
-                    except queue.Empty as exc:
-                        raise StreamFailure("stream request timed out") from exc
+                        chunk = chunks.get(timeout=min(.1, remaining))
+                    except queue.Empty:
+                        continue
                     if chunk is None:
                         check_status()
                         break
@@ -163,6 +178,7 @@ def curl_stream(client, messages: Sequence[LLMMessage]) -> Iterator[bytes]:
                 if code != 0:
                     raise StreamFailure(f"curl stream failed (exit {code})")
             finally:
+                stopped.set()
                 if process.poll() is None:
                     process.kill()
                 process.wait()
@@ -216,7 +232,8 @@ def generate_stream(client, messages: Sequence[LLMMessage]) -> Iterator[StreamEv
         success = True
     except Exception as exc:
         error = str(exc).replace(client.api_key, "[redacted]")
-        yield StreamEvent("error", text=error, retryable=getattr(exc, "retryable", True))
+        from devcontext.deadline import RequestDeadlineExceeded
+        yield StreamEvent("error", text=error, retryable=not isinstance(exc, RequestDeadlineExceeded) and getattr(exc, "retryable", True))
     finally:
         source.close()
         end_model(diagnostic_attempt, client, error or (None if success else "stream consumer stopped early"))

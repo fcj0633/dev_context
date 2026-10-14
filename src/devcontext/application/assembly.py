@@ -1,5 +1,6 @@
 from __future__ import annotations
 from devcontext.llm.factory import create_llm_client
+from devcontext.delivery import INPUT_CITATIONS
 from collections.abc import Callable
 from dataclasses import dataclass
 from devcontext.code_graph.store import CodeGraphStore
@@ -317,7 +318,7 @@ class WorkflowFactory:
             capabilities=settings.model_capabilities(),
             runtime_options=TeachingRuntimeOptions(settings.teaching_generation_mode),
             micro_planner=MicroExplanationPlanner(self.profile_answer_factory(settings, planner=True) if request_policy else self.explanation_planner_factory(settings), settings.model_capabilities()),
-            streaming_writer=SingleStreamingTeachingWriter(self.profile_answer_factory(settings) if request_policy else self.teaching_writer_factory(settings), permissive=request_policy is not None),
+            streaming_writer=SingleStreamingTeachingWriter(self.profile_answer_factory(settings) if request_policy else self.teaching_writer_factory(settings), permissive=request_policy is not None, citation_policy=INPUT_CITATIONS if request_policy else None),
         )
         if settings.teaching_generation_mode == "v3" or (request_policy and request_policy.profile == "full"):
             from devcontext.explanation.v3.planner import TeachingPlannerV3
@@ -325,7 +326,7 @@ class WorkflowFactory:
             teaching_workflow.request_timeout_seconds = settings.teaching_request_timeout_seconds
             teaching_workflow.v3_planner = TeachingPlannerV3(
                 self.profile_answer_factory(settings, planner=True) if request_policy else self.v3_client_factory(settings, self.explanation_planner_factory(settings)), teaching_workflow.capabilities, teaching_workflow.estimator)
-            teaching_workflow.v3_writer = TeachingWriterV3(self.profile_answer_factory(settings) if request_policy else self.v3_client_factory(settings, self.teaching_writer_factory(settings)), permissive=request_policy is not None)
+            teaching_workflow.v3_writer = TeachingWriterV3(self.profile_answer_factory(settings) if request_policy else self.v3_client_factory(settings, self.teaching_writer_factory(settings)), permissive=request_policy is not None, citation_policy=INPUT_CITATIONS if request_policy else None)
         return teaching_workflow
 
 

@@ -50,6 +50,9 @@ def direct_messages(request, package, pack, capabilities, estimator):
 
 def write_direct(client_factory, request, package, pack, capabilities, estimator, *, started, on_section):
     messages, allowed, omitted, output = direct_messages(request, package, pack, capabilities, estimator)
+    from devcontext.delivery import Generation
+    generation = Generation("full_direct_fallback")
+    generation.parser_update("start", "S1")
     client, iterator = None, None
     parts, usage = [], {}
     finished = False
@@ -72,6 +75,7 @@ def write_direct(client_factory, request, package, pack, capabilities, estimator
                 if event.type == "content":
                     if finished:
                         raise StreamFailure("content after finish")
+                    generation.parser_update("delta", "S1", event.text)
                     parts.append(event.text)
                     if event.text.strip() and first_content is None:
                         first_content = (time.perf_counter() - started) * 1000
@@ -112,10 +116,12 @@ def write_direct(client_factory, request, package, pack, capabilities, estimator
         try:
             if on_section:
                 on_section(section)
+            generation.commit(section)
             sections = (section,)
             first_ready = (time.perf_counter() - started) * 1000
         except Exception:
             status, error = "failed", "section callback failed"
+    generation.finish(status)
     return sections, {"generation_mode": "v3", "completion_status": status, "error": error,
         "delivery_path": "full_direct_fallback", "sections_planned": 1, "sections_emitted": len(sections),
         "missing_sections": [] if sections else ["S1"], "stream_partial": status == "partial",

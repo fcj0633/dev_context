@@ -1,0 +1,50 @@
+[
+  {
+    "repository": "vercel/ai",
+    "commit": "6ac1ee115c4e287be43ebb0e86d884033d85b0cd",
+    "path": "packages/ai/src/ui-message-stream/ui-message-chunks.ts",
+    "url": "https://github.com/vercel/ai/blob/6ac1ee115c4e287be43ebb0e86d884033d85b0cd/packages/ai/src/ui-message-stream/ui-message-chunks.ts",
+    "sha256": "9be1d7ee49cd745c899035d00950a5d2a638352fcd054d1eaec4434eafa4f185",
+    "local_copy": "artifacts/refactor-stage3/references/ai/packages/ai/src/ui-message-stream/ui-message-chunks.ts"
+  },
+  {
+    "repository": "vercel/ai",
+    "commit": "6ac1ee115c4e287be43ebb0e86d884033d85b0cd",
+    "path": "packages/ai/src/ui/process-ui-message-stream.ts",
+    "url": "https://github.com/vercel/ai/blob/6ac1ee115c4e287be43ebb0e86d884033d85b0cd/packages/ai/src/ui/process-ui-message-stream.ts",
+    "sha256": "b74ab74bdb89fdbbfa7aea04c87efa0bab40d612643eb6626d685f56a7afa264",
+    "local_copy": "artifacts/refactor-stage3/references/ai/packages/ai/src/ui/process-ui-message-stream.ts"
+  },
+  {
+    "repository": "vercel/ai",
+    "commit": "6ac1ee115c4e287be43ebb0e86d884033d85b0cd",
+    "path": "packages/ai/src/ui/process-ui-message-stream.test.ts",
+    "url": "https://github.com/vercel/ai/blob/6ac1ee115c4e287be43ebb0e86d884033d85b0cd/packages/ai/src/ui/process-ui-message-stream.test.ts",
+    "sha256": "38a3a3c9a64f18f8c67353bd03e801b87b0025a1563972516b2fc1e512eea3bf",
+    "local_copy": "artifacts/refactor-stage3/references/ai/packages/ai/src/ui/process-ui-message-stream.test.ts"
+  },
+  {
+    "repository": "vercel/ai",
+    "commit": "6ac1ee115c4e287be43ebb0e86d884033d85b0cd",
+    "path": "packages/ai/src/ui-message-stream/json-to-sse-transform-stream.ts",
+    "url": "https://github.com/vercel/ai/blob/6ac1ee115c4e287be43ebb0e86d884033d85b0cd/packages/ai/src/ui-message-stream/json-to-sse-transform-stream.ts",
+    "sha256": "eff8b7832658d68fc2f45d3d60dceb684e1b21227f81eb179a6de17d7055a95c",
+    "local_copy": "artifacts/refactor-stage3/references/ai/packages/ai/src/ui-message-stream/json-to-sse-transform-stream.ts"
+  },
+  {
+    "repository": "continuedev/continue",
+    "commit": "5522c6f44ca0ac3528b37244818fbfa39b5af470",
+    "path": "core/llm/streamChat.ts",
+    "url": "https://github.com/continuedev/continue/blob/5522c6f44ca0ac3528b37244818fbfa39b5af470/core/llm/streamChat.ts",
+    "sha256": "674514c3deaba680974331b7e7e6e1553caaa1a1d6b53d9b984bb73b36496180",
+    "local_copy": "artifacts/refactor-stage3/references/continue/core/llm/streamChat.ts"
+  },
+  {
+    "repository": "run-llama/llama_index",
+    "commit": "5b7b6e323e1da3edd787a2104a89257c14f026d0",
+    "path": "llama-index-core/llama_index/core/query_engine/citation_query_engine.py",
+    "url": "https://github.com/run-llama/llama_index/blob/5b7b6e323e1da3edd787a2104a89257c14f026d0/llama-index-core/llama_index/core/query_engine/citation_query_engine.py",
+    "sha256": "03f98a8b805f39431f7fdb034dbcd94eadb1f8f6a390482dc9aca8a45990b54d",
+    "local_copy": "artifacts/refactor-stage3/references/llama_index/llama-index-core/llama_index/core/query_engine/citation_query_engine.py"
+  }
+]

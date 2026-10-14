@@ -19,7 +19,7 @@ _active = ContextVar("devcontext_diagnostics", default=None)
 SCHEMA_VERSION = 1
 MILESTONES = ("retrieval_started", "retrieval_finished", "writer_started",
               "provider_first_content", "provider_first_body", "first_section_ready",
-              "first_published", "browser_first_visible", "request_finished")
+              "first_published", "first_body_published", "browser_first_visible", "request_finished")
 
 
 def clean(value, secrets=()):

@@ -151,7 +151,7 @@ def create_app(*, database_path=None, settings=None, service=None, max_workers=N
                     for value in batch:
                         cursor = value["seq"]
                         yield f"id: {cursor}\nevent: {value['type']}\ndata: {json.dumps(value, ensure_ascii=False)}\n\n"
-                    state = await asyncio.to_thread(manager.get, run_id)
+                    state = await asyncio.to_thread(manager.store.stream_state, run_id)
                     if cursor >= state["last_seq"] and state["status"] in TERMINAL:
                         break
                     if batch:

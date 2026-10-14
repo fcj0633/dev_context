@@ -13,9 +13,10 @@ from devcontext.observability import llm_stage, mark_last_call_wasted
 
 
 class TeachingWriterV3:
-    def __init__(self, client_factory, *, permissive=False):
+    def __init__(self, client_factory, *, permissive=False, citation_policy=None):
         self.client_factory = client_factory
         self.permissive = permissive
+        self.citation_policy = citation_policy
         self.last_client = None
         self.last_error = None
         self.capabilities = None
@@ -35,7 +36,11 @@ class TeachingWriterV3:
         rejected_protocol_buffer = None
         self.last_error = None
         for attempt in range(2):
-            parser = SectionParser(s.id for s in pack.sections)
+            from devcontext.delivery import Generation
+            from devcontext.execution import answer_subscribed
+            generation = Generation("v3")
+            parser = SectionParser((s.id for s in pack.sections),
+                                   generation.parser_update if answer_subscribed() else None)
             iterator = None
             started = time.perf_counter()
             usage = {}
@@ -65,7 +70,7 @@ class TeachingWriterV3:
                                 failed_section = section_id
                                 try:
                                     valid = validate_section(pack.sections[len(sections)], body, available,
-                                        permissive=self.permissive, warnings=grounding_warnings)
+                                        permissive=self.permissive, warnings=grounding_warnings, citation_policy=self.citation_policy)
                                 except Exception:
                                     rejected_section = {"id": section_id, "markdown": body}
                                     raise
@@ -86,6 +91,7 @@ class TeachingWriterV3:
                                         mark("first_published", {"section_id": section_id})
                                     except Exception as exc:
                                         raise StreamFailure("section callback failed", retryable=False) from exc
+                                generation.commit(valid)
                                 sections.append(valid)
                                 grounding_warnings.extend(local_warnings)
                                 failed_section = None
@@ -126,6 +132,7 @@ class TeachingWriterV3:
                 attempts.append({"attempt": attempt+1, "elapsed_ms": (time.perf_counter()-started)*1000, "error": error,
                                  "usage": client_usage, "response": "".join(raw_parts),
                                  "finish_reason": finish_reason, "model": getattr(self.last_client, "model", None)})
+            generation.finish(status)
             if status == "complete" or sections or attempt or not retryable:
                 break
             try:

@@ -64,11 +64,14 @@ export const useChat = defineStore('chat', () => {
     source.set(run.id, stream)
     stream.onopen = () => { connection.value = '' }
     stream.onerror = () => { connection.value = '连接恢复中，回答会继续保存在会话中。'; void refresh(run.id) }
-    const kinds = ['run.created', 'run.started', 'retrieval.action_completed', 'retrieval.context_built', 'evidence.updated', 'answer.section_upsert', 'run.summary', 'run.finished']
+    const kinds = ['run.created', 'run.started', 'retrieval.action_completed', 'retrieval.context_built', 'evidence.updated', 'answer.section_upsert', 'answer.generation_started', 'answer.section_started', 'answer.text_delta', 'answer.generation_finished', 'run.summary', 'run.finished']
     for (const kind of kinds) stream.addEventListener(kind, (message) => {
-      const event = JSON.parse((message as MessageEvent).data) as RunEvent
+      let event: RunEvent
+      try { event = JSON.parse((message as MessageEvent).data) as RunEvent }
+      catch { void refresh(run.id); return }
       const value = current.value?.runs.find(r => r.id === event.run_id)
-      if (!value || !applyEvent(value, event)) return
+      if (!value) return
+      if (!applyEvent(value, event)) { if (event.seq > value.last_seq) void refresh(run.id); return }
       if (kind === 'run.finished') { stream.close(); source.delete(run.id); void refresh(run.id) }
     })
   }
@@ -85,7 +88,11 @@ export const useChat = defineStore('chat', () => {
       if (!pending || pending.session !== id || pending.query !== query.trim() || pending.profile !== profile) {
         pending = { session: id, query: query.trim(), profile, id: crypto.randomUUID() }
       }
+      const submitted = performance.now()
       const run = await api<Run>(`/sessions/${id}/runs`, { method: 'POST', body: JSON.stringify({ query: pending.query, profile, client_request_id: pending.id }) })
+      if (typeof performance.mark === 'function' && !performance.getEntriesByName(`devcontext:submit:${run.id}`).length) {
+        performance.mark(`devcontext:submit:${run.id}`, { startTime: submitted })
+      }
       pending = null
       if (current.value?.id === id) {
         const detail = await api<SessionDetail>(`/sessions/${id}`)
