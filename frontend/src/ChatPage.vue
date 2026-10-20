@@ -13,6 +13,17 @@ const viewport = ref<HTMLElement>(), input = ref<HTMLTextAreaElement>(), autoScr
 const selectedEvidence = ref<{ evidence?: Evidence; label: string } | null>(null)
 const renameId = ref(''), renameTitle = ref(''), deleteId = ref(''), actionId = ref('')
 const copied = ref('')
+let inputObserver: ResizeObserver | undefined
+let inputWidth = 0
+function resizeInput() {
+  const node = input.value
+  if (!node) return
+  node.style.height = '24px'
+  const contentHeight = node.value ? node.scrollHeight : 24
+  node.style.height = `${Math.max(24, Math.min(72, contentHeight))}px`
+  node.style.overflowY = contentHeight > 72 ? 'auto' : 'hidden'
+}
+watch(draft, resizeInput, { flush: 'post' })
 let previousFocus: HTMLElement | null = null
 watch(() => !!selectedEvidence.value || !!renameId.value || !!deleteId.value, async open => {
   if (open) {
@@ -43,8 +54,24 @@ watch(() => route.params.id, async id => {
   if (chat.current?.id !== id) await chat.select(id as string | undefined)
 }, { immediate: true })
 watch(() => runs.value.map(r => r.answer + (r.drafts || []).map(d => d.text).join('')).join(''), async () => { await nextTick(); if (autoScroll.value && viewport.value) viewport.value.scrollTop = viewport.value.scrollHeight })
-onMounted(() => { void chat.list(); input.value?.focus(); document.addEventListener('keydown', dialogKey) })
-onUnmounted(() => { chat.disconnect(); document.removeEventListener('keydown', dialogKey) })
+onMounted(() => {
+  void chat.list(); input.value?.focus(); resizeInput()
+  if (typeof ResizeObserver !== 'undefined' && input.value) {
+    inputObserver = new ResizeObserver(entries => {
+      const width = entries[0]?.contentRect.width || 0
+      if (Math.abs(width - inputWidth) < .5) return
+      inputWidth = width
+      resizeInput()
+    })
+    inputObserver.observe(input.value)
+  } else window.addEventListener('resize', resizeInput)
+  document.addEventListener('keydown', dialogKey)
+})
+onUnmounted(() => {
+  chat.disconnect(); inputObserver?.disconnect()
+  window.removeEventListener('resize', resizeInput)
+  document.removeEventListener('keydown', dialogKey)
+})
 
 async function send() {
   const ok = await chat.send(draft.value, profile.value)
@@ -132,7 +159,17 @@ async function retry(run: Run) { draft.value = run.query; profile.value = run.pr
           </article>
         </div>
       </div>
-      <div class="composer-area"><p v-if="chat.error" class="form-error" role="alert">{{ chat.error }}</p><p v-if="chat.connection" class="connection-notice" role="status">{{ chat.connection }}</p><div class="composer"><textarea ref="input" v-model="draft" aria-label="输入问题" placeholder="提出一个关于代码或设计的问题…" rows="2" maxlength="10000" @keydown="keydown"></textarea><div class="composer-bottom"><div class="profile-control"><label for="profile">回答模式</label><select id="profile" v-model="profile" :disabled="chat.busy"><option value="fast">Fast · 快速理解</option><option value="full">Full · 深入解释</option></select></div><button v-if="active && ['running','queued'].includes(active.status)" class="send-button stop" aria-label="停止生成" @click="chat.cancel(active)"><Square :size="16" /></button><button v-else class="send-button" aria-label="发送问题" :disabled="chat.busy || !draft.trim()" @click="send"><ArrowUp :size="21" /></button></div></div><div class="composer-hint"><span>{{ active?.status === 'cancelled' && active.worker_active ? '正在等待当前调用结束，请稍候。' : '回答中的引用可查看原始证据，请结合代码核实。' }}</span><span class="keyboard-hint">Enter 发送 · Shift + Enter 换行</span></div></div>
+      <div class="composer-area">
+        <p v-if="chat.error" class="form-error" role="alert">{{ chat.error }}</p>
+        <p v-if="chat.connection" class="connection-notice" role="status">{{ chat.connection }}</p>
+        <p v-if="active?.status === 'cancelled' && active.worker_active" class="connection-notice" role="status">正在等待当前调用结束，请稍候。</p>
+        <div class="composer">
+          <textarea ref="input" v-model="draft" aria-label="输入问题" placeholder="输入代码问题…" title="Enter 发送 · Shift + Enter 换行" rows="1" maxlength="10000" @keydown="keydown"></textarea>
+          <div class="profile-control"><label class="sr-only" for="profile">回答模式</label><select id="profile" v-model="profile" title="Fast：快速理解；Full：深入解释" :disabled="chat.busy"><option value="fast">Fast</option><option value="full">Full</option></select></div>
+          <button v-if="active && ['running','queued'].includes(active.status)" class="send-button stop" aria-label="停止生成" @click="chat.cancel(active)"><Square :size="16" /></button>
+          <button v-else class="send-button" aria-label="发送问题" :disabled="chat.busy || !draft.trim()" @click="send"><ArrowUp :size="21" /></button>
+        </div>
+      </div>
     </main>
 
     <div v-if="selectedEvidence" class="drawer-scrim" @click="selectedEvidence = null"></div>

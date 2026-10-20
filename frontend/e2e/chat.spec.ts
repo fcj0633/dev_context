@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+const fixtureURL = `http://127.0.0.1:${process.env.PLAYWRIGHT_API_PORT || '8000'}`
 
 for (const profile of ['fast', 'full']) test(`${profile}: natural Markdown streams before a title and keeps committed parts stable`, async ({ page }) => {
   const query = `continuous-${profile}-${Date.now()}`
@@ -11,12 +12,12 @@ for (const profile of ['fast', 'full']) test(`${profile}: natural Markdown strea
   await expect(page.getByRole('button', { name: '查看证据 E1' })).toHaveCount(0)
   await page.reload()
   await expect(page.locator('.draft-body')).toContainText('直接回答已经可见🙂')
-  await page.request.post(`http://127.0.0.1:8000/fixture/release/${query}`)
+  await page.request.post(`${fixtureURL}/fixture/release/${query}`)
   await expect(page.getByRole('heading', { name: '机制与条件' })).toBeVisible()
   await expect(page.getByRole('heading', { name: '代码中的标题' })).toHaveCount(0)
   await expect(page.getByRole('button', { name: '查看证据 E1' })).toHaveCount(1)
   const first = await page.locator('.markdown:not(.draft-body)').first().innerHTML()
-  await page.request.post(`http://127.0.0.1:8000/fixture/release/${query}-next`)
+  await page.request.post(`${fixtureURL}/fixture/release/${query}-next`)
   await expect(page.getByText('已完成', { exact: true })).toBeVisible()
   expect(await page.locator('.markdown').first().innerHTML()).toBe(first)
   await expect(page.getByRole('button', { name: '查看证据 E404' })).toHaveCount(0)
@@ -59,7 +60,7 @@ for (const profile of ['fast', 'full']) test(`${profile}: body is visible while 
   await page.screenshot({ path: `test-results/gated-${profile}-preview.png`, fullPage: true })
   await page.reload()
   await expect(page.locator('.draft-body')).toContainText('第一段已到达🙂')
-  const response = await page.request.post(`http://127.0.0.1:8000/fixture/release/${query}`)
+  const response = await page.request.post(`${fixtureURL}/fixture/release/${query}`)
   expect((await response.json()).released).toBe(true)
   await expect(page.getByText('已完成', { exact: true })).toBeVisible()
   await expect(page.locator('.draft-body')).toHaveCount(0)
