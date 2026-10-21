@@ -12,7 +12,7 @@ from devcontext.evidence import SourcePolicy
 from devcontext.models import SearchResult
 from devcontext.planning import EvidencePlan, EvidenceRequirement
 from devcontext.planning.retrieval_need import RetrievalNeed, RelationSpec, PathSpec, PathSegment
-from devcontext.tool_agent.models import AgentMemory, AgentDecision, SymbolObservation, ToolCall
+from devcontext.tool_agent.models import AgentDecision, SymbolObservation, ToolCall
 from devcontext.tool_agent.observation import build_observation
 from devcontext.tool_agent.policy import DecisionPolicyValidator, DecisionPolicyViolation
 from devcontext.tool_agent.registry import ToolRegistry
@@ -173,15 +173,18 @@ def test_hydration_batches_needs_and_cannot_discover_neighbor_bodies():
 def test_policy_rejects_other_requirement_key_and_does_not_consume_calls():
     r1, r2 = req(), req(rid='ER2')
     plan = EvidencePlan('q', (r1, r2))
-    memory = AgentMemory(coverage=tuple(RequirementCoverage(r.id,'PARTIAL',(),('gap',),'test','rules') for r in plan.requirements))
-    memory.available_symbols[A] = SymbolObservation(A,'METHOD',1,'A.java')
-    memory.symbol_requirements[A] = {'ER1'}
-    view = build_observation('q', plan, memory, ToolRegistry(RepositoryTools(None,None)))
+    from devcontext.tool_agent.state_updates import create_run_state, update_coverage
+    from devcontext.evidence import EvidencePool
+    state = create_run_state('q', plan, EvidenceWorkspace(), EvidencePool())
+    update_coverage(state, tuple(RequirementCoverage(r.id,'PARTIAL',(),('gap',),'test','rules') for r in plan.requirements))
+    state.memory.available_symbols[A] = SymbolObservation(A,'METHOD',1,'A.java')
+    state.memory.symbol_requirements[A] = {'ER1'}
+    view = build_observation(state, ToolRegistry(RepositoryTools(None,None)))
     assert A in view.keys_for('ER1') and A not in view.keys_for('ER2')
     call = ToolCall('c','ER2','find_implementations',{'symbol_key': A})
     with pytest.raises(DecisionPolicyViolation):
-        DecisionPolicyValidator().validate(AgentDecision((call,)),view,memory)
-    assert not memory.tool_history
+        DecisionPolicyValidator().validate(AgentDecision((call,)),view,tuple(state.history.tool_history))
+    assert not state.history.tool_history
 
 
 @pytest.mark.parametrize('reason', ('PLANNER_FAILED','DEADLINE','ALL_TOOLS_FAILED'))

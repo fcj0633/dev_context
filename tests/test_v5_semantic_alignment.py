@@ -70,15 +70,18 @@ def test_production_semantic_input_contains_needs_and_requirement_owned_relation
 
 def test_later_searches_do_not_evict_confirmed_requirement_anchor():
     from devcontext.planning import EvidencePlan
-    from devcontext.tool_agent.models import AgentMemory, SymbolObservation
+    from devcontext.tool_agent.models import SymbolObservation
     from devcontext.tool_agent.observation import build_observation
     from devcontext.tool_agent.registry import ToolRegistry
     from devcontext.tool_agent.tools import RepositoryTools
-    memory = AgentMemory(coverage=(RequirementCoverage('ER1','PARTIAL',(),('missing endpoint',),'query required','rules'),))
+    from devcontext.tool_agent.state_updates import create_run_state, update_coverage
+    from devcontext.evidence import EvidencePool
+    state = create_run_state('q', EvidencePlan('q',(req(),)), workspace(), EvidencePool())
+    update_coverage(state, (RequirementCoverage('ER1','PARTIAL',(),('missing endpoint',),'query required','rules'),))
     for i, key in enumerate([A] + [f'M:other.C{i}#run()' for i in range(12)]):
-        memory.available_symbols[key] = SymbolObservation(key, 'METHOD', i+1, 'S.java')
-        memory.symbol_requirements[key] = {'ER1'}
-    view = build_observation('q', EvidencePlan('q',(req(),)), memory, ToolRegistry(RepositoryTools(None,None)))
+        state.memory.available_symbols[key] = SymbolObservation(key, 'METHOD', i+1, 'S.java')
+        state.memory.symbol_requirements[key] = {'ER1'}
+    view = build_observation(state, ToolRegistry(RepositoryTools(None,None)))
     assert A in view.keys_for('ER1')
     assert len(view.keys_for('ER1')) == 8
     assert view.payload['requirements'][0]['coverage_reason'] == 'query required'
@@ -100,23 +103,18 @@ def test_code_query_routing_does_not_implicitly_use_new_workspace_symbols(query,
 
 
 def test_missing_progress_boolean_remains_rejected_and_preserves_raw_diagnostic():
-    from devcontext.planning import EvidencePlan
-    from devcontext.tool_agent.models import AgentMemory
-    from devcontext.tool_agent.observation import build_observation
-    from devcontext.tool_agent.registry import ToolRegistry
-    from devcontext.tool_agent.tools import RepositoryTools
-    from devcontext.tool_agent.planner import AgentPlanner, PlannerFailed
+    from test_tool_agent import runtime, run, chunk
+    from devcontext.tool_agent.planner import AgentPlanner
+    from devcontext.tool_agent.models import ToolResult
     response = json.dumps({'actions':[{'requirement_id':'ER1','tool':'find_symbol','arguments':{'name':'demo.Api.run'},'reason':'locate'}]})
     class Client:
         def generate(self, messages):
             return response
-    plan = EvidencePlan('q',(req(),))
-    memory = AgentMemory(coverage=(RequirementCoverage('ER1','MISSING',(),('missing',),'no evidence','rules'),))
-    view = build_observation('q',plan,memory,ToolRegistry(RepositoryTools(None,None)))
-    planner = AgentPlanner(Client)
-    decision = planner.plan(view,plan,memory,0)
-    assert decision.decision_source == 'fallback' and memory.planner_failures == 1
-    assert memory.planner_diagnostics[0]['response'] == response
-    with pytest.raises(PlannerFailed):
-        planner.plan(view,plan,memory,1)
-    assert memory.planner_failures == 2 and not memory.tool_history
+    rt = runtime([], lambda c, *a: ToolResult(c, 'SUCCESS', (chunk(1),)))
+    rt.planner = AgentPlanner(Client)
+    outcome, _ = run(rt, [req()])
+    assert outcome.state.control.planner_failures == 2
+    assert outcome.state.control.planner_diagnostics[0]['response'] == response
+    assert outcome.state.control.stop_reason == 'PLANNER_FAILED'
+    assert len(outcome.state.history.tool_history) == 1
+    assert outcome.state.history.steps[0].planned_calls[0].reason == 'Deterministic gap recovery'

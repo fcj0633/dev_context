@@ -76,10 +76,10 @@ class DecisionPolicyValidator:
     被拒绝批次不执行、不消耗实际调用预算，单独统计 policy violation。
     通过本层后仍须执行 ToolExecutor 的工具、参数、来源和 Symbol 硬校验。
     """
-    def validate(self, decision, view, memory):
+    def validate(self, decision, view, tool_history):
         from devcontext.tool_agent.planner import call_fingerprint
         if decision.cannot_progress and not decision.calls:
-            attempted = {call_fingerprint(r.call) for r in memory.tool_history}
+            attempted = {call_fingerprint(r.call) for r in tool_history}
             import json
             for requirement in view.payload['requirements']:
                 for action in requirement.get('pending_graph_actions', []):
@@ -90,7 +90,7 @@ class DecisionPolicyValidator:
         if not 1 <= len(decision.calls) <= min(MAX_CALLS_PER_STEP, view.payload['remaining_calls']):
             raise DecisionPolicyViolation('Decision exceeds remaining call budget')
         requirements = {r['id']: r for r in view.payload['requirements']}
-        seen = {call_fingerprint(r.call) for r in memory.tool_history}
+        seen = {call_fingerprint(r.call) for r in tool_history}
         for call in decision.calls:
             requirement = requirements.get(call.requirement_id)
             if requirement is None or call.tool_name not in requirement['candidate_tools']:

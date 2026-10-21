@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
-from devcontext.agentic.evidence_models import RequirementCoverage, ToolExecutionSummary
+from devcontext.agentic.evidence_models import RequirementCoverage
 from devcontext.models import SearchResult
 
 ToolStatus = Literal["SUCCESS", "EMPTY", "PARTIAL", "AMBIGUOUS", "INVALID_ARGUMENT", "ERROR", "DEADLINE"]
@@ -131,45 +131,6 @@ class ActionStep:
                 "progress": self.progress, "latency_ms": self.latency_ms,
                 "new_relation": self.new_relation_count, "new_relation_ownership": self.new_relation_ownership_count,
                 "coverage_diagnostics": self.coverage_diagnostics}
-
-
-@dataclass(slots=True)
-class AgentMemory:
-    coverage: tuple[RequirementCoverage, ...] = ()
-    available_symbols: dict[str, SymbolObservation] = field(default_factory=dict)
-    symbol_requirements: dict[str, set[str]] = field(default_factory=dict)
-    candidates: dict[str, SymbolObservation] = field(default_factory=dict)
-    steps: list[ActionStep] = field(default_factory=list)
-    tool_history: list[ToolResult] = field(default_factory=list)
-    evidence_ids: dict[str, set[int]] = field(default_factory=dict)
-    errors: list[ToolError] = field(default_factory=list)
-    planner_failures: int = 0
-    planner_diagnostics: list[dict] = field(default_factory=list)
-    recovery_used: bool = False
-    stop_reason: StopReason | None = None
-    policy_violations: list[dict] = field(default_factory=list)
-    policy_fallbacks: int = 0
-    structural_metadata: dict = field(default_factory=dict)
-
-    def observe(self, result: ToolResult):
-        # Only independently resolved handles enter the graph capability set.
-        for symbol in result.observation.discovered_symbols:
-            if symbol.state == "CONFIRMED":
-                self.available_symbols[symbol.symbol_key] = symbol
-                self.symbol_requirements.setdefault(symbol.symbol_key, set()).add(result.call.requirement_id)
-                self.candidates.pop(symbol.symbol_key, None)
-        for symbol in result.observation.candidates:
-            if symbol.symbol_key not in self.available_symbols:
-                self.candidates[symbol.symbol_key] = symbol
-        self.evidence_ids.setdefault(result.call.requirement_id, set()).update(r.id for r in result.evidence_results)
-        # Body ownership belongs exclusively to EvidenceWorkspace.
-        self.tool_history.append(replace(result, evidence_results=(), returned_ids=tuple(r.id for r in result.evidence_results)))
-        if result.error:
-            self.errors.append(result.error)
-
-    def execution_summary(self):
-        completed = sum(r.completed for r in self.tool_history)
-        return ToolExecutionSummary(len(self.tool_history), completed, len(self.tool_history) - completed)
 
 
 @dataclass(frozen=True, slots=True)

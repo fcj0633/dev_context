@@ -17,11 +17,11 @@ def test_policy_failure_uses_one_fallback_and_never_increments_executor_invalid_
     rt=runtime([[call('search_docs','wrong-source')],[call('search_docs','wrong-again')]],handler)
     outcome,ws=run(rt)
     assert handled==['search_code']
-    assert outcome.memory.stop_reason=='PLANNER_FAILED'
-    assert len(outcome.memory.policy_violations)==2
-    assert outcome.memory.policy_fallbacks==1
-    assert len(outcome.memory.tool_history)==1
-    assert all(r.status!='INVALID_ARGUMENT' for r in outcome.memory.tool_history)
+    assert outcome.state.control.stop_reason=='PLANNER_FAILED'
+    assert len(outcome.state.control.policy_violations)==2
+    assert outcome.state.control.policy_fallbacks==1
+    assert len(outcome.state.history.tool_history)==1
+    assert all(r.status!='INVALID_ARGUMENT' for r in outcome.state.history.tool_history)
     assert len(ws)==1
 
 
@@ -34,9 +34,9 @@ def test_failed_planner_before_first_tool_produces_retrieval_failed():
             raise PlannerFailed('failed before retrieval')
     rt.planner=Planner()
     outcome,ws=run(rt)
-    assert not ws and not outcome.memory.tool_history
-    assert package_state(EvidencePlan('q',(requirement(),)),ContextBuilder().build('q',[]),outcome.memory.coverage,
-        tool_summary=outcome.memory.execution_summary(),termination_reason=outcome.memory.stop_reason)=='RETRIEVAL_FAILED'
+    assert not ws and not outcome.state.history.tool_history
+    assert package_state(EvidencePlan('q',(requirement(),)),ContextBuilder().build('q',[]),outcome.state.task.coverage,
+        tool_summary=outcome.state.history.execution_summary(),termination_reason=outcome.state.control.stop_reason)=='RETRIEVAL_FAILED'
 
 
 def test_no_progress_does_not_count_provenance_as_new_relation():
@@ -46,8 +46,8 @@ def test_no_progress_does_not_count_provenance_as_new_relation():
     def handler(c,*a):
         return ToolResult(c,'SUCCESS',(chunk(1),),ToolObservation(discovered_symbols=(SymbolObservation(key,'METHOD',1,'S.java'),)))
     outcome,ws=run(runtime([[call(value='first')],[call(value='second')]],handler))
-    assert outcome.memory.stop_reason=='NO_PROGRESS'
-    assert outcome.memory.steps[-1].new_relation_count==0
+    assert outcome.state.control.stop_reason=='NO_PROGRESS'
+    assert outcome.state.history.steps[-1].new_relation_count==0
 
 
 def test_relation_ambiguity_does_not_authorize_same_step_graph():
@@ -60,5 +60,5 @@ def test_relation_ambiguity_does_not_authorize_same_step_graph():
         return ToolResult(c,'EMPTY')
     outcome,_=run(runtime([[call('find_symbol','f1'),call('find_callees',key)]],handler),[r])
     assert executed==['find_symbol']
-    assert outcome.memory.policy_fallbacks==1
-    assert len(outcome.memory.tool_history)==1
+    assert outcome.state.control.policy_fallbacks==1
+    assert len(outcome.state.history.tool_history)==1

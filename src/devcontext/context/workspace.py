@@ -15,6 +15,14 @@ from devcontext.context.relations import EvidenceSymbol, EvidenceRelation, Relat
 
 
 @dataclass(frozen=True, slots=True)
+class WorkspaceProgressSnapshot:
+    chunk_ids: frozenset[int]
+    chunk_ownership: frozenset[tuple[str, int]]
+    relation_ids: frozenset[tuple]
+    relation_ownership: frozenset[tuple]
+
+
+@dataclass(frozen=True, slots=True)
 class EvidenceRef:
     """One piece of retrieved evidence, with no size ceiling attached.
 
@@ -84,6 +92,12 @@ class EvidenceWorkspace:
     _probes: list[RelationProbe] = field(default_factory=list)
     _paths: dict[tuple[str, int], ConfirmedPath] = field(default_factory=dict)
     _chunk_ownership_round: dict[tuple[str, int], int] = field(default_factory=dict)
+
+    def progress_snapshot(self) -> WorkspaceProgressSnapshot:
+        """Identifiers only; provenance and probes deliberately are not progress."""
+        return WorkspaceProgressSnapshot(frozenset(self._refs),
+            frozenset((rid, cid) for rid, ids in self._by_requirement.items() for cid in ids),
+            frozenset(self._relations), frozenset(self._relation_ownership))
 
     def _writable(self):
         if self._frozen:

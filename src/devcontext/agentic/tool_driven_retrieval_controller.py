@@ -31,11 +31,11 @@ class ToolDrivenRetrievalController:
         stages.extend(outcome.stages)
         bundle = RetrievalController._build_context(request, plan, pool, top_k)
         if self.observer:
-            self.observer.on_context_built(max(0, len(outcome.memory.steps) - 1), bundle)
-        coverage = outcome.memory.coverage
+            self.observer.on_context_built(max(0, len(outcome.state.history.steps) - 1), bundle)
+        coverage = outcome.state.task.coverage
         state = package_state(plan, bundle, coverage, outcome.search_history,
             len(workspace) if request.answer_options.evidence_source == "workspace" else None,
-            tool_summary=outcome.memory.execution_summary(), termination_reason=outcome.memory.stop_reason)
+            tool_summary=outcome.state.history.execution_summary(), termination_reason=outcome.state.control.stop_reason)
         package = EvidencePackage(request.original_query, plan, bundle, coverage,
             tuple(c.requirement_id for c in coverage if not c.satisfied), state, outcome.search_history,
             outcome.coverage_rounds, workspace.freeze(), workspace)

@@ -1,9 +1,10 @@
 import json
+from collections.abc import Mapping
 
 from devcontext.deadline import RequestDeadlineExceeded, remaining_seconds
 from devcontext.llm import LLMMessage
 from devcontext.llm.errors import LLMRequestError, check_fatal_request
-from devcontext.observability import llm_stage, mark_last_call_wasted
+from devcontext.observability import llm_stage
 from devcontext.tool_agent.models import AgentDecision, ToolCall, MAX_CALLS_PER_STEP
 
 SYSTEM_PROMPT = """你是仓库证据检索 Agent，只选择工具取证，不回答问题、不修改需求、不判断 READY。
@@ -30,6 +31,14 @@ class PlannerFailed(RuntimeError):
     pass
 
 
+class RecoverablePlanningFailure(RuntimeError):
+    """A rejected model response; runtime decides whether recovery is allowed."""
+    def __init__(self, error, response):
+        super().__init__(error)
+        self.error = error
+        self.response = response
+
+
 class AgentPlanner:
     def __init__(self, factory=None):
         self.factory = factory
@@ -37,12 +46,12 @@ class AgentPlanner:
         self.last_error = None
         self.last_response = None
 
-    def plan(self, view, plan, memory, step):
+    def plan(self, view, context, step):
         self.last_client = None
         self.last_error = None
         self.last_response = None
         if self.factory is None:
-            return fallback_decision(view, plan, memory, step)
+            return fallback_decision(view, context, step)
         remaining_seconds()
         check_fatal_request()
         # Configuration validation is not a malformed model decision.
@@ -60,22 +69,13 @@ class AgentPlanner:
         except LLMRequestError as exc:
             if not exc.retryable:
                 raise
-            return self._failure(exc, view, plan, memory, step)
+            return self._failure(exc)
         except (ValueError, TimeoutError, ConnectionError) as exc:
-            return self._failure(exc, view, plan, memory, step)
+            return self._failure(exc)
 
-    def _failure(self, exc, view, plan, memory, step):
-        # 保留原始响应，区分 JSON 契约失败和检索/执行失败。例如缺少
-        # cannot_progress 必须拒绝，不能默认为 false 来掩盖生产规划问题。
-        # 整个请求只允许一次 deterministic fallback；这里不重试模型、
-        # 不增加实际 ToolCall budget，也不替代 Executor 的参数校验。
+    def _failure(self, exc):
         self.last_error = type(exc).__name__ + ": " + str(exc)[:200]
-        memory.planner_diagnostics.append({'step':step + 1, 'error':self.last_error, 'response':self.last_response})
-        memory.planner_failures += 1
-        mark_last_call_wasted("Agent planner rejected; deterministic fallback", stage="agent_planning")
-        if memory.planner_failures > 1:
-            raise PlannerFailed(self.last_error) from exc
-        return fallback_decision(view, plan, memory, step)
+        raise RecoverablePlanningFailure(self.last_error, self.last_response) from exc
 
     @staticmethod
     def parse(response, step):
@@ -100,11 +100,20 @@ class AgentPlanner:
         return AgentDecision(tuple(calls), raw["cannot_progress"])
 
 
+def _plain_arguments(value):
+    if isinstance(value, Mapping):
+        return {k: _plain_arguments(v) for k, v in value.items()}
+    if isinstance(value, (tuple, list)):
+        return [_plain_arguments(v) for v in value]
+    return value
+
+
 def call_fingerprint(call):
-    return (call.requirement_id, call.tool_name, json.dumps(call.arguments, sort_keys=True, ensure_ascii=False))
+    return (call.requirement_id, call.tool_name, json.dumps(_plain_arguments(call.arguments), sort_keys=True, ensure_ascii=False))
 
 
-def fallback_decision(view, plan, memory, step):
+def fallback_decision(view, context, step):
+    plan, memory = context.plan, context
     coverage = {c.requirement_id: c for c in memory.coverage}
     counts = {r.id: sum(t.call.requirement_id == r.id for t in memory.tool_history) for r in plan.requirements}
     history = {call_fingerprint(t.call) for t in memory.tool_history}

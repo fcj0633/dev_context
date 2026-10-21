@@ -96,3 +96,31 @@ def test_missing_index_is_unavailable_rather_than_a_missing_name(snapshot):
     result = tools.find_symbol(call("find_symbol", "Service"), requirement(), EvidenceWorkspace(), 0)
     assert result.status == "ERROR" and result.error.code == "TOOL_UNAVAILABLE"
     assert result.error.retryable
+
+
+def test_run_state_accumulates_real_database_symbols_relations_and_coverage(snapshot):
+    from dataclasses import replace
+    from test_tool_agent import runtime, Checker
+    from devcontext.evidence import EvidencePool
+    from devcontext.planning import EvidencePlan
+    from devcontext.planning.retrieval_need import RetrievalNeed, RelationSpec
+    from devcontext.tool_agent.executor import ToolExecutor
+    from devcontext.tool_agent.registry import ToolRegistry
+
+    settings, repository, *_ = snapshot
+    anchor = 'M:demo.Service#f0()'
+    r = replace(requirement(), retrieval_needs=(RetrievalNeed('RELATION',
+        RelationSpec('CALLS', 'OUTGOING', 'NEED_METHOD', 'demo.Service#f0()')),))
+    rt = runtime([[call('find_symbol', 'demo.Service#f0()')], [call('find_callees', anchor)]], None, Checker(1))
+    rt.executor = ToolExecutor(ToolRegistry(RepositoryTools(None, CodeGraphStore(settings.database_url, repository))))
+    workspace, pool = EvidenceWorkspace('question'), EvidencePool()
+    outcome = rt.run('question', EvidencePlan('question', (r,)), workspace, pool)
+    assert outcome.state.workspace is workspace and outcome.state.pool is pool
+    assert outcome.state.control.stop_reason == 'READY'
+    assert outcome.state.task.coverage[0].satisfied
+    assert len(outcome.state.history.tool_history) == 2
+    assert [t.call.tool_name for t in outcome.state.history.tool_history] == ['find_symbol', 'find_callees']
+    assert len(workspace.relations_for('ER1')) == 5
+    assert len(workspace.all()) == 6
+    assert anchor in outcome.state.memory.available_symbols
+    assert all(not t.evidence_results for t in outcome.state.history.tool_history)

@@ -7,8 +7,9 @@ from devcontext.tool_agent.planner import SYSTEM_PROMPT
 from devcontext.tool_agent.policy import candidate_tools
 
 
-def build_observation(query, plan, memory, registry, workspace=None):
-    coverage = {c.requirement_id: c for c in memory.coverage}
+def build_observation(state, registry):
+    query, plan, memory, workspace = state.query, state.plan, state.memory, state.workspace
+    coverage = {c.requirement_id: c for c in state.task.coverage}
     symbols = list(reversed(list(memory.available_symbols.values())))
     requirements = []
     exposed = set()
@@ -36,7 +37,7 @@ def build_observation(query, plan, memory, registry, workspace=None):
                              "missing": list(c.missing_criteria),
                              "coverage_reason": c.reason,
                              "known_symbols": [asdict(s) for s in selected],
-                             "candidate_tools": list(candidate_tools(requirement, selected, c, memory.tool_history)),
+                             "candidate_tools": list(candidate_tools(requirement, selected, c, state.history.tool_history)),
                              "pending_graph_actions": pending})
     recent = [{"step": s.step_number, "progress": s.progress,
                "calls": [{"tool": r.call.tool_name, "requirement_id": r.call.requirement_id,
@@ -45,12 +46,12 @@ def build_observation(query, plan, memory, registry, workspace=None):
                           "file_paths": list(r.observation.file_paths),
                           "summary": r.observation.summary,
                           "error": asdict(r.error) if r.error else None} for r in s.results]}
-              for s in memory.steps[-3:]]
+              for s in state.history.steps[-3:]]
     payload = {"query": query, "requirements": requirements,
                "candidates": [asdict(s) for s in list(memory.candidates.values())[:8]],
                "recent_steps": recent, "available_tools": registry.specifications(),
-               "remaining_steps": MAX_STEPS - len(memory.steps),
-               "remaining_calls": MAX_TOOL_CALLS - len(memory.tool_history)}
+               "remaining_steps": MAX_STEPS - len(state.history.steps),
+               "remaining_calls": MAX_TOOL_CALLS - len(state.history.tool_history)}
     estimator = HeuristicTokenEstimator()
     budget = 8000 - estimator.estimate(SYSTEM_PROMPT)
     while estimator.estimate(json.dumps(payload, ensure_ascii=False)) > budget:

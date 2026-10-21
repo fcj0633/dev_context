@@ -14,7 +14,7 @@ from devcontext.models import SearchResult, SearchExecution, SearchTimings
 from devcontext.planning import EvidencePlan, EvidenceRequirement
 from devcontext.planning.retrieval_need import RetrievalNeed, RelationSpec, PathSpec, PathSegment
 from devcontext.request import UserRequest, AnswerOptions
-from devcontext.tool_agent.models import AgentDecision, AgentMemory, ToolCall, ToolResult, ToolError, ToolObservation, SymbolObservation, RelationObservation
+from devcontext.tool_agent.models import AgentDecision, ToolCall, ToolResult, ToolError, ToolObservation, SymbolObservation, RelationObservation
 from devcontext.tool_agent.executor import ToolExecutor
 from devcontext.tool_agent.registry import ToolRegistry
 from devcontext.tool_agent.tools import RepositoryTools
@@ -90,29 +90,29 @@ def test_no_progress_is_decided_after_whole_step_and_coverage_once():
     checker = Checker(ready_at=2)
     rt = runtime([[call(value="first")], [call(value="repeat"), call(value="new", identifier="TA2-2")]], handler, checker)
     outcome, ws = run(rt)
-    assert outcome.memory.stop_reason == "READY"
-    assert len(outcome.memory.tool_history) == 3
-    assert outcome.memory.steps[1].new_evidence_ids == (2,)
+    assert outcome.state.control.stop_reason == "READY"
+    assert len(outcome.state.history.tool_history) == 3
+    assert outcome.state.history.steps[1].new_evidence_ids == (2,)
     assert checker.calls == 2
     assert len(ws) == 2
-    assert all(not r.evidence_results for r in outcome.memory.tool_history)
-    assert all(not r.evidence_results for s in outcome.memory.steps for r in s.results)
+    assert all(not r.evidence_results for r in outcome.state.history.tool_history)
+    assert all(not r.evidence_results for s in outcome.state.history.steps for r in s.results)
 
 
 def test_repeated_evidence_stops_after_completed_batch():
     outcome, _ = run(runtime([[call(value="first")], [call(value="same")]],
         lambda c, *a: ToolResult(c, "SUCCESS", (chunk(1),))))
-    assert outcome.memory.stop_reason == "NO_PROGRESS"
-    assert len(outcome.memory.steps) == 2
+    assert outcome.state.control.stop_reason == "NO_PROGRESS"
+    assert len(outcome.state.history.steps) == 2
 
 
 def test_ownership_for_another_requirement_counts_as_progress():
     steps = [[call(rid="ER1")], [call(rid="ER2")], [call(value="third", rid="ER2")]]
     outcome, _ = run(runtime(steps, lambda c, *a: ToolResult(c, "SUCCESS", (chunk(1),))), [requirement(), requirement("ER2")])
-    assert outcome.memory.steps[1].progress
-    assert outcome.memory.steps[1].new_evidence_ids == ()
-    assert outcome.memory.steps[1].new_ownerships == (("ER2", 1),)
-    assert outcome.memory.stop_reason == "NO_PROGRESS"
+    assert outcome.state.history.steps[1].progress
+    assert outcome.state.history.steps[1].new_evidence_ids == ()
+    assert outcome.state.history.steps[1].new_ownerships == (("ER2", 1),)
+    assert outcome.state.control.stop_reason == "NO_PROGRESS"
 
 
 def test_one_recovery_allows_different_tool_and_second_failure_stops():
@@ -121,12 +121,12 @@ def test_one_recovery_allows_different_tool_and_second_failure_stops():
             return ToolResult(c, "ERROR", error=ToolError("TOOL_TIMEOUT", "timeout", True))
         return ToolResult(c, "SUCCESS", (chunk(1),))
     outcome, _ = run(runtime([[call()], [call("find_symbol", "f1")]], handler, Checker(1)))
-    assert outcome.memory.recovery_used
-    assert outcome.memory.stop_reason == "READY"
+    assert outcome.state.control.recovery_used
+    assert outcome.state.control.stop_reason == "READY"
     fail = lambda c, *a: ToolResult(c, "ERROR", error=ToolError("TOOL_TIMEOUT", "timeout", True))
     outcome, _ = run(runtime([[call()], [call("find_symbol", "f1")]], fail))
-    assert outcome.memory.stop_reason == "ALL_TOOLS_FAILED"
-    assert len(outcome.memory.steps) == 2
+    assert outcome.state.control.stop_reason == "ALL_TOOLS_FAILED"
+    assert len(outcome.state.history.steps) == 2
 
 
 def test_ambiguous_candidates_cannot_be_used_as_graph_handles():
@@ -138,9 +138,9 @@ def test_ambiguous_candidates_cannot_be_used_as_graph_handles():
             SymbolObservation(key, "METHOD", 1, "S.java", "CANDIDATE"),)),
             error=ToolError("AMBIGUOUS_SYMBOL", "ambiguous", True))
     outcome, _ = run(runtime([[call("find_symbol", "f1")], [call("find_callees", key)]], handler))
-    assert not outcome.memory.available_symbols
-    assert len(outcome.memory.policy_violations) == 1
-    assert all(r.status != "INVALID_ARGUMENT" for r in outcome.memory.tool_history)
+    assert not outcome.state.memory.available_symbols
+    assert len(outcome.state.control.policy_violations) == 1
+    assert all(r.status != "INVALID_ARGUMENT" for r in outcome.state.history.tool_history)
 
 
 def test_confirmed_handle_not_in_current_observation_is_rejected():
@@ -159,9 +159,9 @@ def test_source_permissions(source, tool):
 def test_call_budget_is_eight_even_when_planner_requests_nine():
     steps = [[call(value=f"q{i}", identifier=f"TA{s}-{i}") for i in range(s * 3, min(s * 3 + 3, 8))] for s in range(3)]
     outcome, _ = run(runtime(steps, lambda c, *a: ToolResult(c, "SUCCESS", (chunk(int(c.arguments["query"][1:]) + 1),))))
-    assert outcome.memory.stop_reason == "MAX_TOOL_CALLS"
-    assert [len(s.results) for s in outcome.memory.steps] == [3, 3, 2]
-    assert len(outcome.memory.tool_history) == 8
+    assert outcome.state.control.stop_reason == "MAX_TOOL_CALLS"
+    assert [len(s.results) for s in outcome.state.history.steps] == [3, 3, 2]
+    assert len(outcome.state.history.tool_history) == 8
 
 
 def test_planner_fallback_once_then_failure():
@@ -169,12 +169,13 @@ def test_planner_fallback_once_then_failure():
         def generate(self, *args):
             return "not JSON"
     planner = AgentPlanner(lambda: BadClient())
-    memory = AgentMemory(coverage=(RequirementCoverage("ER1", "MISSING", (), ("gap",), "test", "rules"),))
-    plan = EvidencePlan("question", (requirement(),))
-    view = build_observation("question", plan, memory, ToolRegistry(RepositoryTools(None, None)))
-    assert planner.plan(view, plan, memory, 0).decision_source == "fallback"
-    with pytest.raises(PlannerFailed):
-        planner.plan(view, plan, memory, 1)
+    rt = runtime([], lambda c, *a: ToolResult(c, "SUCCESS", (chunk(1),)))
+    rt.planner = planner
+    outcome, _ = run(rt)
+    assert outcome.state.control.planner_failures == 2
+    assert outcome.state.control.stop_reason == "PLANNER_FAILED"
+    assert outcome.state.history.search_history[0].decision_source == "fallback"
+    assert len(outcome.state.history.tool_history) == 1
 
 
 @pytest.mark.parametrize("raw", [
@@ -226,9 +227,9 @@ def test_same_step_cannot_depend_on_unobserved_confirmation():
         assert c.tool_name == "search_code"  # Entire invalid batch was intercepted.
         return ToolResult(c, "SUCCESS", (chunk(1),), ToolObservation(discovered_symbols=(SymbolObservation(key, "METHOD", 1, "S.java"),)))
     outcome, _ = run(runtime([[call("find_symbol", "f"), call("find_callees", key)]], handler, Checker(1)))
-    assert [r.status for r in outcome.memory.tool_history] == ["SUCCESS"]
-    assert len(outcome.memory.policy_violations) == outcome.memory.policy_fallbacks == 1
-    assert key in outcome.memory.available_symbols
+    assert [r.status for r in outcome.state.history.tool_history] == ["SUCCESS"]
+    assert len(outcome.state.control.policy_violations) == outcome.state.control.policy_fallbacks == 1
+    assert key in outcome.state.memory.available_symbols
 
 
 def test_deadline_preserves_evidence_from_previous_calls_in_batch():
@@ -238,9 +239,9 @@ def test_deadline_preserves_evidence_from_previous_calls_in_batch():
             raise RequestDeadlineExceeded("deadline")
         return ToolResult(c, "SUCCESS", (chunk(1),))
     outcome, workspace = run(runtime([[call(value="first"), call(value="late")]], handler))
-    assert outcome.memory.stop_reason == "DEADLINE"
+    assert outcome.state.control.stop_reason == "DEADLINE"
     assert len(workspace) == 1
-    assert len(outcome.memory.steps[0].results) == 2
+    assert len(outcome.state.history.steps[0].results) == 2
 
 
 def test_analysis_contract_and_configuration_failures_propagate():
@@ -252,7 +253,7 @@ def test_analysis_contract_and_configuration_failures_propagate():
     def bad_factory():
         raise ValueError("missing credentials")
     with pytest.raises(ValueError, match="credentials"):
-        AgentPlanner(bad_factory).plan(None, None, AgentMemory(), 0)
+        AgentPlanner(bad_factory).plan(None, None, 0)
 
 
 def test_three_step_symbol_graph_transition_uses_only_observed_handles():
@@ -271,11 +272,11 @@ def test_three_step_symbol_graph_transition_uses_only_observed_handles():
         (PathSegment('CALLS'),PathSegment('OVERRIDES','INCOMING')),anchor_hint='demo.Service#f1()')),))
     outcome, ws = run(runtime([[call("find_symbol", "f1")], [call("find_callees", first)],
                               [call("find_implementations", second)]], handler, Checker(1)), [r])
-    assert outcome.memory.stop_reason == "READY"
-    assert len(outcome.memory.steps) == 3
-    assert outcome.memory.steps[1].new_relation_count == 1
+    assert outcome.state.control.stop_reason == "READY"
+    assert len(outcome.state.history.steps) == 3
+    assert outcome.state.history.steps[1].new_relation_count == 1
     assert len(ws.relations_for('ER1')) == 2
-    assert all(r.status == "SUCCESS" for r in outcome.memory.tool_history)
+    assert all(r.status == "SUCCESS" for r in outcome.state.history.tool_history)
 
 
 @pytest.mark.parametrize("profile", ["fast", "full"])
@@ -319,8 +320,8 @@ def test_both_requirement_needs_document_and_code_before_ready():
     def handler(c, *a):
         return ToolResult(c, "SUCCESS", (chunk(2, "DOCUMENT") if c.tool_name == "search_docs" else chunk(1),))
     outcome, _ = run(runtime([[call()], [call("search_docs", "design")]], handler, checker), [requirement(source="BOTH")])
-    assert outcome.memory.steps[0].coverage_after[0].state == "PARTIAL"
-    assert outcome.memory.stop_reason == "READY"
+    assert outcome.state.history.steps[0].coverage_after[0].state == "PARTIAL"
+    assert outcome.state.control.stop_reason == "READY"
 
 
 def test_unverified_coverage_never_announces_ready():
@@ -328,5 +329,5 @@ def test_unverified_coverage_never_announces_ready():
     rt = runtime([[call()], [call(value="another")]], lambda c, *a: ToolResult(c, "SUCCESS", (chunk(1),)),
                  CoverageChecker(None, max_attempts=1))
     outcome, _ = run(rt)
-    assert outcome.memory.coverage[0].state == "UNVERIFIED"
-    assert outcome.memory.stop_reason == "NO_PROGRESS"
+    assert outcome.state.task.coverage[0].state == "UNVERIFIED"
+    assert outcome.state.control.stop_reason == "NO_PROGRESS"
