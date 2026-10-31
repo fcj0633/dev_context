@@ -9,6 +9,8 @@
 
 ## 背景与历史资料
 
+- [2026-10-31 本机工作区整理](maintenance/2026-10-31-workspace-consolidation.md)：统一开发目录、旧工作区用途、资料保留方式与验证结果。
+
 - `development/`：早期范围、架构决定、技术栈和里程碑。
 - `../项目规划文档/`：项目背景和旧开发计划。
 - `../调研文档/`：Continue、JavaParser、RAGFlow 等调研材料。
